@@ -144,11 +144,37 @@ echo "  Setting up output directory..."
 mkdir -p "$SESSIONS_DIR"
 echo "  [ok]  $MEDITATION_DIR"
 
-# ---- 5. Run tests
+# ---- 5. Nidra grading engine
+echo
+echo "  Checking nidra grading engine..."
+NIDRA_ROOT="$HOME/projects/nidra"
+if [ -d "$NIDRA_ROOT/nidra" ]; then
+    echo "  [ok]  nidra at $NIDRA_ROOT"
+    # Run initial bridge to populate the graded store
+    if python3 "$SKILL_DIR/nidra_bridge.py" --sleep > /dev/null 2>&1; then
+        NIDRA_COUNT=$(python3 -c "
+import json, os
+p = os.path.expanduser('~/.claude/meditation/nidra_store/memories.jsonl')
+if os.path.exists(p):
+    n = sum(1 for l in open(p) if l.strip() and json.loads(l).get('active'))
+    print(n)
+else:
+    print(0)
+" 2>/dev/null || echo 0)
+        echo "  [ok]  nidra store: $NIDRA_COUNT graded memories"
+    else
+        echo "  [warn]  nidra bridge failed — run manually: python3 $SKILL_DIR/nidra_bridge.py --sleep"
+    fi
+else
+    echo "  [warn]  nidra not found at $NIDRA_ROOT — grading disabled"
+    echo "          Get it: git clone https://github.com/prashantpandey-creator/nidra ~/projects/nidra"
+fi
+
+# ---- 6. Run tests
 echo
 echo "  Running test suite..."
 TEST_PASS=true
-for tf in test_sessions.py test_launch.py test_scan.py test_still.py test_doctor.py; do
+for tf in test_sessions.py test_launch.py test_scan.py test_still.py test_doctor.py test_nidra_bridge.py; do
     if [ -f "$SKILL_DIR/$tf" ]; then
         if python3 "$SKILL_DIR/$tf" > /dev/null 2>&1; then
             echo "  [ok]  $tf"
@@ -159,15 +185,16 @@ for tf in test_sessions.py test_launch.py test_scan.py test_still.py test_doctor
     fi
 done
 
-# ---- 6. Report
+# ---- 7. Report
 echo
 echo "  ================================"
 if [ "$TEST_PASS" = true ]; then
     echo "  meditate v${VERSION} installed. All tests green."
     echo
-    echo "  Use:   /meditate          (inside Claude Code)"
-    echo "         python3 $SKILL_DIR/doctor.py   (health check)"
-    echo "         python3 $SKILL_DIR/launch.py   (see live threads)"
+    echo "  Use:   /meditate                              (inside Claude Code)"
+    echo "         python3 $SKILL_DIR/doctor.py            (health check)"
+    echo "         python3 $SKILL_DIR/nidra_bridge.py      (grade sessions)"
+    echo "         python3 $SKILL_DIR/launch.py            (see live threads)"
 else
     echo "  meditate v${VERSION} installed with test failures."
     echo "  Run: python3 $SKILL_DIR/doctor.py  for details."

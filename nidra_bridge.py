@@ -103,7 +103,7 @@ def main(argv=None):
         return 1
 
     d = env["data"]
-    print(f"  scanned:  {d['sessions_scanned']}")
+    print(f"  scanned:  {d['scanned']}")
     print(f"  imported: {d['imported']}")
     print(f"  existed:  {d['already_exists']}")
     print(f"  no anchor: {d['no_anchor']}")
