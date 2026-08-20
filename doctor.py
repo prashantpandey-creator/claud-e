@@ -31,6 +31,7 @@ TEST_FILES = [
     "test_launch.py",
     "test_scan.py",
     "test_still.py",
+    "test_nidra_bridge.py",
 ]
 
 
@@ -146,12 +147,40 @@ def _check_output() -> Dict[str, Any]:
     }
 
 
+NIDRA_STORE_DIR = os.path.expanduser("~/.claude/meditation/nidra_store")
+
+
+def _check_nidra() -> Dict[str, Any]:
+    mem_path = os.path.join(NIDRA_STORE_DIR, "memories.jsonl")
+    if not os.path.exists(mem_path):
+        return {"connected": False, "total": 0, "active": 0, "by_status": {}}
+    active = 0
+    statuses: Dict[str, int] = {}
+    total = 0
+    try:
+        with open(mem_path, encoding="utf-8") as fh:
+            for line in fh:
+                if not line.strip():
+                    continue
+                total += 1
+                m = json.loads(line)
+                if not m.get("active"):
+                    continue
+                active += 1
+                s = m.get("epistemic", {}).get("evidence_status", "unverified")
+                statuses[s] = statuses.get(s, 0) + 1
+    except Exception:
+        return {"connected": False, "total": 0, "active": 0, "by_status": {}}
+    return {"connected": True, "total": total, "active": active, "by_status": statuses}
+
+
 def run() -> Dict[str, Any]:
     prereqs = _check_prereqs()
     tests = _check_tests()
     hook = _check_hook()
     stillness = _check_stillness()
     output = _check_output()
+    nidra = _check_nidra()
 
     issues = []
     if not all(p["ok"] for p in prereqs):
@@ -173,6 +202,7 @@ def run() -> Dict[str, Any]:
         "hook": hook,
         "stillness": stillness,
         "output": output,
+        "nidra": nidra,
     }
     return _envelope(True, data, {"skill_dir": SKILL_DIR}, [])
 
@@ -217,6 +247,15 @@ def main(argv: List[str]) -> int:
     print(f"  meditation dir: {'exists' if o['meditation_dir'] else 'missing'}")
     print(f"  session dirs: {o['session_dirs']}")
     print(f"  continuation chats: {o['continuation_chats']}")
+
+    n = d.get("nidra", {})
+    if n.get("connected"):
+        print(f"\nNidra store:")
+        print(f"  total: {n['total']}  active: {n['active']}")
+        for s, c in sorted(n.get("by_status", {}).items()):
+            print(f"    {s}: {c}")
+    else:
+        print(f"\nNidra store: not connected (run nidra_bridge.py --sleep)")
 
     if d["healthy"]:
         print(f"\n{'=' * 40}")

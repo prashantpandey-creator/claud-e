@@ -62,6 +62,7 @@ From `~/.claude/skills/meditate/`, verify the machinery before trusting it:
 ```bash
 python3 test_sessions.py        # the session extractor — the core
 python3 test_launch.py          # thread-row parse + archive-candidate detection (Phase C2)
+python3 test_nidra_bridge.py    # the nidra grading pipe
 python3 test_scan.py && python3 test_still.py   # only if using /meditate repo
 ```
 
@@ -69,6 +70,20 @@ Must exit 0. If red, read the failing assertions, repair the tool, re-run, THEN
 proceed. A split built on a broken parser is worse than none.
 
 ## Phase A — Refresh the saṃskāras (the memory)
+
+### A0 — Feed nidra (the grading pipe)
+
+Import all session maps into nidra's evidence-graded store. Run the sleep
+(consolidation) pass so memories are deduped, drift-checked, and scheduled:
+
+```bash
+python3 ~/.claude/skills/meditate/nidra_bridge.py --sleep --json
+```
+
+Read `data.sleep.after` for the graded census. Report `machine_checked` /
+`source_linked` / `unverified` counts in the stillness reading.
+
+### A1 — Refresh the memory files
 
 Operate on the active project's memory dir (the one whose `MEMORY.md` is in your
 context; for vedic-puran:
