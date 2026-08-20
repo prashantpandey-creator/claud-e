@@ -1,0 +1,232 @@
+"""meditate doctor — self-diagnostic for the meditation system.
+
+Checks prerequisites, test suite health, hook registration, STILLNESS.md
+freshness, and meditation output state. Returns a JSON envelope.
+
+Run:  python3 ~/.claude/skills/meditate/doctor.py
+      python3 ~/.claude/skills/meditate/doctor.py --json
+"""
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import subprocess
+import sys
+import time
+from typing import Any, Dict, List
+
+SKILL_DIR = os.path.dirname(os.path.abspath(__file__))
+HOOK_PATH = os.path.expanduser("~/.claude/hooks/meditate-checkpoint.sh")
+SETTINGS_PATH = os.path.expanduser("~/.claude/settings.json")
+STILLNESS_PATH = os.path.expanduser("~/.claude/meditation/STILLNESS.md")
+MEDITATION_DIR = os.path.expanduser("~/.claude/meditation")
+SESSIONS_DIR = os.path.expanduser("~/.claude/meditation/sessions")
+MAX_AGE_DAYS = 3
+
+VERSION = open(os.path.join(SKILL_DIR, "VERSION")).read().strip()
+
+TEST_FILES = [
+    "test_sessions.py",
+    "test_launch.py",
+    "test_scan.py",
+    "test_still.py",
+]
+
+
+def _envelope(success, data, metadata, errors):
+    return {"success": success, "data": data, "metadata": metadata, "errors": errors}
+
+
+def _check_prereqs() -> List[Dict[str, Any]]:
+    checks = []
+    checks.append({
+        "name": "python3",
+        "ok": sys.version_info >= (3, 9),
+        "detail": f"Python {sys.version.split()[0]}",
+    })
+    claude_ok = shutil.which("claude") is not None
+    checks.append({
+        "name": "claude_code",
+        "ok": claude_ok,
+        "detail": "found on PATH" if claude_ok else "not found — install Claude Code",
+    })
+    return checks
+
+
+def _check_tests() -> Dict[str, Any]:
+    results = []
+    all_pass = True
+    for tf in TEST_FILES:
+        path = os.path.join(SKILL_DIR, tf)
+        if not os.path.exists(path):
+            results.append({"file": tf, "ok": False, "detail": "file missing"})
+            all_pass = False
+            continue
+        try:
+            r = subprocess.run(
+                [sys.executable, path],
+                capture_output=True, text=True, timeout=30,
+                cwd=SKILL_DIR,
+            )
+            ok = r.returncode == 0
+            if not ok:
+                all_pass = False
+            results.append({
+                "file": tf,
+                "ok": ok,
+                "detail": "green" if ok else r.stderr.strip()[-200:] or r.stdout.strip()[-200:],
+            })
+        except subprocess.TimeoutExpired:
+            results.append({"file": tf, "ok": False, "detail": "timed out (30s)"})
+            all_pass = False
+        except Exception as e:
+            results.append({"file": tf, "ok": False, "detail": str(e)[:200]})
+            all_pass = False
+    return {"all_pass": all_pass, "files": results}
+
+
+def _check_hook() -> Dict[str, Any]:
+    hook_exists = os.path.isfile(HOOK_PATH)
+    hook_executable = os.access(HOOK_PATH, os.X_OK) if hook_exists else False
+
+    registered = {"SessionStart": False, "PreToolUse": False}
+    if os.path.isfile(SETTINGS_PATH):
+        try:
+            settings = json.load(open(SETTINGS_PATH))
+            hooks = settings.get("hooks", {})
+            for event in registered:
+                entries = hooks.get(event, [])
+                for entry in entries:
+                    for h in entry.get("hooks", []):
+                        if "meditate" in h.get("command", ""):
+                            registered[event] = True
+        except (json.JSONDecodeError, KeyError):
+            pass
+
+    return {
+        "hook_exists": hook_exists,
+        "hook_executable": hook_executable,
+        "registered": registered,
+        "all_wired": all(registered.values()),
+    }
+
+
+def _check_stillness() -> Dict[str, Any]:
+    if not os.path.isfile(STILLNESS_PATH):
+        return {"exists": False, "age_days": None, "overdue": True}
+    mtime = os.path.getmtime(STILLNESS_PATH)
+    age_days = (time.time() - mtime) / 86400
+    return {
+        "exists": True,
+        "age_days": round(age_days, 1),
+        "overdue": age_days > MAX_AGE_DAYS,
+        "last_modified": time.strftime("%Y-%m-%d", time.localtime(mtime)),
+    }
+
+
+def _check_output() -> Dict[str, Any]:
+    med_exists = os.path.isdir(MEDITATION_DIR)
+    sess_exists = os.path.isdir(SESSIONS_DIR)
+    session_dirs = 0
+    continuation_chats = 0
+    if sess_exists:
+        for entry in os.listdir(SESSIONS_DIR):
+            p = os.path.join(SESSIONS_DIR, entry)
+            if os.path.isdir(p):
+                session_dirs += 1
+                for f in os.listdir(p):
+                    if f.endswith(".md") and f != "INDEX.md":
+                        continuation_chats += 1
+    return {
+        "meditation_dir": med_exists,
+        "sessions_dir": sess_exists,
+        "session_dirs": session_dirs,
+        "continuation_chats": continuation_chats,
+    }
+
+
+def run() -> Dict[str, Any]:
+    prereqs = _check_prereqs()
+    tests = _check_tests()
+    hook = _check_hook()
+    stillness = _check_stillness()
+    output = _check_output()
+
+    issues = []
+    if not all(p["ok"] for p in prereqs):
+        issues.append("prerequisites")
+    if not tests["all_pass"]:
+        issues.append("tests")
+    if not hook["all_wired"]:
+        issues.append("hook_registration")
+    if stillness["overdue"]:
+        issues.append("stillness_overdue")
+
+    healthy = len(issues) == 0
+    data = {
+        "version": VERSION,
+        "healthy": healthy,
+        "issues": issues,
+        "prereqs": prereqs,
+        "tests": tests,
+        "hook": hook,
+        "stillness": stillness,
+        "output": output,
+    }
+    return _envelope(True, data, {"skill_dir": SKILL_DIR}, [])
+
+
+def main(argv: List[str]) -> int:
+    env = run()
+    d = env["data"]
+
+    if "--json" in argv:
+        print(json.dumps(env, indent=2))
+        return 0 if d["healthy"] else 1
+
+    print(f"meditate doctor v{d['version']}")
+    print("=" * 40)
+
+    print("\nPrerequisites:")
+    for p in d["prereqs"]:
+        mark = "ok" if p["ok"] else "MISSING"
+        print(f"  [{mark:>7}]  {p['name']:15} {p['detail']}")
+
+    print(f"\nTests: {'all green' if d['tests']['all_pass'] else 'FAILURES'}")
+    for t in d["tests"]["files"]:
+        mark = "ok" if t["ok"] else "FAIL"
+        print(f"  [{mark:>7}]  {t['file']:25} {t['detail']}")
+
+    print(f"\nHook:")
+    print(f"  [{'ok' if d['hook']['hook_exists'] else 'MISSING':>7}]  hook file exists")
+    print(f"  [{'ok' if d['hook']['hook_executable'] else 'MISSING':>7}]  hook executable")
+    for ev, wired in d["hook"]["registered"].items():
+        print(f"  [{'ok' if wired else 'MISSING':>7}]  {ev} registered")
+
+    print(f"\nStillness:")
+    if d["stillness"]["exists"]:
+        age = d["stillness"]["age_days"]
+        status = "OVERDUE" if d["stillness"]["overdue"] else "ok"
+        print(f"  [{status:>7}]  STILLNESS.md — {age:.1f} days old (threshold: {MAX_AGE_DAYS}d)")
+    else:
+        print(f"  [MISSING]  STILLNESS.md — run /meditate to create")
+
+    print(f"\nOutput:")
+    o = d["output"]
+    print(f"  meditation dir: {'exists' if o['meditation_dir'] else 'missing'}")
+    print(f"  session dirs: {o['session_dirs']}")
+    print(f"  continuation chats: {o['continuation_chats']}")
+
+    if d["healthy"]:
+        print(f"\n{'=' * 40}")
+        print("Healthy. All systems nominal.")
+    else:
+        print(f"\n{'=' * 40}")
+        print(f"Issues: {', '.join(d['issues'])}")
+
+    return 0 if d["healthy"] else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
