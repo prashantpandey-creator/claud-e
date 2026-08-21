@@ -124,6 +124,30 @@ def run(do_sleep=False, store_dir=None, memory_root=None):
         except Exception as e:
             result["sleep_error"] = str(e)
 
+    # Rebuild the path index: absolute path -> machine-checked statements.
+    # coordination.py serves these at edit time, so a wrong belief about a file
+    # gets corrected at the exact moment the agent is about to act on it.
+    try:
+        index = {}
+        for m in store.load():
+            if not m.get("active"):
+                continue
+            status = m.get("epistemic", {}).get("evidence_status", "unverified")
+            for ev in m.get("evidence", []):
+                loc = str(ev.get("locator", ""))
+                if loc.startswith("path:"):
+                    p = os.path.expanduser(loc[5:])
+                    index.setdefault(p, []).append(
+                        {"statement": m.get("statement", "")[:200], "status": status})
+        idx_path = os.path.join(store_dir, "path_index.json")
+        with open(idx_path + ".tmp", "w") as fh:
+            json.dump(index, fh)
+        os.replace(idx_path + ".tmp", idx_path)
+        result["path_index"] = {"paths": len(index),
+                                "claims": sum(len(v) for v in index.values())}
+    except Exception as e:
+        result["path_index_error"] = str(e)
+
     return _envelope(True, result, None, store_dir)
 
 

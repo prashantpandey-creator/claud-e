@@ -8,9 +8,9 @@ every `[[wikilink]]` is verified against the live filesystem. When the world
 changes, the stale memory silently stops being trusted.
 
 ```
-344 active memories (272 knowledge files + 72 session maps)
-341 machine-checked (evidence verified against live sources)
-  3 unverified
+358 active memories (274 knowledge files + session maps)
+353 machine-checked (evidence verified against live sources)
+  5 unverified
  11 tombstoned (stale, pruned by sleep pass)
   0 stale answers served
 
@@ -38,6 +38,8 @@ After install, `meditate` is on your PATH:
 meditate              # health check
 meditate grade        # scan + grade + consolidate
 meditate metrics      # drift rate, coverage, health dashboard
+meditate drift        # memories whose evidence failed — exact claims
+meditate who          # live sessions in this workspace, their files
 meditate sessions     # show sessions ranked by sprawl
 meditate launch       # see live threads (--open to open terminals)
 meditate help         # all commands
@@ -119,13 +121,35 @@ is rejected by a pure-bash prefilter and spawns **no** subprocess at all
 
 Every new session sees:
 ```
-Nidra store: 344 graded memories; 341 machine_checked; 3 unverified.
+Nidra store: 358 graded memories; 353 machine_checked; 5 unverified.
+Sangama: 2 other live sessions in this repo (recent: LifeReadings.tsx). ...
 ```
 
 The hook must always exit 0 with valid JSON. A crash or empty stdout makes
 Claude Code drop every rule *silently* — worse than no hook, because you lose
 the rules and never find out. `test_hook.py` pins that contract against
 malformed stdin, a missing `~/.claude/projects`, unicode, and embedded newlines.
+
+### Sangama — many sessions, one repo, no collisions
+
+Multiple Claude Code sessions often work the same checkout. The sangama
+(confluence) layer coordinates them deterministically — no LLM, no extra
+registrations, ~0.05 s per edit:
+
+- **Presence** — every Write/Edit records (session, file, time). `meditate who`
+  shows who is live and what they touched.
+- **Collision** — editing a file another live session touched inside 2h gets
+  ONE calm warning naming the session and the age — then silence. A warning
+  repeated on every edit is pressure; pressure is what this layer removes.
+- **Facts at the moment of need** — the grade pass builds `path_index.json`
+  (path → machine-checked statements). Editing an indexed file serves up to 2
+  graded facts about it, once per session. An agent about to act on a wrong
+  belief gets the corrected fact exactly then — not buried in a system prompt.
+- **Drift alert** — SessionStart names memories downgraded in the last 48h;
+  `meditate drift` prints the exact failing claim and the line to fix.
+
+Correction stays honest: detection is deterministic, the .md fix is judgment
+work for the agent (or `/meditate`), and the next grade pass re-verifies it.
 
 ### Metrics — how well is it running
 
@@ -235,6 +259,8 @@ From a terminal:
 meditate              # health check (doctor)
 meditate grade        # scan sessions + .md files, grade, consolidate
 meditate metrics      # drift rate, coverage, health dashboard
+meditate drift        # memories whose evidence failed — exact claims
+meditate who          # live sessions in this workspace, their files
 meditate sessions     # show sessions ranked by sprawl
 meditate launch       # see live threads
 meditate launch --open  # open Terminal windows per thread
@@ -264,7 +290,7 @@ with `meditate metrics --json` and `meditate doctor --json`.
 | Sleep runs | 94 |
 | Duplicates merged | 22 |
 | Grade downgrades (drift) | 0 |
-| Test files / functions | 15 / 99 |
+| Test files / functions | 17 / 120 |
 | All tests | green |
 | Largest transcript | 112 MB |
 | Total transcript size | 754 MB |
@@ -280,7 +306,7 @@ with `meditate metrics --json` and `meditate doctor --json`.
 ```
 ~/.claude/skills/meditate/
 ├── README.md              this file
-├── VERSION                0.3.1
+├── VERSION                0.4.0
 ├── CHANGELOG.md           history
 ├── SKILL.md               /meditate slash command definition
 ├── INTERNALS.md           developer docs (vritti/antaraya/nirodha formulas)
@@ -290,6 +316,7 @@ with `meditate metrics --json` and `meditate doctor --json`.
 │   └── meditate-hook.sh   the hook — repo is the source of truth, install copies it
 ├── doctor.py              self-diagnostic
 ├── metrics.py             health, drift, coverage dashboard
+├── coordination.py        sangama: presence, collisions, fact serving, drift CLI
 ├── sessions.py            transcript miner
 ├── nidra_bridge.py        mining + .md grading pipe
 ├── scan_projects.py       git repo discovery
@@ -303,6 +330,7 @@ with `meditate metrics --json` and `meditate doctor --json`.
 ├── test_nidra_bridge.py   }
 ├── test_metrics.py        }
 ├── test_hook.py           }
+├── test_coordination.py   }
 └── .gitignore
 
 ~/projects/nidra/nidra/        (the grading engine)

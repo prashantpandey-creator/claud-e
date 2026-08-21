@@ -59,10 +59,11 @@ def test_always_exits_zero_and_emits_json():
         {"hook_event_name": "PreToolUse", "tool_input": None},
         {"hook_event_name": "PreToolUse", "tool_input": {"command": 'git push "a\nb" ünïcode'}},
     ]
-    for c in cases:
-        rc, out, raw = fire(c)
-        assert rc == 0, f"exit {rc} on {c}"
-        assert out is not None, f"non-JSON stdout {raw!r} on {c}"
+    with tempfile.TemporaryDirectory() as t:
+        for c in cases:
+            rc, out, raw = fire(c, env=_iso_env(t))  # isolated: edit cases must not
+            assert rc == 0, f"exit {rc} on {c}"      # write live presence files
+            assert out is not None, f"non-JSON stdout {raw!r} on {c}"
 
 
 def test_malformed_stdin_is_survivable():
@@ -99,22 +100,61 @@ def test_git_variants_all_fire():
         assert "LOCAL branch" in context_of(out), f"git rule did not fire for: {cmd}"
 
 
+def _iso_env(tmp):
+    """Isolated sangama dirs so hook tests never touch live presence/store."""
+    return {"MEDITATE_COORD_DIR": os.path.join(tmp, "coord"),
+            "MEDITATE_STORE_DIR": os.path.join(tmp, "store")}
+
+
 def test_native_paths_fire_case_insensitively():
-    for p in ["/x/App.swift", "/x/Foo.SWIFT", "/x/ios/Thing.m", "/x/IOS/Thing.m"]:
-        _, out, _ = fire(edit(p))
-        assert "web app" in context_of(out), f"native rule did not fire for: {p}"
+    with tempfile.TemporaryDirectory() as t:
+        for p in ["/x/App.swift", "/x/Foo.SWIFT", "/x/ios/Thing.m", "/x/IOS/Thing.m"]:
+            _, out, _ = fire(edit(p), env=_iso_env(t))
+            assert "web app" in context_of(out), f"native rule did not fire for: {p}"
 
 
 def test_pipeline_paths_fire():
-    for p in ["/r/backend/main.py", "/r/query_processor.py", "/r/agents/deep_research.py"]:
-        _, out, _ = fire(edit(p))
-        assert "chat pipeline" in context_of(out), f"pipeline rule did not fire for: {p}"
+    with tempfile.TemporaryDirectory() as t:
+        for p in ["/r/backend/main.py", "/r/query_processor.py", "/r/agents/deep_research.py"]:
+            _, out, _ = fire(edit(p), env=_iso_env(t))
+            assert "chat pipeline" in context_of(out), f"pipeline rule did not fire for: {p}"
 
 
 def test_irrelevant_calls_stay_silent():
-    for c in [bash("ls -la"), bash("echo hi"), edit("/x/Chat.tsx"), edit("/x/README.md")]:
-        _, out, _ = fire(c)
-        assert out == {}, f"expected silence, got {out}"
+    with tempfile.TemporaryDirectory() as t:
+        for c in [bash("ls -la"), bash("echo hi"), edit("/x/Chat.tsx"), edit("/x/README.md")]:
+            _, out, _ = fire(c, env=_iso_env(t))
+            assert out == {}, f"expected silence, got {out}"
+
+
+# ---- sangama through the full hook -----------------------------------------
+
+def _edit_as(sid, path):
+    return {"hook_event_name": "PreToolUse", "session_id": sid, "cwd": "/repo",
+            "tool_input": {"file_path": path}}
+
+
+def test_hook_collision_between_two_sessions():
+    with tempfile.TemporaryDirectory() as t:
+        env = _iso_env(t)
+        fire(_edit_as("session-aaaa", "/repo/shared.py"), env=env)
+        _, out, _ = fire(_edit_as("session-bbbb", "/repo/shared.py"), env=env)
+        ctx = context_of(out)
+        assert "SANGAMA" in ctx and "session-" in ctx, f"no collision warning: {ctx!r}"
+
+
+def test_hook_serves_graded_fact_once():
+    with tempfile.TemporaryDirectory() as t:
+        env = _iso_env(t)
+        os.makedirs(env["MEDITATE_STORE_DIR"], exist_ok=True)
+        with open(os.path.join(env["MEDITATE_STORE_DIR"], "path_index.json"), "w") as f:
+            json.dump({"/repo/engine.py": [
+                {"statement": "engine.py is empty; code lives in main.py",
+                 "status": "machine_checked"}]}, f)
+        _, out1, _ = fire(_edit_as("sid-x", "/repo/engine.py"), env=env)
+        _, out2, _ = fire(_edit_as("sid-x", "/repo/engine.py"), env=env)
+        assert "GRADED FACT" in context_of(out1), "fact not served on first edit"
+        assert "GRADED FACT" not in context_of(out2), "fact served twice"
 
 
 # ---- SessionStart must never lose the rules -------------------------------

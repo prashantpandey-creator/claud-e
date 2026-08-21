@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.4.0 — 2026-08-21
+
+Sangama (confluence) — multi-session coordination + fact serving. Three new
+capabilities, zero new hook registrations, everything through the existing
+`additionalContext` channel at the moment it matters, never as prompt bulk.
+
+### Added
+- **Presence** — every Write/Edit records (session, cwd, file, time) in
+  `~/.claude/coordination/sessions/`. Heartbeat = file mtime; stale entries
+  self-prune after 24h. `meditate who` lists live sessions and their files.
+  Payload fields (`session_id`, `cwd`) verified against a captured live hook
+  payload, not assumed.
+- **Collision warnings** — a session editing a file another live session
+  touched inside 2h gets ONE calm warning naming the session and the age,
+  then never again for that (peer, file). Proven live: warn once, repeat
+  edit returns `{}`.
+- **Fact serving** — `nidra_bridge` now emits `path_index.json`
+  (104 paths, 154 machine-checked claims). Editing an indexed file serves up
+  to 2 graded facts, once per file per session, unverified claims never.
+  Wrong beliefs get corrected at the exact moment the agent acts on them.
+- **Drift alert at SessionStart** — journal downgrades inside 48h surface as
+  one line naming the drifted memories.
+- **`meditate drift`** — every memory whose evidence currently fails, with
+  the exact failing claim (which path is gone, which wikilink broke) and the
+  line to fix in the .md. Detection is deterministic; the fix stays judgment.
+- `coordination.py` (the whole layer, stdlib-only) + `test_coordination.py`
+  (18 tests) + 2 hook-integration tests. 120 test functions total.
+
+### Changed
+- File-edit events now route to one decision point (`coordination.py
+  hook-edit`); the pipeline/native guard rules moved there from bash. The
+  bash fast path for irrelevant commands is untouched: 0.011s. Edit events
+  cost 0.048s.
+- Hook tests fully isolate presence/store via `MEDITATE_COORD_DIR` /
+  `MEDITATE_STORE_DIR`.
+
 ## 0.3.1 — 2026-08-21
 
 Audit repairs. An adversarial audit of 0.3.0 confirmed 29 defects; these are the

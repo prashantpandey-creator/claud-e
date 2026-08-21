@@ -36,6 +36,7 @@ TEST_FILES = [
     "test_nidra_bridge.py",
     "test_metrics.py",
     "test_hook.py",
+    "test_coordination.py",
 ]
 
 

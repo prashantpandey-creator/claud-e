@@ -35,12 +35,22 @@ case "${1:-}" in
     shift
     python3 "$DIR/doctor.py" "$@"
     ;;
+  drift)
+    shift
+    python3 "$DIR/coordination.py" drift "$@"
+    ;;
+  who)
+    shift
+    python3 "$DIR/coordination.py" who "$@"
+    ;;
   help|--help|-h)
     echo "meditate — evidence-graded AI agent memory"
     echo ""
     echo "  meditate           health check"
     echo "  meditate grade     scan sessions, grade into nidra, consolidate"
     echo "  meditate metrics   memory health, drift, coverage dashboard"
+    echo "  meditate drift     memories whose evidence failed — the exact claims"
+    echo "  meditate who       live sessions in this workspace and their files"
     echo "  meditate sessions  show sessions ranked by sprawl"
     echo "  meditate launch    see live threads (--open to open terminals)"
     echo "  meditate install   run the installer"

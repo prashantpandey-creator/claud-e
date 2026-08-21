@@ -22,20 +22,31 @@
 
 set -uo pipefail   # NOT -e: a failed find/du must not swallow the rules
 
-emit_nothing() { printf '{}\n'; exit 0; }
+emit_nothing() { trap - EXIT; printf '{}\n'; exit 0; }
 trap 'printf "{}\n"' EXIT   # any unexpected death still emits valid JSON
 
 IN=$(cat 2>/dev/null || echo '{}')
+
+# ---- File events: one decision point, in python ----------------------------
+# Every Write/Edit goes to the sangama layer (coordination.py): presence
+# recording, collision warnings, graded-fact serving, and the pipeline/native
+# guard rules all live THERE — not split between bash and python. It always
+# exits 0 and always prints valid hook JSON.
+COORD="$HOME/.claude/skills/meditate/coordination.py"
+if [ -f "$COORD" ] && [[ "$IN" == *'"file_path"'* || "$IN" == *'"notebook_path"'* ]]; then
+    trap - EXIT
+    printf '%s' "$IN" | python3 "$COORD" hook-edit 2>/dev/null || printf '{}\n'
+    exit 0
+fi
 
 # ---- Trigger set, defined ONCE ---------------------------------------------
 # The prefilter and the branches below MUST derive from the same patterns, or
 # the prefilter silently swallows events the branches were written to catch.
 # (It did: `docker-compose ... --build` and `Foo.SWIFT` both returned {}.)
+# File-path rules are NOT here — they moved to coordination.py above.
 GIT_PAT='git commit|git push'
 DEPLOY_PAT='deploy|docker[ -]?compose up|--build'
-PIPELINE_PAT='backend/main\.py|query_processor|deep_research'
-NATIVE_PAT='\.swift|/ios/|native'
-TRIGGER="SessionStart|$GIT_PAT|$DEPLOY_PAT|$PIPELINE_PAT|$NATIVE_PAT"
+TRIGGER="SessionStart|$GIT_PAT|$DEPLOY_PAT"
 
 # ---- Fast prefilter: no subprocess at all for the common irrelevant call ----
 shopt -s nocasematch
@@ -70,7 +81,7 @@ case "$EV" in
   SessionStart)
     RULES="OPERATING RULES (owner, must-fire every turn):
 1. Voice — few real lines, not narration; decide by leverage and drive, never hand ranked menus; end with one conclusion or the single next step (go/no).
-2. Proof before done — no fix claimed without live output; \"built, not wired\" != done; curl|grep of client-rendered HTML is hollow; a ledger \"fixed\" is a claim, verify the artifact/process.
+2. Proof before done — no fix OR DIAGNOSIS claimed without live output; \"built, not wired\" != done; a ledger \"fixed\" is a claim, verify the artifact/process. Claim scope = check scope: test the falsifying case, ship the number in the same sentence, label traced-vs-observed.
 3. Subtract, never add — fix by removal, not another layer.
 4. Plain words — stats/evals in workshop language, not jargon verdicts.
 5. Verify the world — external facts are research questions (curl/read/benchmark), don't guess; take the owner's facts about his own domain as given.
@@ -140,9 +151,17 @@ PYSLOT
         fi
     fi
 
+    # --- Sangama: live sessions in this repo + fresh drift (fail-open) ---
+    EXTRA=""
+    if [ -f "$COORD" ]; then
+        EXTRA=$(printf '%s' "$IN" | python3 "$COORD" session-start 2>/dev/null) || EXTRA=""
+    fi
+
     MSG="$RULES"
     [ -n "$NIDRA_STATE" ] && MSG="$MSG
 Nidra store: $NIDRA_STATE."
+    [ -n "$EXTRA" ] && MSG="$MSG
+$EXTRA"
     [ -n "$CHECKPOINT" ] && MSG="$MSG
 $CHECKPOINT"
     ;;
@@ -153,10 +172,6 @@ $CHECKPOINT"
       MSG="RULE (fires at git commit/push): commit to a LOCAL branch first and STOP. Do not push/deploy without the owner's explicit go."
     elif [[ "$CMD" =~ $DEPLOY_PAT ]]; then
       MSG="RULE (fires at deploy): verify the artifact by duration + live output, never trust a GREEN report. Prod corpus/DB is shared infrastructure — a write under a live experiment needs a HANDOFF."
-    elif [[ "$TARGET" =~ $PIPELINE_PAT ]]; then
-      MSG="RULE (fires editing the live chat pipeline): do not wire a NEW subsystem into production code without asking first. Propose the component and get explicit confirmation before deploying it."
-    elif [[ "$TARGET" =~ $NATIVE_PAT ]]; then
-      MSG="RULE (fires editing iOS/native): prove the web app source was untouched (git show --stat) — the owner is highly protective of the web app."
     fi
     shopt -u nocasematch
     [ -z "$MSG" ] && emit_nothing

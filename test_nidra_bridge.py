@@ -97,6 +97,24 @@ def test_memory_dirs_missing_root():
     assert nidra_bridge._memory_dirs("/nonexistent/path/xyz") == []
 
 
+def test_path_index_built():
+    """The bridge must emit path_index.json — coordination.py serves facts from it."""
+    with tempfile.TemporaryDirectory() as td:
+        sd = os.path.join(td, "store")
+        env = nidra_bridge.run(store_dir=sd)
+        if not env["success"]:
+            return
+        idx_path = os.path.join(sd, "path_index.json")
+        assert os.path.exists(idx_path), "path_index.json not written"
+        with open(idx_path) as fh:
+            idx = json.load(fh)
+        assert isinstance(idx, dict)
+        pi = env["data"].get("path_index", {})
+        assert pi.get("claims", 0) == sum(len(v) for v in idx.values())
+        if env["data"]["memory_files"]["scanned"] > 0:
+            assert pi["claims"] > 0, "memory files scanned but zero path claims indexed"
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0
