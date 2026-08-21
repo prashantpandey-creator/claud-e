@@ -37,6 +37,7 @@ TEST_FILES = [
     "test_metrics.py",
     "test_hook.py",
     "test_coordination.py",
+    "test_archive.py",
 ]
 
 

@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.4.1 — 2026-08-21
+
+`meditate archive` — the consolidation step that could never actually remove
+a session, now can, from the terminal, reversibly.
+
+### Added
+- `archive.py` + 8 tests. Dry-run by default; `--apply` MOVES <sid>.jsonl and
+  its sidecar dir to `~/.claude/meditation/archive/<slug>/` and records a
+  restore line in ARCHIVE-INDEX.jsonl. `--restore <sid>` brings both back
+  exactly where they were. Nothing is ever deleted. Sessions touched in the
+  last 24h are never candidates. `--older-than N` extends beyond empty ones.
+- File-level = surface-independent: the same store backs the `claude` CLI
+  resume picker and the Desktop app, so archiving here removes the session
+  from both (Desktop list effect traced via shared store, not UI-observed).
+
+### Proven live
+- 111 sessions -> 105 (6 empty archived), restore round-trip observed
+  (105 -> 106, file back in the project dir), re-archive -> 105.
+
+
 ## 0.4.0 — 2026-08-21
 
 Sangama (confluence) — multi-session coordination + fact serving. Three new
