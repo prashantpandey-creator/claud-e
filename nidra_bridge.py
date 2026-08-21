@@ -33,6 +33,9 @@ def _envelope(success, data, errors=None):
     }
 
 
+MEMORY_DIR = os.path.expanduser("~/claude-sync/memory/-Users-badenath-projects-vedic-puran")
+
+
 def run(do_sleep=False):
     try:
         from nidra.store import Store
@@ -65,8 +68,21 @@ def run(do_sleep=False):
         for k in totals:
             totals[k] += r[k]
 
+    # Import .md memory files (the real knowledge)
+    mem_files = {"scanned": 0, "imported": 0, "already_exists": 0}
+    try:
+        from nidra.adapters.memory_files import import_memory_files
+        if os.path.isdir(MEMORY_DIR):
+            mf = import_memory_files(store, MEMORY_DIR)
+            mem_files["scanned"] = mf["scanned"]
+            mem_files["imported"] = mf["imported"]
+            mem_files["already_exists"] = mf["already_exists"]
+    except ImportError:
+        pass
+
     result = {
         **totals,
+        "memory_files": mem_files,
         "store_total": len(store.load()),
     }
 
@@ -103,11 +119,18 @@ def main(argv=None):
         return 1
 
     d = env["data"]
-    print(f"  scanned:  {d['scanned']}")
-    print(f"  imported: {d['imported']}")
-    print(f"  existed:  {d['already_exists']}")
-    print(f"  no anchor: {d['no_anchor']}")
-    print(f"  store:    {d['store_total']} total memories")
+    print(f"  Sessions:")
+    print(f"    scanned:  {d['scanned']}")
+    print(f"    imported: {d['imported']}")
+    print(f"    existed:  {d['already_exists']}")
+    print(f"    no anchor: {d['no_anchor']}")
+    mf = d.get("memory_files", {})
+    if mf.get("scanned", 0) > 0:
+        print(f"  Memory files (.md):")
+        print(f"    scanned:  {mf['scanned']}")
+        print(f"    imported: {mf['imported']}")
+        print(f"    existed:  {mf['already_exists']}")
+    print(f"  Store:    {d['store_total']} total memories")
     if "sleep" in d:
         s = d["sleep"]
         print(f"  sleep:    {s['actions']} actions, {s['contested']} contested")

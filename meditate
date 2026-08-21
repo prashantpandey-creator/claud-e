@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# meditate — one command, from anywhere.
+#
+#   meditate           health check (doctor)
+#   meditate grade     scan sessions → grade into nidra → sleep pass
+#   meditate sessions  show all sessions ranked by sprawl
+#   meditate launch    see live threads (add --open to open Terminal windows)
+#   meditate install   run the installer
+#   meditate help      this message
+
+set -euo pipefail
+DIR="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")" && pwd)"
+
+case "${1:-}" in
+  grade)
+    shift
+    python3 "$DIR/nidra_bridge.py" --sleep "$@"
+    ;;
+  sessions)
+    shift
+    python3 "$DIR/sessions.py" "$@"
+    ;;
+  launch)
+    shift
+    python3 "$DIR/launch.py" "$@"
+    ;;
+  install)
+    bash "$DIR/install.sh"
+    ;;
+  metrics)
+    shift
+    python3 "$DIR/metrics.py" "$@"
+    ;;
+  doctor)
+    shift
+    python3 "$DIR/doctor.py" "$@"
+    ;;
+  help|--help|-h)
+    echo "meditate — evidence-graded AI agent memory"
+    echo ""
+    echo "  meditate           health check"
+    echo "  meditate grade     scan sessions, grade into nidra, consolidate"
+    echo "  meditate metrics   memory health, drift, coverage dashboard"
+    echo "  meditate sessions  show sessions ranked by sprawl"
+    echo "  meditate launch    see live threads (--open to open terminals)"
+    echo "  meditate install   run the installer"
+    echo "  meditate doctor    full diagnostic (--json for envelope)"
+    echo ""
+    echo "  Inside Claude Code: /meditate"
+    ;;
+  "")
+    python3 "$DIR/doctor.py"
+    ;;
+  *)
+    echo "unknown: $1 — try: meditate help" >&2
+    exit 1
+    ;;
+esac

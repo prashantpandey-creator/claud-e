@@ -32,6 +32,7 @@ TEST_FILES = [
     "test_scan.py",
     "test_still.py",
     "test_nidra_bridge.py",
+    "test_metrics.py",
 ]
 
 
