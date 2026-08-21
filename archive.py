@@ -31,6 +31,8 @@ from typing import Any, Dict, List, Optional
 
 PROJECTS_ROOT = os.path.expanduser("~/.claude/projects")
 ARCHIVE_ROOT = os.path.expanduser("~/.claude/meditation/archive")
+STORE_DIR = os.environ.get("MEDITATE_STORE_DIR") or os.path.expanduser(
+    "~/.claude/meditation/nidra_store")
 
 MIN_AGE_S = 24 * 3600        # never touch anything this fresh — it may be live
 EMPTY_MAX_USER_MSGS = 1      # "empty" = at most one user message...
@@ -87,10 +89,55 @@ def candidates(projects_root: str = PROJECTS_ROOT, empty_only: bool = True,
     return sorted(out, key=lambda r: -r["age_days"])
 
 
+def _retarget_evidence(old_path: str, new_path: str,
+                       store_dir: Optional[str] = None) -> int:
+    """Point graded evidence at a transcript's NEW location after a move.
+
+    Without this, archiving a non-empty session breaks its memory's evidence
+    source, the next sleep pass demotes it to unverified, and the drift alert
+    reports noise we caused ourselves. The store must follow the file.
+    """
+    store_dir = store_dir or STORE_DIR      # resolve at CALL time, not def time
+    mp = os.path.join(store_dir, "memories.jsonl")
+    if not os.path.exists(mp):
+        return 0
+    changed = 0
+    out_lines = []
+    with open(mp) as f:
+        for line in f:
+            if old_path not in line:
+                out_lines.append(line)
+                continue
+            try:
+                m = json.loads(line)
+                for ev in m.get("evidence", []):
+                    if ev.get("source") == old_path:
+                        ev["source"] = new_path
+                        changed += 1
+                out_lines.append(json.dumps(m) + "\n")
+            except Exception:
+                out_lines.append(line)
+    if changed:
+        with open(mp + ".tmp", "w") as f:
+            f.writelines(out_lines)
+        os.replace(mp + ".tmp", mp)
+        try:
+            with open(os.path.join(store_dir, "journal.jsonl"), "a") as f:
+                f.write(json.dumps({"event": "archive.retarget",
+                                    "from": old_path, "to": new_path,
+                                    "rows": changed,
+                                    "ts": time.strftime("%Y-%m-%dT%H:%M:%S")}) + "\n")
+        except OSError:
+            pass
+    return changed
+
+
 def _archive_one(row: Dict[str, Any], archive_root: str) -> None:
     dst_dir = os.path.join(archive_root, row["slug"])
     os.makedirs(dst_dir, exist_ok=True)
-    shutil.move(row["path"], os.path.join(dst_dir, row["sid"] + ".jsonl"))
+    dst_jsonl = os.path.join(dst_dir, row["sid"] + ".jsonl")
+    shutil.move(row["path"], dst_jsonl)
+    _retarget_evidence(row["path"], dst_jsonl)
     sidecar = os.path.join(os.path.dirname(row["path"]), row["sid"])
     if os.path.isdir(sidecar):
         shutil.move(sidecar, os.path.join(dst_dir, row["sid"]))
@@ -137,7 +184,9 @@ def restore(sid: str, archive_root: str = ARCHIVE_ROOT) -> Dict[str, Any]:
     if not os.path.exists(src):
         return {"restored": False, "reason": "archived file missing"}
     os.makedirs(rec["from"], exist_ok=True)
-    shutil.move(src, os.path.join(rec["from"], sid + ".jsonl"))
+    back = os.path.join(rec["from"], sid + ".jsonl")
+    shutil.move(src, back)
+    _retarget_evidence(src, back)
     side = os.path.join(archive_root, rec["slug"], sid)
     if os.path.isdir(side):
         shutil.move(side, os.path.join(rec["from"], sid))

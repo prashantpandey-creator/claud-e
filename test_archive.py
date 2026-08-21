@@ -119,6 +119,38 @@ def test_older_than_filter():
         assert "old-big" in ids and "new-big" not in ids
 
 
+def test_archive_retargets_graded_evidence():
+    """The seam test: archiving a session whose memory cites its transcript
+    must NOT break the evidence — the store follows the file, both ways."""
+    with tempfile.TemporaryDirectory() as t:
+        proj = os.path.join(t, "projects", "-x")
+        p = _mk_session(proj, "cited-1")
+        store = os.path.join(t, "store")
+        os.makedirs(store)
+        mem = {"id": "mem_1", "active": True, "statement": "s",
+               "epistemic": {"evidence_status": "machine_checked"},
+               "evidence": [{"source": p, "excerpt": "hi", "sha256": "x"}]}
+        with open(os.path.join(store, "memories.jsonl"), "w") as f:
+            f.write(json.dumps(mem) + "\n")
+        old = ar.STORE_DIR
+        ar.STORE_DIR = store
+        try:
+            arch = os.path.join(t, "arch")
+            ar.run(projects_root=os.path.join(t, "projects"), archive_root=arch,
+                   empty_only=True, apply=True)
+            m = json.loads(open(os.path.join(store, "memories.jsonl")).read())
+            assert m["evidence"][0]["source"].startswith(arch), \
+                "evidence still points at the old path"
+            assert os.path.exists(m["evidence"][0]["source"]), \
+                "retargeted evidence source does not exist"
+            ar.restore("cited-1", archive_root=arch)
+            m = json.loads(open(os.path.join(store, "memories.jsonl")).read())
+            assert m["evidence"][0]["source"] == p, "restore did not retarget back"
+            assert os.path.exists(p)
+        finally:
+            ar.STORE_DIR = old
+
+
 def test_cli_envelope_and_exit_zero():
     r = subprocess.run([sys.executable, os.path.join(SKILL, "archive.py"), "--json"],
                        capture_output=True, text=True, timeout=30)
