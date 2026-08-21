@@ -15,8 +15,12 @@
 set -euo pipefail
 
 SKILL_DIR="$(cd "$(dirname "$0")" && pwd)"
-HOOK_SRC="$SKILL_DIR/../../hooks/meditate-checkpoint.sh"
-HOOK_DST="$HOME/.claude/hooks/meditate-checkpoint.sh"
+# The hook lives IN the repo — that is the source of truth. It used to be read
+# from ~/.claude/hooks/ (untracked), so the merged hook existed on exactly one
+# machine and a fresh install wired a filename that no longer existed.
+HOOK_SRC="$SKILL_DIR/hooks/meditate-hook.sh"
+HOOK_DST="$HOME/.claude/hooks/meditate-hook.sh"
+BIN_DIR="$HOME/.local/bin"
 SETTINGS="$HOME/.claude/settings.json"
 MEDITATION_DIR="$HOME/.claude/meditation"
 SESSIONS_DIR="$MEDITATION_DIR/sessions"
@@ -56,20 +60,44 @@ echo
 echo "  Setting up hook..."
 mkdir -p "$(dirname "$HOOK_DST")"
 
-if [ -f "$HOOK_DST" ]; then
-    echo "  [ok]  Hook already at $HOOK_DST"
-else
-    if [ -f "$HOOK_SRC" ]; then
-        cp "$HOOK_SRC" "$HOOK_DST"
-        echo "  [ok]  Copied hook to $HOOK_DST"
+# Always copy when the source differs. The old "skip if it exists" branch meant
+# an upgrade never shipped a new hook — the stale one lived forever.
+if [ -f "$HOOK_SRC" ]; then
+    if [ -f "$HOOK_DST" ] && cmp -s "$HOOK_SRC" "$HOOK_DST"; then
+        echo "  [ok]  Hook current at $HOOK_DST"
     else
-        echo "  [warn]  Hook source not at expected path ($HOOK_SRC)"
-        echo "          If meditate-checkpoint.sh is already at $HOOK_DST, this is fine."
+        cp "$HOOK_SRC" "$HOOK_DST"
+        chmod +x "$HOOK_DST"
+        echo "  [ok]  Installed hook -> $HOOK_DST"
     fi
+else
+    echo "  [ERROR]  Hook source missing: $HOOK_SRC"
+    exit 1
 fi
 
-if [ -f "$HOOK_DST" ]; then
-    chmod +x "$HOOK_DST"
+# Retire the two hooks this one replaced, so they cannot fire alongside it.
+for old in meditate-checkpoint.sh rules-inject.sh; do
+    if [ -f "$HOME/.claude/hooks/$old" ]; then
+        mv "$HOME/.claude/hooks/$old" "$HOME/.claude/hooks/$old.retired"
+        echo "  [ok]  Retired $old"
+    fi
+done
+
+# ---- 2b. CLI on PATH
+echo
+echo "  Putting 'meditate' on your PATH..."
+mkdir -p "$BIN_DIR"
+if [ -f "$SKILL_DIR/meditate" ]; then
+    chmod +x "$SKILL_DIR/meditate"
+    ln -sf "$SKILL_DIR/meditate" "$BIN_DIR/meditate"
+    echo "  [ok]  $BIN_DIR/meditate -> $SKILL_DIR/meditate"
+    case ":$PATH:" in
+        *":$BIN_DIR:"*) : ;;
+        *) echo "  [warn]  $BIN_DIR is not on your PATH. Add to ~/.zshrc:"
+           echo "          export PATH=\"\$HOME/.local/bin:\$PATH\"" ;;
+    esac
+else
+    echo "  [warn]  CLI wrapper not found at $SKILL_DIR/meditate"
 fi
 
 # ---- 3. Wire into settings.json
@@ -92,45 +120,48 @@ with open(settings_path) as f:
 hooks = settings.setdefault("hooks", {})
 changed = False
 
-def has_meditate_hook(entries):
-    for entry in entries:
-        for h in entry.get("hooks", []):
-            if "meditate" in h.get("command", ""):
-                return True
+# Every registration this hook owns. Matched by matcher, not by "is some
+# meditate hook present?" — the old check saw ANY meditate command and
+# declared victory, so a stale path was never repaired and the third
+# registration (Write|Edit|MultiEdit) was never added at all.
+WANTED = [
+    ("SessionStart", None, 10),
+    ("PreToolUse", "Bash", 5),
+    ("PreToolUse", "Write|Edit|MultiEdit", 5),
+]
+
+def is_ours(entry):
+    for h in entry.get("hooks", []):
+        c = h.get("command", "")
+        if "meditate-hook.sh" in c or "meditate-checkpoint.sh" in c or "rules-inject.sh" in c:
+            return True
     return False
 
-# SessionStart
-ss = hooks.setdefault("SessionStart", [])
-if not has_meditate_hook(ss):
-    ss.append({
-        "hooks": [{
-            "type": "command",
-            "command": hook_cmd,
-            "timeout": 10,
-            "statusMessage": "Checking meditation checkpoint..."
-        }]
-    })
+for event, matcher, timeout in WANTED:
+    entries = hooks.setdefault(event, [])
+    # Drop any prior registration of ours for this matcher (incl. retired hooks).
+    kept = [e for e in entries if not (is_ours(e) and e.get("matcher") == matcher)]
+    if len(kept) != len(entries):
+        changed = True
+    entry = {"hooks": [{"type": "command", "command": hook_cmd, "timeout": timeout}]}
+    if matcher:
+        entry["matcher"] = matcher
+    kept.append(entry)
+    hooks[event] = kept
     changed = True
-    print("  [ok]  SessionStart hook added")
-else:
-    print("  [ok]  SessionStart hook already registered")
+    print(f"  [ok]  {event}{' (' + matcher + ')' if matcher else ''} registered")
 
-# PreToolUse
-ptu = hooks.setdefault("PreToolUse", [])
-if not has_meditate_hook(ptu):
-    ptu.append({
-        "matcher": "Bash",
-        "hooks": [{
-            "type": "command",
-            "command": hook_cmd,
-            "timeout": 10,
-            "statusMessage": "Meditation checkpoint..."
-        }]
-    })
-    changed = True
-    print("  [ok]  PreToolUse hook added")
-else:
-    print("  [ok]  PreToolUse hook already registered")
+# Purge registrations pointing at the two retired hooks, wherever they sit.
+for event, entries in list(hooks.items()):
+    pruned = []
+    for e in entries:
+        cmds = [h.get("command", "") for h in e.get("hooks", [])]
+        if any("meditate-checkpoint.sh" in c or "rules-inject.sh" in c for c in cmds):
+            print(f"  [ok]  Removed retired hook from {event}")
+            changed = True
+            continue
+        pruned.append(e)
+    hooks[event] = pruned
 
 if changed:
     with open(settings_path, "w") as f:
@@ -174,7 +205,7 @@ fi
 echo
 echo "  Running test suite..."
 TEST_PASS=true
-for tf in test_sessions.py test_launch.py test_scan.py test_still.py test_doctor.py test_nidra_bridge.py test_metrics.py; do
+for tf in test_sessions.py test_launch.py test_scan.py test_still.py test_doctor.py test_nidra_bridge.py test_metrics.py test_hook.py; do
     if [ -f "$SKILL_DIR/$tf" ]; then
         if python3 "$SKILL_DIR/$tf" > /dev/null 2>&1; then
             echo "  [ok]  $tf"
@@ -191,10 +222,11 @@ echo "  ================================"
 if [ "$TEST_PASS" = true ]; then
     echo "  meditate v${VERSION} installed. All tests green."
     echo
-    echo "  Use:   /meditate                              (inside Claude Code)"
-    echo "         python3 $SKILL_DIR/doctor.py            (health check)"
-    echo "         python3 $SKILL_DIR/nidra_bridge.py      (grade sessions)"
-    echo "         python3 $SKILL_DIR/launch.py            (see live threads)"
+    echo "  Use:   /meditate            (inside Claude Code)"
+    echo "         meditate             (health check)"
+    echo "         meditate grade       (scan + grade + consolidate)"
+    echo "         meditate metrics     (drift, coverage, health)"
+    echo "         meditate launch      (see live threads)"
 else
     echo "  meditate v${VERSION} installed with test failures."
     echo "  Run: python3 $SKILL_DIR/doctor.py  for details."

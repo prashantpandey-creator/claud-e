@@ -23,37 +23,62 @@ sys.path.insert(0, SKILL_DIR)
 sys.path.insert(0, NIDRA_ROOT)
 
 
-def _envelope(success, data, errors=None):
+def _envelope(success, data, errors=None, store_dir=None):
     return {
         "tool_name": "nidra_bridge",
         "success": success,
         "data": data,
-        "metadata": {"store_dir": STORE_DIR, "nidra_root": NIDRA_ROOT},
+        "metadata": {"store_dir": store_dir or STORE_DIR, "nidra_root": NIDRA_ROOT},
         "errors": errors or [],
     }
 
 
-MEMORY_DIR = os.path.expanduser("~/claude-sync/memory/-Users-badenath-projects-vedic-puran")
+# All curated .md memory stores, not just the vedic-puran one. Every cwd-slug
+# directory under claude-sync/memory is real knowledge; grading only the first
+# one made coverage read 100% while other stores went ungraded.
+MEMORY_ROOT = os.path.expanduser("~/claude-sync/memory")
+MEMORY_DIR = os.path.join(MEMORY_ROOT, "-Users-badenath-projects-vedic-puran")
 
 
-def run(do_sleep=False):
+def _memory_dirs(root=None):
+    """Every directory under claude-sync/memory that holds .md memories."""
+    root = root or MEMORY_ROOT
+    if not os.path.isdir(root):
+        return []
+    found = []
+    for entry in sorted(os.listdir(root)):
+        d = os.path.join(root, entry)
+        if not os.path.isdir(d):
+            continue
+        if any(f.endswith(".md") for f in os.listdir(d)):
+            found.append(d)
+    return found
+
+
+def run(do_sleep=False, store_dir=None, memory_root=None):
+    """Scan sessions + .md memories into the graded store.
+
+    store_dir/memory_root are injectable so tests never touch the live store —
+    the graded store is shared state, not a scratchpad.
+    """
+    store_dir = store_dir or STORE_DIR
     try:
         from nidra.store import Store
         from nidra.adapters.meditate import import_sessions
     except ImportError as e:
-        return _envelope(False, {}, [{"code": "import", "message": str(e)}])
+        return _envelope(False, {}, [{"code": "import", "message": str(e)}], store_dir)
 
     try:
         from sessions import scan_all_projects
     except ImportError as e:
-        return _envelope(False, {}, [{"code": "import", "message": str(e)}])
+        return _envelope(False, {}, [{"code": "import", "message": str(e)}], store_dir)
 
     scan = scan_all_projects(cap=20)
     if not scan["success"]:
-        return _envelope(False, {}, scan["errors"])
+        return _envelope(False, {}, scan["errors"], store_dir)
 
     sessions = scan["data"]["sessions"]
-    store = Store(STORE_DIR)
+    store = Store(store_dir)
     if not store.exists():
         store.init()
 
@@ -68,15 +93,16 @@ def run(do_sleep=False):
         for k in totals:
             totals[k] += r[k]
 
-    # Import .md memory files (the real knowledge)
-    mem_files = {"scanned": 0, "imported": 0, "already_exists": 0}
+    # Import .md memory files (the real knowledge) from EVERY memory store
+    mem_files = {"scanned": 0, "imported": 0, "already_exists": 0, "dirs": []}
     try:
         from nidra.adapters.memory_files import import_memory_files
-        if os.path.isdir(MEMORY_DIR):
-            mf = import_memory_files(store, MEMORY_DIR)
-            mem_files["scanned"] = mf["scanned"]
-            mem_files["imported"] = mf["imported"]
-            mem_files["already_exists"] = mf["already_exists"]
+        for d in _memory_dirs(memory_root):
+            mf = import_memory_files(store, d)
+            mem_files["scanned"] += mf["scanned"]
+            mem_files["imported"] += mf["imported"]
+            mem_files["already_exists"] += mf["already_exists"]
+            mem_files["dirs"].append({"dir": d, "scanned": mf["scanned"]})
     except ImportError:
         pass
 
@@ -98,7 +124,7 @@ def run(do_sleep=False):
         except Exception as e:
             result["sleep_error"] = str(e)
 
-    return _envelope(True, result)
+    return _envelope(True, result, None, store_dir)
 
 
 def main(argv=None):

@@ -157,10 +157,20 @@ def compute_metrics() -> Dict[str, Any]:
     session_mems = sum(1 for m in memories if m.get("active") and "meditate-session" in m.get("tags", []))
     memfile_mems = sum(1 for m in memories if m.get("active") and "memory-file" in m.get("tags", []))
 
-    MEMORY_DIR = os.path.expanduser("~/claude-sync/memory/-Users-badenath-projects-vedic-puran")
+    # Count EVERY memory store, not just the vedic-puran one. Hardcoding a
+    # single store made coverage read a flattering 100% while 28 files in the
+    # other stores were never graded at all — the metric hid the gap it exists
+    # to expose.
+    MEMORY_ROOT = os.path.expanduser("~/claude-sync/memory")
     total_md_files = 0
-    if os.path.isdir(MEMORY_DIR):
-        total_md_files = sum(1 for f in os.listdir(MEMORY_DIR) if f.endswith(".md") and f != "MEMORY.md")
+    if os.path.isdir(MEMORY_ROOT):
+        for entry in os.listdir(MEMORY_ROOT):
+            d = os.path.join(MEMORY_ROOT, entry)
+            if not os.path.isdir(d):
+                continue
+            total_md_files += sum(
+                1 for f in os.listdir(d) if f.endswith(".md") and f != "MEMORY.md"
+            )
 
     session_coverage = session_mems / total_sessions if total_sessions else 0
     memfile_coverage = memfile_mems / total_md_files if total_md_files else 0

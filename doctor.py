@@ -17,7 +17,9 @@ import time
 from typing import Any, Dict, List
 
 SKILL_DIR = os.path.dirname(os.path.abspath(__file__))
-HOOK_PATH = os.path.expanduser("~/.claude/hooks/meditate-checkpoint.sh")
+HOOK_PATH = os.path.expanduser("~/.claude/hooks/meditate-hook.sh")
+HOOK_SRC = os.path.join(SKILL_DIR, "hooks", "meditate-hook.sh")
+RETIRED_HOOKS = ("meditate-checkpoint.sh", "rules-inject.sh")
 SETTINGS_PATH = os.path.expanduser("~/.claude/settings.json")
 STILLNESS_PATH = os.path.expanduser("~/.claude/meditation/STILLNESS.md")
 MEDITATION_DIR = os.path.expanduser("~/.claude/meditation")
@@ -33,6 +35,7 @@ TEST_FILES = [
     "test_still.py",
     "test_nidra_bridge.py",
     "test_metrics.py",
+    "test_hook.py",
 ]
 
 
@@ -92,25 +95,49 @@ def _check_hook() -> Dict[str, Any]:
     hook_exists = os.path.isfile(HOOK_PATH)
     hook_executable = os.access(HOOK_PATH, os.X_OK) if hook_exists else False
 
-    registered = {"SessionStart": False, "PreToolUse": False}
+    # The installed copy must match the repo copy, or the hook has drifted from
+    # its source of truth and the next install silently reverts it.
+    in_sync = None
+    if hook_exists and os.path.isfile(HOOK_SRC):
+        with open(HOOK_PATH, "rb") as a, open(HOOK_SRC, "rb") as b:
+            in_sync = a.read() == b.read()
+
+    # Check each registration by matcher. Checking only "is a meditate hook
+    # present?" reported all_wired=True while a whole matcher was missing.
+    registered = {
+        "SessionStart": False,
+        "PreToolUse:Bash": False,
+        "PreToolUse:Write|Edit|MultiEdit": False,
+    }
+    stale = []
     if os.path.isfile(SETTINGS_PATH):
         try:
-            settings = json.load(open(SETTINGS_PATH))
+            with open(SETTINGS_PATH) as fh:
+                settings = json.load(fh)
             hooks = settings.get("hooks", {})
-            for event in registered:
-                entries = hooks.get(event, [])
+            for event, entries in hooks.items():
                 for entry in entries:
                     for h in entry.get("hooks", []):
-                        if "meditate" in h.get("command", ""):
-                            registered[event] = True
-        except (json.JSONDecodeError, KeyError):
+                        cmd = h.get("command", "")
+                        for old in RETIRED_HOOKS:
+                            if old in cmd:
+                                stale.append(f"{event}: {old}")
+                        if "meditate-hook.sh" not in cmd:
+                            continue
+                        matcher = entry.get("matcher")
+                        key = event if not matcher else f"{event}:{matcher}"
+                        if key in registered:
+                            registered[key] = True
+        except (json.JSONDecodeError, KeyError, OSError):
             pass
 
     return {
         "hook_exists": hook_exists,
         "hook_executable": hook_executable,
+        "in_sync_with_repo": in_sync,
         "registered": registered,
-        "all_wired": all(registered.values()),
+        "stale_registrations": stale,
+        "all_wired": all(registered.values()) and not stale and in_sync is not False,
     }
 
 
@@ -230,10 +257,15 @@ def main(argv: List[str]) -> int:
         print(f"  [{mark:>7}]  {t['file']:25} {t['detail']}")
 
     print(f"\nHook:")
-    print(f"  [{'ok' if d['hook']['hook_exists'] else 'MISSING':>7}]  hook file exists")
-    print(f"  [{'ok' if d['hook']['hook_executable'] else 'MISSING':>7}]  hook executable")
-    for ev, wired in d["hook"]["registered"].items():
-        print(f"  [{'ok' if wired else 'MISSING':>7}]  {ev} registered")
+    h = d["hook"]
+    print(f"  [{'ok' if h['hook_exists'] else 'MISSING':>7}]  hook file exists")
+    print(f"  [{'ok' if h['hook_executable'] else 'MISSING':>7}]  hook executable")
+    if h["in_sync_with_repo"] is not None:
+        print(f"  [{'ok' if h['in_sync_with_repo'] else 'DRIFTED':>7}]  matches repo source")
+    for ev, wired in h["registered"].items():
+        print(f"  [{'ok' if wired else 'MISSING':>7}]  {ev}")
+    for s in h.get("stale_registrations", []):
+        print(f"  [ STALE ]  retired hook still wired — {s}")
 
     print(f"\nStillness:")
     if d["stillness"]["exists"]:

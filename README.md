@@ -3,19 +3,22 @@
 **Evidence-graded AI agent memory with drift detection.**
 
 Meditate grades your knowledge — not your session transcripts, your actual
-curated memory files — with SHA-256 evidence receipts. Every file path,
-every `[[wikilink]]`, every claim is verified against the live filesystem.
-When the world changes, the stale memory silently stops being trusted.
+curated memory files — with SHA-256 evidence receipts. Every file path and
+every `[[wikilink]]` is verified against the live filesystem. When the world
+changes, the stale memory silently stops being trusted.
 
 ```
-316 active memories (244 knowledge files + 72 session maps)
-313 machine-checked (evidence verified against live sources)
+344 active memories (272 knowledge files + 72 session maps)
+341 machine-checked (evidence verified against live sources)
   3 unverified
  11 tombstoned (stale, pruned by sleep pass)
   0 stale answers served
 
-546 file-path claims verified
-829 wikilinks verified
+1,356 evidence receipts, re-checked every pass:
+    860 wikilinks
+    272 content anchors
+    150 file paths
+     74 session transcripts
 ```
 
 ---
@@ -48,9 +51,9 @@ meditate help         # all commands
 
 Meditate grades two kinds of knowledge into a single nidra store:
 
-**1. Your `.md` memory files** (the real knowledge — 244 files, 1.2 MB).
-Hand-curated, linked with `[[wikilinks]]`, structured with `Why:` and
-`How to apply:`. These are the refined metal. The adapter
+**1. Your `.md` memory files** (the real knowledge — 272 files across all 5
+memory stores). Hand-curated, linked with `[[wikilinks]]`, structured with
+`Why:` and `How to apply:`. These are the refined metal. The adapter
 (`nidra/adapters/memory_files.py`) reads each file, extracts verifiable
 claims, and builds evidence receipts:
 
@@ -60,9 +63,13 @@ claims, and builds evidence receipts:
   against the file itself (if the memory is edited to remove that claim, the
   evidence drifts — correct)
 
-**2. Session transcripts** (the raw ore — 91 sessions, 738 MB). The adapter
-(`nidra/adapters/meditate.py`) mines each transcript into a compact map and
-anchors it to the first user message.
+Up to `MAX_CLAIMS` (40) paths and 40 wikilinks per file. The real corpus peaks
+at 8 and 26, so nothing is dropped — and a test fails loudly if a future file
+would exceed it, rather than quietly under-grading.
+
+**2. Session transcripts** (the raw ore — 91 sessions, 754 MB, largest 112 MB).
+The adapter (`nidra/adapters/meditate.py`) mines each transcript into a compact
+map and anchors it to the first user message.
 
 Both sources feed the same store (`~/.claude/meditation/nidra_store/`), graded
 by the same engine, consolidated by the same sleep pass.
@@ -101,17 +108,24 @@ Running the pass twice in an unchanged world produces zero actions.
 
 ### Injection — fresh, not buried
 
-Two hooks fire into every Claude Code session automatically:
+One hook (`meditate-hook.sh`) fires into every Claude Code session via
+`additionalContext` — three registrations, one script. An irrelevant tool call
+is rejected by a pure-bash prefilter and spawns **no** subprocess at all
+(0.012 s); only a call that will actually produce a rule pays for parsing:
 
-- **`meditate-checkpoint.sh`** — fires on SessionStart and git operations.
-  Checks when you last ran `/meditate`. When overdue (3 days), nudges.
-- **`rules-inject.sh`** — fires on SessionStart and PreToolUse.
-  Injects operating rules + nidra graded memory census via `additionalContext`.
+- **SessionStart** — operating rules + nidra census + stillness check
+- **PreToolUse (Bash)** — git/deploy discipline
+- **PreToolUse (Write|Edit|MultiEdit)** — hot-file guard for pipeline files
 
 Every new session sees:
 ```
-Nidra store: 316 graded memories; 313 machine_checked; 3 unverified.
+Nidra store: 344 graded memories; 341 machine_checked; 3 unverified.
 ```
+
+The hook must always exit 0 with valid JSON. A crash or empty stdout makes
+Claude Code drop every rule *silently* — worse than no hook, because you lose
+the rules and never find out. `test_hook.py` pins that contract against
+malformed stdin, a missing `~/.claude/projects`, unicode, and embedded newlines.
 
 ### Metrics — how well is it running
 
@@ -121,22 +135,26 @@ meditate metrics
 
 ```
   Memory Health
-    active:      316  (of 327 total, 11 tombstoned)
-      machine_checked: 313
+    active:      344  (of 355 total, 11 tombstoned)
+      machine_checked: 341
       unverified: 3
     verified:   ███████████████████░ 99.1%
-    confidence: █████████████████░░░ 89.6%
+    confidence: █████████████████░░░ 89.7%
 
   Drift Detection
-    upgrades:      313  (unverified -> machine_checked)
-    downgrades:      0  (machine_checked -> unverified)
+    upgrades:     654  (unverified -> machine_checked)
+    downgrades:     0  (machine_checked -> unverified)
     drift rate:  0.00%
 
   Coverage
     Sessions:      72 / 91  ███████████████░░░░░ 79.1%
-    .md files:    244 / 244  ████████████████████ 100.0%
-    total active: 316
+    .md files:    272 / 272  ████████████████████ 100.0%
+    total active: 344
 ```
+
+Coverage counts **every** memory store. It used to count one, which reported a
+flattering 244/244 while 28 files in other stores were never graded at all —
+a metric hiding the gap it exists to expose.
 
 The numbers that matter: verified rate should stay above 90%. Drift rate should
 stay near zero. When something drifts — a file renamed, a function deleted, a
@@ -161,8 +179,8 @@ continuation chats — each with context, next step, and files in play.
 ## Architecture
 
 ```
-Memory files (.md)          Session transcripts (738 MB)
-   244 files                     91 sessions
+Memory files (.md)          Session transcripts (754 MB)
+   272 files, 5 stores            91 sessions
       │                              │
       ▼                              ▼
  memory_files.py              sessions.py → meditate.py
@@ -179,10 +197,10 @@ Memory files (.md)          Session transcripts (738 MB)
                  └── recall.py     answer cache with receipts
                  │
                  ▼
-          rules-inject.sh     ← inject graded state into sessions
+          meditate-hook.sh    ← inject graded state into sessions
                  │
                  ├── SessionStart   operating rules + nidra census
-                 └── PreToolUse     git/deploy discipline
+                 └── PreToolUse     git/deploy discipline + hot-file guard
                  │
                  ▼
           metrics.py          ← health, drift, coverage, timeline
@@ -227,26 +245,33 @@ meditate doctor --json  # full diagnostic as JSON envelope
 
 ## Numbers (measured, not claimed)
 
+Every row below was produced by running the command, not by recall. Re-measure
+with `meditate metrics --json` and `meditate doctor --json`.
+
 | Metric | Value |
 |---|---|
-| Memory files graded | 244 (100%) |
-| Sessions scanned | 91 |
-| Total active memories | 316 |
-| Machine-checked | 313 (99.1%) |
+| Memory files graded | 272 / 272 (100%, all 5 stores) |
+| Sessions scanned | 72 / 91 (79.1%) |
+| Total active memories | 344 (of 355; 11 tombstoned) |
+| Machine-checked | 341 (99.1%) |
 | Unverified | 3 (0.9%) |
-| Tombstoned by sleep | 11 |
-| File-path claims verified | 546 |
-| Wikilinks verified | 829 |
-| Journal entries | 1,704 |
-| Sleep pass actions | 324 |
-| Duplicates merged | 11 |
-| Test functions | 61+ |
+| Evidence receipts | 1,356 |
+| — wikilinks | 860 |
+| — content anchors | 272 |
+| — file paths | 150 |
+| — session transcripts | 74 |
+| Journal entries | 4,985 |
+| Sleep runs | 94 |
+| Duplicates merged | 22 |
+| Grade downgrades (drift) | 0 |
+| Test files / functions | 15 / 99 |
 | All tests | green |
-| Largest transcript | 37 MB |
-| Total transcript size | 738 MB |
-| Hook latency | sub-second |
-| Sleep pass (full) | < 2 seconds |
-| Session scan (all 91) | < 5 seconds |
+| Largest transcript | 112 MB |
+| Total transcript size | 754 MB |
+| Hook, SessionStart | 0.14 s |
+| Hook, irrelevant call (prefiltered) | 0.012 s |
+| Grade + sleep pass (full) | 3.8 s |
+| Session scan (all 91) | 1.9 s |
 
 ---
 
@@ -255,12 +280,14 @@ meditate doctor --json  # full diagnostic as JSON envelope
 ```
 ~/.claude/skills/meditate/
 ├── README.md              this file
-├── VERSION                0.3.0
+├── VERSION                0.3.1
 ├── CHANGELOG.md           history
 ├── SKILL.md               /meditate slash command definition
 ├── INTERNALS.md           developer docs (vritti/antaraya/nirodha formulas)
-├── meditate               CLI wrapper (symlinked to ~/.local/bin/)
+├── meditate               CLI wrapper (symlinked to ~/.local/bin/ by install.sh)
 ├── install.sh             one-command setup
+├── hooks/
+│   └── meditate-hook.sh   the hook — repo is the source of truth, install copies it
 ├── doctor.py              self-diagnostic
 ├── metrics.py             health, drift, coverage dashboard
 ├── sessions.py            transcript miner
@@ -275,6 +302,7 @@ meditate doctor --json  # full diagnostic as JSON envelope
 ├── test_doctor.py         }
 ├── test_nidra_bridge.py   }
 ├── test_metrics.py        }
+├── test_hook.py           }
 └── .gitignore
 
 ~/projects/nidra/nidra/        (the grading engine)
@@ -292,14 +320,13 @@ meditate doctor --json  # full diagnostic as JSON envelope
     └── longmemeval.py     LongMemEval benchmark harness
 
 ~/.claude/hooks/
-├── meditate-checkpoint.sh     stillness nudge
-└── rules-inject.sh            operating rules + nidra state
+└── meditate-hook.sh           operating rules + nidra + discipline (single merged hook)
 
 ~/.claude/meditation/
 ├── STILLNESS.md               last reading
 ├── nidra_store/               graded memory store
-│   ├── memories.jsonl         327 memories, 316 active
-│   └── journal.jsonl          1,704 events
+│   ├── memories.jsonl         355 memories, 344 active
+│   └── journal.jsonl          4,985 events
 └── sessions/                  continuation chats from splits
 ```
 
