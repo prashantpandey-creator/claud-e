@@ -111,6 +111,22 @@ def test_queue_and_done():
         assert fm.formation_queue(sessions, ledger_path=ledger) == []
 
 
+def test_queue_dedupes_by_sid_keeping_fullest():
+    """Live data: 37 entries were 29 sessions (same sid from several project
+    dirs). Duplicate queue rows = duplicate distill agents."""
+    with tempfile.TemporaryDirectory() as t:
+        ledger = os.path.join(t, "distilled.jsonl")
+        sessions = [
+            {"session_id": "dup", "counts": {"user": 20}, "file": "/a/dup.jsonl",
+             "_project_slug": "-a", "title": "early snapshot"},
+            {"session_id": "dup", "counts": {"user": 90}, "file": "/b/dup.jsonl",
+             "_project_slug": "-b", "title": "full snapshot"},
+        ]
+        q = fm.formation_queue(sessions, ledger_path=ledger)
+        assert len(q) == 1, q
+        assert q[0]["counts"]["user"] == 90, "must keep the fullest snapshot"
+
+
 def test_kickoff_content():
     with tempfile.TemporaryDirectory() as t:
         sessions = [{"session_id": "big", "counts": {"user": 40},

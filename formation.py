@@ -171,14 +171,18 @@ def formation_queue(sessions: List[Dict[str, Any]],
                     ledger_path: str = LEDGER_PATH) -> List[Dict[str, Any]]:
     """Substantive sessions not yet distilled — the day awaiting memory."""
     done = _distilled(ledger_path)
-    out = []
+    best = {}
     for s in sessions:
-        if s.get("session_id") in done:
+        sid = s.get("session_id")
+        if sid in done:
             continue
         if (s.get("counts") or {}).get("user", 0) < SUBSTANTIVE_USER_MSGS:
             continue
-        out.append(s)
-    return out
+        # one session can surface from several project dirs / resume
+        # snapshots — 37 entries were really 29 sessions. Keep the fullest.
+        if sid not in best or (s.get("counts") or {}).get("user", 0) >                 (best[sid].get("counts") or {}).get("user", 0):
+            best[sid] = s
+    return list(best.values())
 
 
 def distill_kickoff(sid: str, sessions: List[Dict[str, Any]],
