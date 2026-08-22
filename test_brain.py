@@ -59,6 +59,46 @@ def test_server_binds_loopback_and_serves():
         srv.shutdown()
 
 
+def test_act_requires_header_and_runs_known_actions():
+    calls = []
+    old = br.ACT_RUNNER
+    br.ACT_RUNNER = lambda a, g: calls.append((a, g)) or {"started": True, "output": "Launched 2 agent(s)"}
+    try:
+        srv = br.make_server(port=0)
+        port = srv.server_address[1]
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        base = f"http://127.0.0.1:{port}"
+        # no header -> 403 (CSRF guard)
+        req = urllib.request.Request(base + "/api/act", data=b'{"action":"go"}',
+                                     method="POST")
+        try:
+            urllib.request.urlopen(req, timeout=10)
+            raise AssertionError("403 expected without X-Meditate header")
+        except urllib.error.HTTPError as e:
+            assert e.code == 403
+        # with header -> runs
+        req = urllib.request.Request(base + "/api/act",
+                                     data=json.dumps({"action": "fix", "arg": "2"}).encode(),
+                                     headers={"X-Meditate": "1"}, method="POST")
+        with urllib.request.urlopen(req, timeout=10) as r:
+            j = json.loads(r.read())
+            assert j["started"] is True
+            assert "Launched" in j["output"], "click must return the REAL output"
+        assert calls == [("fix", "2")], calls
+        # unknown action -> 400
+        req = urllib.request.Request(base + "/api/act",
+                                     data=b'{"action":"rm-rf"}',
+                                     headers={"X-Meditate": "1"}, method="POST")
+        try:
+            urllib.request.urlopen(req, timeout=10)
+            raise AssertionError("400 expected for unknown action")
+        except urllib.error.HTTPError as e:
+            assert e.code == 400
+        srv.shutdown()
+    finally:
+        br.ACT_RUNNER = old
+
+
 def test_state_is_json_serializable():
     json.dumps(br.state())
 

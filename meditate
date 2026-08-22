@@ -98,7 +98,7 @@ case "${1:-}" in
     shift
     python3 "$DIR/go.py" --repair-only "$@"
     ;;
-  brain|serve|watch)
+  sarathi|brain|serve|watch|soul)
     shift
     python3 "$DIR/brain.py" "$@"
     ;;

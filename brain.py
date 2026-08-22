@@ -18,6 +18,7 @@ import json
 import os
 import sys
 import time
+import subprocess
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, List, Optional
 
@@ -25,6 +26,49 @@ SKILL_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SKILL_DIR)
 
 DEFAULT_PORT = 7711
+
+ACTIONS = {
+    "go":    lambda arg: ["python3", os.path.join(SKILL_DIR, "go.py")] + ([arg] if arg else []),
+    "fix":   lambda arg: ["python3", os.path.join(SKILL_DIR, "go.py"), "--repair-only"] + ([arg] if arg else []),
+    "grade": lambda arg: ["python3", os.path.join(SKILL_DIR, "nidra_bridge.py"), "--sleep"],
+}
+
+
+def _default_runner(action: str, arg: str) -> Dict[str, Any]:
+    """Run the same code the CLI runs and RETURN ITS REAL OUTPUT — a click
+    that hides what it did is the opposite of intuitive. go/fix finish in a
+    couple seconds (they open Terminal agents and report); grade is slow, so
+    it detaches and says so. Never push/deploy: those gates stay with the
+    owner in the terminal."""
+    cmd = ACTIONS[action](arg)
+    if action == "grade":
+        subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True)
+        return {"started": True,
+                "output": "grading in background — numbers refresh as it lands"}
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=25)
+        out = (r.stdout or r.stderr or "").strip() or "(no output)"
+    except subprocess.TimeoutExpired:
+        out = "still running after 25s — check `meditate fleet`"
+    return {"started": True, "output": out[:600]}
+
+
+ACT_RUNNER = _default_runner   # tests monkeypatch this
+
+
+def _log_brain_action(action: str, arg: str) -> None:
+    """Every click leaves a durable record — the page's ACTIVITY section and
+    the efficacy report both read this."""
+    try:
+        ev = os.path.expanduser("~/.claude/coordination/events.jsonl")
+        with open(ev, "a") as f:
+            f.write(json.dumps({"type": "brain_action", "path": action +
+                                ((" " + arg) if arg else ""), "sid": "brain",
+                                "ts": time.strftime("%Y-%m-%dT%H:%M:%S+00:00",
+                                                    time.gmtime())}) + "\n")
+    except OSError:
+        pass
 
 
 def state() -> Dict[str, Any]:
@@ -65,28 +109,81 @@ def state() -> Dict[str, Any]:
         "stilling": rep["stilling"],
         "sangama": rep["sangama"],
         "digest": done_digest(),
+        "activity": _recent_events(),
     }
 
 
+def _recent_events(n: int = 10) -> List[Dict[str, str]]:
+    ev = os.path.expanduser("~/.claude/coordination/events.jsonl")
+    rows: List[Dict[str, str]] = []
+    if os.path.exists(ev):
+        try:
+            with open(ev, errors="replace") as f:
+                for line in f:
+                    try:
+                        r = json.loads(line)
+                        rows.append({"type": r.get("type", "?"),
+                                     "what": os.path.basename(str(r.get("path", ""))),
+                                     "ts": str(r.get("ts", ""))[11:19]})
+                    except Exception:
+                        continue
+        except OSError:
+            pass
+    return rows[-n:][::-1]
+
+
 PAGE = """<!doctype html><meta charset="utf-8">
-<title>meditate — the brain, live</title>
+<title>Sārathi — the charioteer</title>
 <body style="background:#0b0a08;color:#d8d2c4;font:14px/1.5 -apple-system,Helvetica,sans-serif;margin:0;padding:40px 52px;max-width:1000px">
-<div style="letter-spacing:.35em;font-size:11px;color:#6b6557">MEDITATE · LIVE</div>
-<div style="font-size:22px;margin:6px 0 2px;color:#E3B140">the brain, breathing</div>
+<div style="letter-spacing:.35em;font-size:11px;color:#6b6557">MEDITATE · SĀRATHI</div>
+<div style="font-size:22px;margin:6px 0 2px;color:#E3B140">Sārathi — the charioteer <span style="font-size:13px;color:#8a8578">· the one who conducts; your sessions are the horses, this is the reins</span></div>
 <div id="meta" style="font-size:12px;color:#8a8578"></div>
 <div id="next" style="margin:14px 0;color:#E3B140"></div>
+<div style="display:flex;gap:8px;flex-wrap:wrap">
+  <button onclick="act('go','')" class="b">launch fleet</button>
+  <button onclick="act('fix','')" class="b">repair all</button>
+  <button onclick="act('grade','')" class="b">grade now</button>
+  <span id="toast" style="color:#8a8578;font-size:12px;align-self:center"></span>
+</div>
+<pre id="out" style="display:none;background:#12100c;border:1px solid #2a2620;border-radius:8px;padding:10px 14px;font-size:12px;color:#d8d2c4;white-space:pre-wrap;margin:10px 0 0"></pre>
+<style>.b{cursor:pointer;border:1px solid #2a2620;background:transparent;color:#E3B140;border-radius:7px;padding:6px 13px;font-size:13px}.b:hover{background:#1d1a14}</style>
 <div id="stats" style="display:flex;flex-wrap:wrap;gap:24px;margin:18px 0"></div>
-<div style="letter-spacing:.3em;font-size:11px;color:#6b6557;margin-top:22px">LIVE SESSIONS</div>
-<div id="live"></div>
+<div style="letter-spacing:.3em;font-size:11px;color:#6b6557;margin-top:26px">PRĀṆA · THE LIVING SESSIONS <span style="letter-spacing:0;color:#4a463c">— each orb beats with its session; fast = working now, ember = stilling</span></div>
+<div id="live" style="display:flex;flex-wrap:wrap;gap:26px;margin-top:14px"></div>
+<style>
+@keyframes prana {
+  0%,100% { transform:scale(1);    box-shadow:0 0 6px 1px rgba(227,177,64,.25); }
+  50%     { transform:scale(1.18); box-shadow:0 0 22px 6px rgba(227,177,64,.55); }
+}
+.orb { width:44px;height:44px;border-radius:50%;
+       background:radial-gradient(circle at 35% 35%, #f5d68a, #E3B140 55%, #6b4e12);
+       animation:prana 2s ease-in-out infinite; margin:0 auto 8px; }
+</style>
 <div style="letter-spacing:.3em;font-size:11px;color:#6b6557;margin-top:22px">GOALS</div>
 <div id="goals"></div>
 <div style="letter-spacing:.3em;font-size:11px;color:#6b6557;margin-top:22px">FLEET</div>
 <div id="fleet" style="font-size:13px"></div>
 <div style="letter-spacing:.3em;font-size:11px;color:#6b6557;margin-top:22px">REPAIR QUEUE</div>
 <div id="repair" style="font-size:13px"></div>
+<div style="letter-spacing:.3em;font-size:11px;color:#6b6557;margin-top:22px">ACTIVITY</div>
+<div id="activity" style="font-size:12px;color:#8a8578"></div>
 <div id="digest" style="margin-top:24px;font-size:12px;color:#8a8578"></div>
+<div style="margin-top:6px;font-size:11px;color:#6b6557">agents run in Terminal windows on this Mac; they appear in LIVE SESSIONS as they work, and milestones tick only when their work verifies</div>
 <script>
 const G="#E3B140", DIM="#8a8578";
+async function act(action, arg){
+  const t=document.getElementById("toast"), o=document.getElementById("out");
+  t.textContent = "running " + action + " " + (arg||"") + "…";
+  try{
+    const r=await fetch("/api/act",{method:"POST",
+      headers:{"Content-Type":"application/json","X-Meditate":"1"},
+      body:JSON.stringify({action,arg})});
+    const j=await r.json();
+    t.textContent = j.started ? "done: "+action+" "+(arg||"") : "refused";
+    o.style.display="block"; o.textContent = j.output || "(no output)";
+  }catch(e){ t.textContent="failed: "+e }
+  setTimeout(tick, 1200);
+}
 function esc(s){const d=document.createElement("i");d.textContent=s||"";return d.innerHTML}
 function bar(p){return `<span style="display:inline-block;width:180px;height:8px;background:#1d1a14;border-radius:4px;vertical-align:middle"><span style="display:block;width:${Math.min(100,p)}%;height:8px;background:${G};border-radius:4px"></span></span>`}
 async function tick(){
@@ -103,19 +200,26 @@ async function tick(){
     stat(s.sangama.facts_served,"facts served")+
     stat(s.stilling.sessions_archived,"sessions archived")+
     stat((s.heartbeat_h==null?"—":s.heartbeat_h+" h"),"since heartbeat");
-  document.getElementById("live").innerHTML = s.live_sessions.map(x=>
-    `<div style="display:flex;gap:12px;font-size:13px;margin:3px 0">
-      <span style="color:${G};width:110px">${esc(x.sid)}</span>
-      <span style="color:${DIM};width:70px">${x.age_s}s ago</span>
-      <span style="width:170px">${esc(x.last_file)}</span>
-      <span style="color:${DIM}">${esc(x.cwd.replace("/Users/badenath",""))}</span></div>`
-  ).join("") || `<div style="color:${DIM};font-size:13px">no live sessions</div>`;
+  document.getElementById("live").innerHTML = s.live_sessions.map(x=>{
+    // the beat IS the recency: <60s -> ~1.1s fast pulse; slows with age;
+    // >30 min -> a still ember (no animation, dim)
+    const beat = Math.min(6, Math.max(1.1, x.age_s/45));
+    const ember = x.age_s > 1800;
+    const glow = ember ? "animation:none;opacity:.35;filter:saturate(.5)"
+                       : `animation-duration:${beat.toFixed(1)}s`;
+    return `<div style="width:130px;text-align:center">
+      <div class="orb" style="${glow}" title="${esc(x.cwd)}"></div>
+      <div style="font-size:12px;color:${G}">${esc(x.sid.slice(0,8))}</div>
+      <div style="font-size:11px;color:${DIM};overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(x.last_file)}</div>
+      <div style="font-size:10px;color:#4a463c">${x.age_s<60?x.age_s+"s":Math.round(x.age_s/60)+"m"} ago</div>
+    </div>`}).join("") || `<div style="color:${DIM};font-size:13px">no living sessions — the field is still</div>`;
   document.getElementById("goals").innerHTML = s.goals.map(g=>
     `<div style="margin:8px 0"><div style="display:flex;gap:12px;align-items:center">
       <span style="width:250px">${esc(g.title.slice(0,42))}</span>${bar(g.pct)}
       <span style="color:${G}">${Math.round(g.pct)}%</span>
       <span style="color:${DIM}">${g.done}/${g.total}</span>
-      ${g.scope_delta>0?`<span style="color:${G}">scope +${g.scope_delta}</span>`:""}</div>
+      ${g.scope_delta>0?`<span style="color:${G}">scope +${g.scope_delta}</span>`:""}
+      <button class="b" style="padding:2px 9px;font-size:11px" onclick="act('go','${g.name}')">dispatch</button></div>
       <div style="margin-left:262px;font-size:12px;color:${DIM}">next: ${esc(g.next||"—")}</div></div>`
   ).join("");
   document.getElementById("fleet").innerHTML = s.fleet.map(f=>
@@ -125,8 +229,12 @@ async function tick(){
   ).join("") || `<div style="color:${DIM}">nothing dispatched — <code style="color:${G}">meditate go</code></div>`;
   document.getElementById("repair").innerHTML = s.repair.map((m,i)=>
     `<div style="margin:4px 0"><span style="color:${G}">${i+1}.</span> ${esc(m.statement)}
+     <button class="b" style="padding:1px 8px;font-size:11px" onclick="act('fix',String(${i+1}))">fix this</button>
      ${m.fails.map(f=>`<div style="margin-left:18px;color:${DIM};font-size:12px">FAILS ${esc(f)}</div>`).join("")}</div>`
   ).join("") || `<div style="color:${DIM}">clean — nothing failed verification</div>`;
+  document.getElementById("activity").innerHTML = (s.activity||[]).map(a=>
+    `<div>${esc(a.ts)} · ${esc(a.type)} · ${esc(a.what)}</div>`).join("") ||
+    "<div>no recorded activity yet</div>";
   document.getElementById("digest").textContent = s.digest || "";
 }
 tick(); setInterval(tick, 4000);
@@ -134,6 +242,41 @@ tick(); setInterval(tick, 4000);
 
 
 class _Handler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        try:
+            # CSRF guard: any web page can POST to localhost, but a custom
+            # header forces a CORS preflight we never answer. No header = 403.
+            if self.path != "/api/act":
+                self.send_error(404)
+                return
+            if self.headers.get("X-Meditate") != "1":
+                self.send_error(403, "missing X-Meditate header")
+                return
+            n = int(self.headers.get("Content-Length") or 0)
+            try:
+                req = json.loads(self.rfile.read(n) or b"{}")
+            except Exception:
+                req = {}
+            action = str(req.get("action") or "")
+            arg = str(req.get("arg") or "")
+            if action not in ACTIONS:
+                self.send_error(400, "unknown action")
+                return
+            res = ACT_RUNNER(action, arg)
+            if not isinstance(res, dict):
+                res = {"started": bool(res), "output": ""}
+            _log_brain_action(action, arg)
+            body = json.dumps({"started": bool(res.get("started")),
+                               "action": action, "arg": arg,
+                               "output": res.get("output", "")}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except BrokenPipeError:
+            pass
+
     def do_GET(self):
         try:
             if self.path == "/api/state":

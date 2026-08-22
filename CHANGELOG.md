@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.11.0 — 2026-08-22
+
+Sārathi (the charioteer) — the brain becomes a conductor with a soul.
+
+### Added
+- **Control surface**: POST /api/act runs the same code the CLI runs —
+  launch fleet / repair all / fix item N / dispatch one goal / grade — and
+  RETURNS THE REAL OUTPUT onto the page (a click that hides what it did is
+  the opposite of intuitive). Every click lands in events.jsonl and the
+  page's ACTIVITY trail. CSRF-guarded: actions require the X-Meditate
+  header (browser preflight blocks cross-origin); 403 without it, tested.
+  Push/deploy stay in the terminal with the owner — no button for them.
+- **Prāṇa orbs**: every live session is a breathing gold orb whose beat IS
+  its recency — ~1s pulse when it edited seconds ago, slowing with age, a
+  still dim ember past 30 minutes. Read live: 8 orbs, the Razorpay session
+  beating fastest (messaging.js, 1m).
+- Verbs: `meditate sarathi|brain|serve|watch|soul`. Sanskrit glossed on the
+  page itself: the sessions are the horses, this is the reins.
+- Hosted multi-user brain (behind real auth) added to meditate-market-ready
+  as an explicit milestone — until then loopback-only stays test-pinned.
+
+
 ## 0.10.0 — 2026-08-22
 
 `meditate brain` — the whole organism, live, in the browser.
