@@ -117,11 +117,30 @@ def test_edge_goals_to_session_start():
 
 
 def test_edge_heartbeat_fresh():
-    """the clock must actually be ticking: last beat inside 2 intervals."""
+    """The clock must actually tick — threshold DERIVED from the real
+    interval, not a hardcoded 12.5h. A malformed plist once left the
+    heartbeat dead 13.7h with nothing reporting it; this is that alarm."""
     log = os.path.join(MED, "heartbeat.log")
     assert os.path.exists(log), "heartbeat has never fired"
+    import cadence as cd
+    interval_h = (cd.current_interval_s() or 6 * 3600) / 3600
     age_h = (time.time() - os.path.getmtime(log)) / 3600
-    assert age_h < 12.5, f"last heartbeat {age_h:.1f}h ago (interval 6h)"
+    limit = interval_h * 2 + 0.5
+    assert age_h < limit, \
+        f"last heartbeat {age_h:.1f}h ago; interval is {interval_h:.0f}h (limit {limit:.1f}h)"
+
+
+def test_edge_plist_is_valid_xml():
+    """The plist must PARSE. A hand-written heredoc embedded raw >> and 2>&1
+    inside <string>; launchd tolerated it, every parser choked, and the
+    heartbeat silently stopped running for 13.7h."""
+    import plistlib
+    p = os.path.expanduser("~/Library/LaunchAgents/com.meditate.grade.plist")
+    if not os.path.exists(p):
+        return
+    with open(p, "rb") as f:
+        d = plistlib.load(f)          # raises if malformed — that IS the test
+    assert d.get("StartInterval", 0) > 0, d
 
 
 def test_edge_heartbeat_runs_all_silent_stages():
