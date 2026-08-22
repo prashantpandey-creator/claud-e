@@ -99,6 +99,36 @@ def test_act_requires_header_and_runs_known_actions():
         br.ACT_RUNNER = old
 
 
+def test_names_and_guarded_stop():
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        old = br.NAMES_PATH
+        br.NAMES_PATH = os.path.join(td, "names.json")
+        try:
+            br.set_name("abcd1234-ffff", "marketplace payments fix")
+            assert br._names()["abcd1234-fff"] == "marketplace payments fix"
+        finally:
+            br.NAMES_PATH = old
+    # stop refuses a pid that is not a claude process
+    old_check = br._pid_is_claude
+    br._pid_is_claude = lambda pid: False
+    try:
+        import coordination as co
+        with tempfile.TemporaryDirectory() as td2:
+            cd = os.path.join(td2, "sessions"); os.makedirs(cd)
+            with open(os.path.join(cd, "sess-x.json"), "w") as f:
+                json.dump({"sid": "sess-x", "cwd": "/r", "files": {}, "pid": 99999}, f)
+            oc = co.COORD_DIR
+            co.COORD_DIR = cd
+            try:
+                r = br.stop_session("sess-x", kill=lambda *a: (_ for _ in ()).throw(AssertionError("must not kill")))
+                assert r["started"] is False and "refused" in r["output"], r
+            finally:
+                co.COORD_DIR = oc
+    finally:
+        br._pid_is_claude = old_check
+
+
 def test_state_is_json_serializable():
     json.dumps(br.state())
 

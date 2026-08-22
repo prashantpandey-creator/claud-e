@@ -56,6 +56,58 @@ def _default_runner(action: str, arg: str) -> Dict[str, Any]:
 
 ACT_RUNNER = _default_runner   # tests monkeypatch this
 
+NAMES_PATH = os.path.expanduser("~/.claude/coordination/session-names.json")
+
+
+def _names() -> Dict[str, str]:
+    try:
+        with open(NAMES_PATH) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def set_name(sid: str, name: str) -> None:
+    names = _names()
+    names[sid[:12]] = name[:60]
+    os.makedirs(os.path.dirname(NAMES_PATH), exist_ok=True)
+    with open(NAMES_PATH + ".tmp", "w") as f:
+        json.dump(names, f)
+    os.replace(NAMES_PATH + ".tmp", NAMES_PATH)
+
+
+def _pid_is_claude(pid: int) -> bool:
+    """Refuse to signal anything that is not verifiably a claude process."""
+    try:
+        out = subprocess.run(["ps", "-p", str(pid), "-o", "command="],
+                             capture_output=True, text=True, timeout=5).stdout
+        return "claude" in out.lower()
+    except Exception:
+        return False
+
+
+def stop_session(sid: str, kill=os.kill) -> Dict[str, Any]:
+    """SIGTERM the session's claude process — the button equivalent of
+    closing its window. Guarded: pid must come from presence AND still be a
+    claude process, or we refuse."""
+    import coordination as co
+    # resolve the dir at CALL time — default-arg binding ate a test once already
+    for s in co.live_sessions(co.COORD_DIR):
+        if s.get("sid", "").startswith(sid[:8]):
+            pid = int(s.get("pid") or 0)
+            if pid <= 1:
+                return {"started": False, "output": "no pid recorded for that session yet (it appears after its next file edit)"}
+            if not _pid_is_claude(pid):
+                return {"started": False, "output": "refused: pid %d is not a claude process" % pid}
+            try:
+                kill(pid, 15)
+                return {"started": True, "output": "sent stop (SIGTERM) to session %s (pid %d)" % (sid[:8], pid)}
+            except ProcessLookupError:
+                return {"started": False, "output": "already gone"}
+            except PermissionError:
+                return {"started": False, "output": "permission denied"}
+    return {"started": False, "output": "session not found among the living"}
+
 
 def _log_brain_action(action: str, arg: str) -> None:
     """Every click leaves a durable record — the page's ACTIVITY section and
@@ -94,6 +146,9 @@ def state() -> Dict[str, Any]:
                   for g in st["goals"]],
         "live_sessions": [{"sid": s.get("sid", "")[:12], "cwd": s.get("cwd", ""),
                            "age_s": s.get("_age_s"),
+                           "pid": s.get("pid"),
+                           "label": _names().get(s.get("sid", "")[:12]) or
+                                    ((os.path.basename(s.get("cwd", "").rstrip("/")) or "~")),
                            "last_file": os.path.basename(
                                sorted(s.get("files", {"": 0}),
                                       key=s.get("files", {"": 0}).get)[-1])}
@@ -171,18 +226,26 @@ PAGE = """<!doctype html><meta charset="utf-8">
 <div style="margin-top:6px;font-size:11px;color:#6b6557">agents run in Terminal windows on this Mac; they appear in LIVE SESSIONS as they work, and milestones tick only when their work verifies</div>
 <script>
 const G="#E3B140", DIM="#8a8578";
-async function act(action, arg){
+async function act(action, arg, value){
   const t=document.getElementById("toast"), o=document.getElementById("out");
   t.textContent = "running " + action + " " + (arg||"") + "…";
   try{
     const r=await fetch("/api/act",{method:"POST",
       headers:{"Content-Type":"application/json","X-Meditate":"1"},
-      body:JSON.stringify({action,arg})});
+      body:JSON.stringify({action,arg,value})});
     const j=await r.json();
     t.textContent = j.started ? "done: "+action+" "+(arg||"") : "refused";
     o.style.display="block"; o.textContent = j.output || "(no output)";
   }catch(e){ t.textContent="failed: "+e }
   setTimeout(tick, 1200);
+}
+function rename(sid, cur){
+  const v = prompt("Name this session (what is it working on?)", cur||"");
+  if(v!==null) act("name", sid, v);
+}
+function stopSess(sid, label){
+  if(confirm(`Stop session "${label}"? Same as closing its window — unsaved chat context ends.`))
+    act("stop", sid);
 }
 function esc(s){const d=document.createElement("i");d.textContent=s||"";return d.innerHTML}
 function bar(p){return `<span style="display:inline-block;width:180px;height:8px;background:#1d1a14;border-radius:4px;vertical-align:middle"><span style="display:block;width:${Math.min(100,p)}%;height:8px;background:${G};border-radius:4px"></span></span>`}
@@ -207,11 +270,13 @@ async function tick(){
     const ember = x.age_s > 1800;
     const glow = ember ? "animation:none;opacity:.35;filter:saturate(.5)"
                        : `animation-duration:${beat.toFixed(1)}s`;
-    return `<div style="width:130px;text-align:center">
-      <div class="orb" style="${glow}" title="${esc(x.cwd)}"></div>
-      <div style="font-size:12px;color:${G}">${esc(x.sid.slice(0,8))}</div>
+    return `<div style="width:140px;text-align:center">
+      <div class="orb" style="${glow}" title="session ${esc(x.sid)} · ${esc(x.cwd)}"></div>
+      <div style="font-size:12.5px;color:${G};overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(x.label)}</div>
       <div style="font-size:11px;color:${DIM};overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(x.last_file)}</div>
-      <div style="font-size:10px;color:#4a463c">${x.age_s<60?x.age_s+"s":Math.round(x.age_s/60)+"m"} ago</div>
+      <div style="font-size:10px;color:#4a463c">${x.age_s<60?x.age_s+"s":Math.round(x.age_s/60)+"m"} ago
+        · <a href="#" style="color:${DIM}" onclick="rename('${esc(x.sid)}','${esc(x.label)}');return false">name</a>
+        · <a href="#" style="color:${DIM}" onclick="stopSess('${esc(x.sid)}','${esc(x.label)}');return false">stop</a></div>
     </div>`}).join("") || `<div style="color:${DIM};font-size:13px">no living sessions — the field is still</div>`;
   document.getElementById("goals").innerHTML = s.goals.map(g=>
     `<div style="margin:8px 0"><div style="display:flex;gap:12px;align-items:center">
@@ -259,10 +324,16 @@ class _Handler(BaseHTTPRequestHandler):
                 req = {}
             action = str(req.get("action") or "")
             arg = str(req.get("arg") or "")
-            if action not in ACTIONS:
+            if action == "name":
+                set_name(arg, str(req.get("value") or ""))
+                res = {"started": True, "output": "named"}
+            elif action == "stop":
+                res = stop_session(arg)
+            elif action in ACTIONS:
+                res = ACT_RUNNER(action, arg)
+            else:
                 self.send_error(400, "unknown action")
                 return
-            res = ACT_RUNNER(action, arg)
             if not isinstance(res, dict):
                 res = {"started": bool(res), "output": ""}
             _log_brain_action(action, arg)

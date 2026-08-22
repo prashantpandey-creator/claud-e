@@ -181,6 +181,14 @@ def hook_edit(payload: Dict[str, Any],
 
     me = load_presence(sid, coord_dir)
     me.update({"sid": sid, "cwd": cwd})
+    try:
+        # the hook exports its own $PPID = the claude process of THIS session;
+        # Pulse uses it for the guarded stop button
+        pid = int(os.environ.get("MEDITATE_CLAUDE_PID") or 0)
+        if pid > 1:
+            me["pid"] = pid
+    except ValueError:
+        pass
     me.setdefault("files", {})[path] = now
     if len(me["files"]) > FILE_CAP:                       # bound the record
         for k in sorted(me["files"], key=me["files"].get)[:len(me["files"]) - FILE_CAP]:
