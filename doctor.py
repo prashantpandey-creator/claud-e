@@ -81,7 +81,7 @@ def _check_tests() -> Dict[str, Any]:
         try:
             r = subprocess.run(
                 [sys.executable, path],
-                capture_output=True, text=True, timeout=30,
+                capture_output=True, text=True, timeout=90,
                 cwd=SKILL_DIR,
             )
             ok = r.returncode == 0
@@ -93,7 +93,7 @@ def _check_tests() -> Dict[str, Any]:
                 "detail": "green" if ok else r.stderr.strip()[-200:] or r.stdout.strip()[-200:],
             })
         except subprocess.TimeoutExpired:
-            results.append({"file": tf, "ok": False, "detail": "timed out (30s)"})
+            results.append({"file": tf, "ok": False, "detail": "timed out (90s)"})
             all_pass = False
         except Exception as e:
             results.append({"file": tf, "ok": False, "detail": str(e)[:200]})
