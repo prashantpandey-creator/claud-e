@@ -219,9 +219,15 @@ PLIST="$HOME/Library/LaunchAgents/com.meditate.grade.plist"
 python3 - "$SKILL_DIR" "$PLIST" "$HOME/.claude/meditation/heartbeat.log" <<'PYPLIST'
 import plistlib, sys
 skill, plist, log = sys.argv[1], sys.argv[2], sys.argv[3]
-cmd = "; ".join('python3 "%s/%s" %s' % (skill, s, a) for s, a in
-                [("nidra_bridge.py", "--sleep"), ("archive.py", "--apply"),
-                 ("dashboard.py", ""), ("voice.py", "--notify --quiet")]) + ' >> "%s" 2>&1' % log
+# The redirect MUST wrap the whole chain in braces. `a; b; c; d >> log` binds
+# it to `d` alone — and `d` is `voice.py --notify --quiet`, which normally
+# prints nothing, so heartbeat.log stopped being written while the heartbeat
+# itself kept running fine. That silently turned test_edge_heartbeat_fresh —
+# the alarm for a dead heartbeat — into a permanent false alarm.
+cmd = "{ " + "; ".join('python3 "%s/%s" %s' % (skill, s, a) for s, a in
+                       [("nidra_bridge.py", "--sleep"), ("archive.py", "--apply"),
+                        ("dashboard.py", ""), ("voice.py", "--notify --quiet")]
+                       ) + '; } >> "%s" 2>&1' % log
 plistlib.dump({"Label": "com.meditate.grade",
                "ProgramArguments": ["/bin/bash", "-lc", cmd],
                "StartInterval": 21600, "RunAtLoad": False},

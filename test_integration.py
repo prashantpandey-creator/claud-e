@@ -58,6 +58,31 @@ def test_edge_formed_memories_graded_and_askable():
     assert hits, "ask cannot retrieve from the live store"
 
 
+def test_edge_heartbeat_captures_every_stage():
+    """The log must capture ALL four stages, not just the last one.
+
+    `a; b; c; d >> log` binds the redirect to `d` alone. The last stage is
+    `voice.py --notify --quiet`, which normally prints nothing, so the log
+    stopped being written at all — and test_edge_heartbeat_fresh, the alarm
+    for a silently dead heartbeat, began firing on a heartbeat that was
+    running fine (verified: hourly journal beats at 00:30/01:30/02:30 local
+    while the log sat 6.2h stale). An alarm that cries wolf is worse than none.
+    """
+    import plistlib
+    plist = os.path.expanduser("~/Library/LaunchAgents/com.meditate.grade.plist")
+    if not os.path.exists(plist):
+        return
+    with open(plist, "rb") as f:
+        cmd = plistlib.load(f)["ProgramArguments"][-1]
+    head = cmd.split(">>")[0]
+    assert "{" in head and "}" in cmd.split(">>")[0] + "}", \
+        "redirect is not wrapped around the whole chain: %s" % cmd
+    # every stage must sit INSIDE the braces
+    inner = cmd[cmd.find("{") + 1:cmd.rfind("}")]
+    for stage in ("nidra_bridge.py", "archive.py", "dashboard.py", "voice.py"):
+        assert stage in inner, "%s is outside the redirected block" % stage
+
+
 def test_edge_queue_consistency():
     """repair queue exists IFF drift report has failing/flagged items."""
     from coordination import drift_report
