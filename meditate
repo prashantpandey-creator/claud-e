@@ -72,29 +72,31 @@ case "${1:-}" in
     python3 "$DIR/coordination.py" who "$@"
     ;;
   help|--help|-h)
-    echo "meditate — evidence-graded AI agent memory"
+    echo "meditate — evidence-graded memory + goal fleet"
     echo ""
-    echo "  meditate           health check"
-    echo "  meditate grade     scan sessions, grade into nidra, consolidate"
-    echo "  meditate metrics   memory health, drift, coverage dashboard"
-    echo "  meditate archive   archive finished sessions (dry-run; --apply to act)"
-    echo "  meditate drive     dispatch goal agents (dry-run; --go N to launch)"
-    echo "  meditate dashboard one-page HTML of the whole organism (--open)"
-    echo "  meditate distill   formation queue: sessions awaiting distillation into memory"
-    echo "  meditate ask       query the graded store (verified facts first)"
-    echo "  meditate goals     long-term goals: percentage, scope drift, agent launch"
-    echo "  meditate report    wins + efficacy: drift caught/repaired, stilling, sangama"
-    echo "  meditate drift     memories whose evidence failed — the exact claims"
-    echo "  meditate who       live sessions in this workspace and their files"
-    echo "  meditate sessions  show sessions ranked by sprawl"
-    echo "  meditate launch    see live threads (--open to open terminals)"
-    echo "  meditate install   run the installer"
-    echo "  meditate doctor    full diagnostic (--json for envelope)"
+    echo "  meditate           where am I + the ONE next action"
+    echo "  meditate go [N]    move everything forward: repair agent if the"
+    echo "                     queue is open + one agent per open goal"
+    echo "                     (N caps it; 0 = dry-run)"
+    echo ""
+    echo "  plumbing (when you need the specific organ):"
+    echo "    grade metrics report dashboard   measure + render"
+    echo "    ask drift distill archive        knowledge in, out, repaired, away"
+    echo "    goals drive who sessions launch  fleet + sessions detail"
+    echo "    doctor install                   health + setup"
     echo ""
     echo "  Inside Claude Code: /meditate"
     ;;
   "")
-    python3 "$DIR/doctor.py"
+    python3 "$DIR/status.py"
+    ;;
+  go)
+    shift
+    python3 "$DIR/go.py" "$@"
+    ;;
+  status)
+    shift
+    python3 "$DIR/status.py" "$@"
     ;;
   *)
     echo "unknown: $1 — try: meditate help" >&2

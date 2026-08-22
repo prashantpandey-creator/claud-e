@@ -44,6 +44,7 @@ TEST_FILES = [
     "test_formation.py",
     "test_integration.py",
     "test_drive.py",
+    "test_status_go.py",
 ]
 
 

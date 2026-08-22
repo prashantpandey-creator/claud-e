@@ -35,7 +35,8 @@ runs the tests, reports. No sudo, no network, no account. Safe to re-run.
 After install, `meditate` is on your PATH:
 
 ```bash
-meditate              # health check
+meditate              # where am I + the ONE next action
+meditate go           # move everything forward (repair + one agent per goal)
 meditate grade        # scan + grade + consolidate
 meditate metrics      # drift rate, coverage, health dashboard
 meditate archive      # archive finished/empty sessions (dry-run; --apply)

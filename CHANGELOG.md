@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.9.0 — 2026-08-22
+
+Two verbs. The owner was right to be unsatisfied: 15 subcommands is a menu,
+and menus are the disease this whole system exists to cure.
+
+### Changed
+- **`meditate`** (bare) is now STATUS: one screen — store health, goals,
+  queues, fleet, heartbeat — ending in exactly ONE decided `next:` line.
+  Priority: repair queue > dispatchable goals > overdue stilling > rest.
+  (It used to run doctor — a diagnostic is not a place to live.)
+- **`meditate go [N]`** — move everything forward: a repair agent if the
+  queue is open, plus one agent per dispatchable goal. The fleet size is not
+  a setting — the world sets it (the owner asked "why is 3 fixed?" — it
+  isn't, anymore; a number only caps, never pads. 0 = dry-run).
+- Everything else is plumbing, still present, grouped under `meditate help`.
+
+### Added
+- status.py + go.py + 7 tests (single next line, repair-beats-goals
+  priority, world-sized fleet, cap honored, dry-run launches nothing).
+
+
 ## 0.8.0 — 2026-08-22
 
 Drive + dashboard — the fleet layer and the face.
