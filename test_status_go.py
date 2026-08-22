@@ -115,6 +115,64 @@ def test_go_zero_is_dry():
         assert launched == [] and rep["would"], rep
 
 
+def test_fix_list_and_scoped_selection():
+    """Per-item repair: --list numbers actionable items; fix <n> scopes the
+    kickoff to that ONE memory."""
+    import go as g2
+    with tempfile.TemporaryDirectory() as t:
+        med, store, gdir = _world(t)
+        mems = [
+            {"id": "mem_aaa", "active": True, "flags": ["drifted"],
+             "statement": "first drifted claim about alpha",
+             "epistemic": {"evidence_status": "unverified"},
+             "evidence": [{"source": "/x"}]},
+            {"id": "mem_bbb", "active": True, "flags": ["drifted"],
+             "statement": "second drifted claim about beta",
+             "epistemic": {"evidence_status": "unverified"},
+             "evidence": [{"source": "/y"}]},
+        ]
+        with open(os.path.join(store, "memories.jsonl"), "w") as f:
+            for m in mems:
+                f.write(json.dumps(m) + "\n")
+        items = g2.repair_items(store_dir=store)
+        assert [m["id"] for m in items] == ["mem_aaa", "mem_bbb"]
+        k = g2._repair_kickoff(med, store_dir=store, select="2")
+        assert "mem_bbb" in k["prompt"] and "mem_aaa" not in k["prompt"], k["prompt"][:200]
+        k1 = g2._repair_kickoff(med, store_dir=store, select="mem_aaa")
+        assert "mem_aaa" in k1["prompt"] and "mem_bbb" not in k1["prompt"]
+
+
+def test_go_single_goal_by_name():
+    import go as g2
+    with tempfile.TemporaryDirectory() as t:
+        med, store, gdir = _world(t, with_repair=True)   # repair open but skipped
+        launched = []
+        rep = g2.run(only_goal="g-a", meditation_dir=med, store_dir=store,
+                     goals_dir=gdir, history_path=os.path.join(t, "h.jsonl"),
+                     ledger_path=os.path.join(t, "d.jsonl"),
+                     launcher=lambda cwd, prompt, name: launched.append(name) or True)
+        assert rep["repair_launched"] is False, "named-goal dispatch must not launch repair"
+        assert rep["goals_launched"] == 1 and launched == ["goal-g-a"], (rep, launched)
+
+
+def test_fleet_status_joins_ledger_and_goals():
+    import drive as dv2
+    with tempfile.TemporaryDirectory() as t:
+        gdir = os.path.join(t, "goals"); os.makedirs(gdir)
+        with open(os.path.join(gdir, "g.md"), "w") as f:
+            f.write(GOAL)
+        ledger = os.path.join(t, "d.jsonl")
+        with open(ledger, "w") as f:
+            f.write(json.dumps({"goal": "g-a", "milestone": "first open thing",
+                                "ts_epoch": __import__("time").time() - 600}) + "\n")
+        fl = dv2.fleet_status(goals_dir=gdir, ledger_path=ledger,
+                              history_path=os.path.join(t, "h.jsonl"))
+        assert len(fl["dispatched"]) == 1
+        r = fl["dispatched"][0]
+        assert r["goal"] == "g-a" and r["dispatched_min"] >= 9
+        assert r["milestone_ticked"] is False, "milestone still open must show open"
+
+
 def test_cli_status_envelope():
     r = subprocess.run([sys.executable, os.path.join(SKILL, "status.py"), "--json"],
                        capture_output=True, text=True, timeout=60)

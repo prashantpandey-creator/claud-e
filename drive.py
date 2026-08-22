@@ -119,7 +119,81 @@ def run(go: int = 0, goals_dir: Optional[str] = None,
             "cooling": cooling, "launched": launched, "sent": sent}
 
 
+def fleet_status(goals_dir=None, ledger_path=None, history_path=None):
+    """Live progress of dispatched agents, best-effort but honest about it.
+
+    Joins three durable sources: the dispatch ledger (what was sent, when),
+    sangama presence (which sessions are LIVE and what files they touch),
+    and the goal files (has the dispatched milestone been ticked?). Linking
+    dispatch->session is by cwd match — labeled presumed, never certain.
+    """
+    import goals as gl
+    from coordination import live_sessions
+    lp = ledger_path or LEDGER_PATH
+    kw = {}
+    if goals_dir:
+        kw["goals_dir"] = goals_dir
+    if history_path:
+        kw["history_path"] = history_path
+    gmap = {g["name"]: g for g in gl.scan(**kw)}
+    live = live_sessions()
+    rows = []
+    seen_sids = set()
+    if os.path.exists(lp):
+        last = {}
+        for line in open(lp, errors="replace"):
+            try:
+                r = json.loads(line)
+                last[r["goal"]] = r
+            except Exception:
+                continue
+        now = time.time()
+        for goal, r in sorted(last.items(), key=lambda kv: -kv[1].get("ts_epoch", 0)):
+            g = gmap.get(goal)
+            mins = int((now - r.get("ts_epoch", now)) / 60)
+            ticked = bool(g) and g.get("next") != r.get("milestone")
+            agent = None
+            for s in live:
+                gc = (g or {}).get("cwd", "")
+                if gc and (s.get("cwd") == gc or s.get("cwd", "").startswith(gc.rstrip("/") + "/")):
+                    agent = s
+                    seen_sids.add(s.get("sid"))
+                    break
+            rows.append({"goal": goal, "milestone": r.get("milestone", "")[:70],
+                         "dispatched_min": mins, "milestone_ticked": ticked,
+                         "live_session": (agent or {}).get("sid", "")[:12] or None,
+                         "last_file": os.path.basename(
+                             sorted((agent or {}).get("files", {"": 0}),
+                                    key=(agent or {}).get("files", {"": 0}).get)[-1]) if agent else None})
+    others = [{"sid": s.get("sid", "")[:12], "cwd": s.get("cwd", ""),
+               "age_s": s.get("_age_s"),
+               "last_file": os.path.basename(sorted(s.get("files", {"": 0}),
+                                             key=s.get("files", {"": 0}).get)[-1])}
+              for s in live if s.get("sid") not in seen_sids]
+    return {"dispatched": rows, "other_live_sessions": others}
+
+
 def main(argv: Optional[List[str]] = None) -> int:
+    if argv and argv[0] == "fleet":
+        f = fleet_status()
+        if "--json" in argv:
+            print(json.dumps({"tool_name": "meditate_fleet", "success": True,
+                              "data": f, "metadata": {}, "errors": []}, indent=2))
+            return 0
+        if not f["dispatched"]:
+            print("No goal agents dispatched (ledger empty).")
+        for r in f["dispatched"]:
+            state = "milestone TICKED ✓" if r["milestone_ticked"] else "open"
+            who = ("agent %s on %s (presumed by cwd)" % (r["live_session"], r["last_file"])
+                   if r["live_session"] else "no live session seen")
+            print("  %-26s sent %dm ago  %s — %s" % (r["goal"][:26], r["dispatched_min"], state, who))
+            print("      milestone: %s" % r["milestone"])
+        if f["other_live_sessions"]:
+            print("Live sessions not tied to a dispatch:")
+            for s in f["other_live_sessions"]:
+                print("  %s  %s  (%ss ago)  %s" % (s["sid"], s["cwd"], s["age_s"], s["last_file"]))
+        return 0
+
     ap = argparse.ArgumentParser(description="Dispatch goal agents")
     ap.add_argument("--go", type=int, default=0, metavar="N",
                     help="launch up to N agents (default: dry-run)")
@@ -150,4 +224,4 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(sys.argv[1:]))

@@ -29,23 +29,46 @@ STORE_DIR = os.environ.get("MEDITATE_STORE_DIR") or os.path.expanduser(
     "~/.claude/meditation/nidra_store")
 
 
-def _repair_kickoff(meditation_dir: str) -> Optional[Dict[str, str]]:
-    qp = os.path.join(meditation_dir, "repair-queue.md")
-    if not os.path.exists(qp):
-        return None
+def repair_items(store_dir: str = STORE_DIR):
+    """Selectable repair items: only ACTIONABLE drift (has failing evidence or
+    the drifted flag) — evidence-free session stubs are noise, not work."""
+    from coordination import drift_report
+    rep = drift_report(store_dir)
+    return [m for m in rep["memories"]
+            if m.get("failing") or "drifted" in (m.get("flags") or [])]
+
+
+def _repair_kickoff(meditation_dir: str, store_dir: str = STORE_DIR,
+                    select: Optional[str] = None) -> Optional[Dict[str, str]]:
+    items = repair_items(store_dir)
+    if select is not None:
+        picked = [m for i, m in enumerate(items, 1)
+                  if str(i) == select or m.get("id", "").startswith(select)]
+        if not picked:
+            return None
+        items = picked
+    if not items:
+        qp = os.path.join(meditation_dir, "repair-queue.md")
+        if not os.path.exists(qp):
+            return None
+    detail = "\n".join(
+        "- %s: %s%s" % (m["id"], m["statement"][:140],
+                        "".join("\n    FAILS " + f["claim"] for f in m.get("failing", [])))
+        for m in items) or "(see the queue file)"
     prompt = (
-        "The knowledge repair queue is open: %s\n"
-        "Each item is a graded memory whose evidence failed verification. For "
-        "each: read the failing claim, check the world, then either fix the "
-        "source .md memory file (if the memory is right but stale) or "
-        "supersede/correct it (if the world moved on). When done run "
-        "`meditate grade` — a clean re-check clears the queue and counts as a "
-        "REPAIR. Do not push anything; commit local if you touch a repo."
-        % qp)
-    return {"cwd": os.path.expanduser("~"), "prompt": prompt, "name": "repair-queue"}
+        "Repair these graded memories — their evidence failed verification:\n"
+        "%s\n"
+        "For each: read the failing claim, check the world, then either fix the "
+        "source .md memory file (memory right but stale) or supersede/correct it "
+        "(world moved on). When done run `meditate grade` — a clean re-check "
+        "clears the queue and counts as a REPAIR. Do not push; commit local if "
+        "you touch a repo." % detail)
+    name = "repair-" + (items[0]["id"][-6:] if select else "queue")
+    return {"cwd": os.path.expanduser("~"), "prompt": prompt, "name": name}
 
 
 def run(n: Optional[int] = None, repair_only: bool = False,
+        only_goal: Optional[str] = None, repair_select: Optional[str] = None,
         meditation_dir: str = MEDITATION_DIR, store_dir: str = STORE_DIR,
         goals_dir: Optional[str] = None, history_path: Optional[str] = None,
         ledger_path: Optional[str] = None,
@@ -55,7 +78,11 @@ def run(n: Optional[int] = None, repair_only: bool = False,
 
     lp = ledger_path or dv.LEDGER_PATH
     cands = dv.dispatchable(goals_dir, lp, history_path)
-    repair = _repair_kickoff(meditation_dir)
+    if only_goal:
+        cands = [c for c in cands if c["name"] == only_goal]
+        repair = None
+    else:
+        repair = _repair_kickoff(meditation_dir, store_dir, select=repair_select)
 
     would: List[str] = []
     if repair:
@@ -116,19 +143,49 @@ def run(n: Optional[int] = None, repair_only: bool = False,
 
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="Move everything forward")
-    ap.add_argument("n", nargs="?", type=int, default=None,
-                    help="optional cap on launches (0 = dry-run)")
+    ap.add_argument("sel", nargs="?", default=None,
+                    help="cap (int), goal name, or repair item # / mem_id")
     ap.add_argument("--repair-only", action="store_true",
                     help="only the repair agent (this is `meditate fix`)")
+    ap.add_argument("--list", action="store_true",
+                    help="with --repair-only: numbered repair items")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
-    data = run(n=args.n, repair_only=args.repair_only)
+
+    if args.repair_only and args.list:
+        items = repair_items()
+        if not items:
+            print("Repair queue is clean.")
+            return 0
+        print("Repairable items (meditate fix <n> to launch one):")
+        for i, m in enumerate(items, 1):
+            print("  %d. %s  %s" % (i, m["id"], m["statement"][:110]))
+            for fl in m.get("failing", []):
+                print("       FAILS %s" % fl["claim"])
+        return 0
+
+    n = None
+    only_goal = None
+    repair_select = None
+    if args.sel is not None:
+        try:
+            n = int(args.sel)
+        except ValueError:
+            if args.repair_only:
+                repair_select = args.sel
+            else:
+                only_goal = args.sel
+    if args.repair_only and n is not None and n > 0 and str(n) == args.sel:
+        repair_select = args.sel        # `meditate fix 2` = item 2, not a cap
+        n = None
+    data = run(n=n, repair_only=args.repair_only,
+               only_goal=only_goal, repair_select=repair_select)
     env = {"tool_name": "meditate_go", "success": True, "data": data,
-           "metadata": {"dry_run": args.n == 0}, "errors": []}
+           "metadata": {"dry_run": n == 0}, "errors": []}
     if args.json:
         print(json.dumps(env, indent=2))
         return 0
-    if args.n == 0:
+    if n == 0:
         print("Would launch (dry-run):")
         for w in data["would"]:
             print("  " + w)

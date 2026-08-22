@@ -98,6 +98,10 @@ case "${1:-}" in
     shift
     python3 "$DIR/go.py" --repair-only "$@"
     ;;
+  fleet|agents|progress)
+    shift
+    python3 "$DIR/drive.py" fleet "$@"
+    ;;
   status|state|where)
     shift
     python3 "$DIR/status.py" "$@"
@@ -107,7 +111,8 @@ case "${1:-}" in
     echo "  meditate            where am I + the one next action" >&2
     echo "  meditate go         move everything forward" >&2
     echo "  meditate ask \"...\"  question the graded memory" >&2
-    echo "  meditate fix        launch the repair agent" >&2
+    echo "  meditate fix        repair knowledge (--list, or fix <n> for one item)" >&2
+    echo "  meditate fleet      live progress of dispatched agents" >&2
     echo "everything else runs itself on the heartbeat (meditate help for plumbing)" >&2
     exit 1
     ;;
