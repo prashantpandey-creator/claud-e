@@ -128,3 +128,15 @@ if __name__ == "__main__":
         t()
         print(f"✅ {t.__name__}")
     print(f"\n{len(tests)}/{len(tests)} passed")
+
+
+def test_build_launch_interactive_not_piped():
+    """Regression: `cat | claude` ran non-interactive and died — the owner got
+    an empty Terminal. Prompt must be an argument; cwd must be quoted."""
+    from launch import build_launch
+    kf, cmd, script = build_launch("/Users/x/vedic puran", "Fix Apple's rejection\nline2", "goal-mila-live")
+    assert "| claude" not in cmd, cmd
+    assert "claude \"$(cat" in cmd, cmd
+    assert "cd '/Users/x/vedic puran'" in cmd, cmd
+    assert open(kf).read() == "Fix Apple's rejection\nline2"
+    assert 'do script "' in script and "tell application" in script

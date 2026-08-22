@@ -141,22 +141,31 @@ def find_archive_candidates(threads: list) -> list:
     return candidates
 
 
-def launch_claude(cwd: str, kickoff: str, thread_name: str) -> bool:
-    """Launch Claude Code directly with the kickoff prompt."""
-    import shlex
-    safe_kickoff = shlex.quote(kickoff)
+def build_launch(cwd: str, kickoff: str, thread_name: str):
+    """Build (kickoff_file, shell_cmd, applescript) — separated so tests can
+    verify the command without opening windows.
 
-    # Write kickoff to a temp file that Claude reads on startup
-    kickoff_file = f"/tmp/claude-kickoff-{thread_name.replace(' ', '-')[:30]}.txt"
-    with open(kickoff_file, 'w') as f:
+    The old command was `cat file | claude`: PIPED stdin puts claude in
+    non-interactive mode, so the agent ran headless-or-died and the owner got
+    "just the terminal". The prompt must be an ARGUMENT — claude "$(cat f)" —
+    which starts a real interactive session that stays open. cwd is quoted
+    (goal cwds contain spaces: 'vedic puran').
+    """
+    safe_name = "".join(c if c.isalnum() or c in "-_" else "-" for c in thread_name)[:40]
+    kickoff_file = f"/tmp/claude-kickoff-{safe_name}.txt"
+    with open(kickoff_file, "w") as f:
         f.write(kickoff)
+    shell_cmd = (f"cd '{cwd}' && clear && echo '── {safe_name} ──' && "
+                 f"claude \"$(cat '{kickoff_file}')\"")
+    as_escaped = shell_cmd.replace("\\", "\\\\").replace('"', '\\"')
+    script = ('tell application "Terminal"\n  activate\n'
+              f'  do script "{as_escaped}"\nend tell')
+    return kickoff_file, shell_cmd, script
 
-    script = f'''
-    tell application "Terminal"
-        activate
-        do script "cd {cwd} && clear && echo '🧘 xSharma — {thread_name}' && echo '' && echo 'Context:' && cat {kickoff_file} && echo '' && echo '───' && echo '' && cat {kickoff_file} | claude"
-    end tell
-    '''
+
+def launch_claude(cwd: str, kickoff: str, thread_name: str) -> bool:
+    """Open a Terminal running a REAL interactive claude on the kickoff."""
+    _, _, script = build_launch(cwd, kickoff, thread_name)
     try:
         subprocess.run(["osascript", "-e", script], check=True, timeout=10)
         return True
