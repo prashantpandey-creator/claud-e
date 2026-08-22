@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.13.0 — 2026-08-22
+
+Remote view (Rung 2) — see your brain from your phone, safely.
+
+The owner has hosting (SSDNodes) and chose the remote-VIEW rung after
+reviewing the fork: local island stays the foundation, full remote CONTROL
+is refused, and this is the safe middle — data flows ONE WAY only.
+
+- `remote.py`: the machine PUSHES a bounded summary (project shares, goal %,
+  counts, open-task titles) to a receiver that STORES the latest and SERVES
+  it read-only behind a view secret. push() reads only the HTTP status and
+  DISCARDS the body — the server has no path to command the machine. That is
+  the one-way guarantee, in code and pinned by test.
+- Snapshot carries names and numbers ONLY: never a memory statement,
+  transcript line, or evidence excerpt. Proven — a secret planted in a memory
+  never appears in the push. Opt-in: nothing is sent without a configured
+  endpoint.
+- 4 tests (secret-never-leaves, response-never-actioned, receiver
+  read-only + secret-gated, no-command-route). Verified live end to end on
+  loopback: 449-fact summary pushed, viewed, read-only confirmed.
+
+Deploy to the SSDNode is a separate step (box access + secrets = a HANDOFF);
+built and proven locally, not yet live on the server.
+
+Record correction (sangama): `remote.py` and `test_remote.py` were authored
+in THIS session but a concurrent session's `git add -A` swept them into its
+commit 0a0b128 ("0.12.1 — Casper delivers") mid-flight — the exact
+cross-session collision the tool's own presence layer warns about. The code
+is correct and committed; the authorship label is wrong. Not force-pushed to
+relabel: that would stomp the other session's work, which ship discipline
+forbids. This note is the honest record.
+
+
 ## 0.12.0 — 2026-08-22
 
 Casper — the voice/form: composes the ONE thing worth saying and judges
