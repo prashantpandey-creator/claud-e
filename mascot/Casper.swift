@@ -41,7 +41,34 @@ final class Meditate {
         return String(data: data, encoding: .utf8) ?? ""
     }
 
+    /// Ask the server first — that is the thing the owner watches. Falling
+    /// back to a subprocess keeps him alive when the server is down, but then
+    /// Pulse cannot see what he is looking at, so the server comes first.
+    static func briefFromServer() -> Brief? {
+        guard let url = URL(string: "http://127.0.0.1:7711/api/state") else { return nil }
+        var req = URLRequest(url: url)
+        req.setValue("1", forHTTPHeaderField: "X-Meditate")
+        req.timeoutInterval = 6
+        var out: Brief?
+        let sem = DispatchSemaphore(value: 0)
+        URLSession.shared.dataTask(with: req) { data, _, _ in
+            defer { sem.signal() }
+            guard let d = data,
+                  let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+                  let b = j["briefing"] as? [String: Any],
+                  let t = j["timing"] as? [String: Any] else { return }
+            out = Brief(headline: b["headline"] as? String ?? "",
+                        action: b["action"] as? String ?? "",
+                        kind: b["kind"] as? String ?? "clear",
+                        canInterrupt: t["interrupt_ok"] as? Bool ?? false,
+                        facts: 0, verified: 0)
+        }.resume()
+        _ = sem.wait(timeout: .now() + 8)
+        return out
+    }
+
     static func brief() -> Brief? {
+        if let viaServer = briefFromServer() { return viaServer }
         let out = run([skillDir + "/voice.py", "--json"])
         guard let d = out.data(using: .utf8),
               let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
