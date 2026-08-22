@@ -153,6 +153,15 @@ final class GhostView: NSView {
     private var lean: CGFloat = 0
     private var ring: CGFloat = 0
 
+    /// Live microphone loudness, 0..1, set by the Ear. The listening pose is
+    /// driven by this and nothing else — he leans further and his sound arcs
+    /// swell because you actually got louder.
+    var hearLevel: CGFloat = 0
+    /// Amplitude of the audio playing this instant, set by the Mouth.
+    /// Negative means "no real signal", and only then does the fallback
+    /// oscillator run.
+    var mouthDrive: CGFloat = -1
+
     override var isFlipped: Bool { true }
 
     /// Force the next frame to be mid-blink. Only render mode uses this —
@@ -183,19 +192,29 @@ final class GhostView: NSView {
 
         // mouth: a smoothed syllable oscillator, not per-frame noise
         if mood == .speaking {
-            let syl = (sin(t * 11.5) * 0.5 + 0.5) * (sin(t * 4.3) * 0.35 + 0.65)
-            mouthTarget = 0.25 + 0.75 * syl
+            if mouthDrive >= 0 {
+                mouthTarget = 0.12 + 0.88 * mouthDrive     // the real waveform
+            } else {
+                let syl = (sin(t * 11.5) * 0.5 + 0.5) * (sin(t * 4.3) * 0.35 + 0.65)
+                mouthTarget = 0.25 + 0.75 * syl            // only if audio is unavailable
+            }
         } else if mood == .listening {
-            mouthTarget = 0.10
+            mouthTarget = 0.06 + 0.10 * hearLevel
         } else {
             mouthTarget = 0
         }
         mouth += (mouthTarget - mouth) * min(1, dt * 16)
 
-        // lean in when listening; pulse ring while he waits on you
-        let leanTo: CGFloat = (mood == .listening) ? 1 : 0
+        // lean toward you as you speak up; the arcs are your own loudness
+        let leanTo: CGFloat = (mood == .listening) ? (0.45 + 0.55 * hearLevel) : 0
         lean += (leanTo - lean) * min(1, dt * 5)
-        ring = (mood == .listening || mood == .alert) ? (0.62 + 0.38 * sin(t * 2.4)) : 0
+        if mood == .listening {
+            ring = max(0.22, min(1, hearLevel * 1.35))
+        } else if mood == .alert {
+            ring = 0.62 + 0.38 * sin(t * 2.4)
+        } else {
+            ring = 0
+        }
 
         needsDisplay = true
     }
@@ -205,6 +224,15 @@ final class GhostView: NSView {
     private let bodyBot = NSColor(srgbRed: 0.90, green: 0.87, blue: 0.83, alpha: 1)
     private let ink     = NSColor(srgbRed: 0.16, green: 0.16, blue: 0.20, alpha: 1)
     private let amber   = NSColor(srgbRed: 0.91, green: 0.71, blue: 0.25, alpha: 1)
+
+    var onClick: (() -> Void)?
+    private var downAt = NSPoint.zero
+
+    override func mouseDown(with e: NSEvent) { downAt = e.locationInWindow }
+    override func mouseUp(with e: NSEvent) {
+        let d = hypot(e.locationInWindow.x - downAt.x, e.locationInWindow.y - downAt.y)
+        if d < 4 { onClick?() } else { super.mouseUp(with: e) }
+    }
 
     override func draw(_ dirty: NSRect) {
         guard let ctx = NSGraphicsContext.current?.cgContext else { return }
@@ -374,7 +402,10 @@ final class App: NSObject, NSApplicationDelegate {
     var yesBtn: NSButton!
     var noBtn: NSButton!
     var askBtn: NSButton!
-    let synth = AVSpeechSynthesizer()
+    let mouth = Mouth()
+    let ear = Ear()
+    var armed = false          // click him = one turn without his name
+    var earStatus = ""
 
     var pendingAction = ""
     var lastSpoken = ""
@@ -398,6 +429,13 @@ final class App: NSObject, NSApplicationDelegate {
         window.contentView = root
 
         ghost = GhostView(frame: NSRect(x: 55, y: 8, width: 210, height: 210))
+        // Layer-backed, or he flickers. A borderless transparent window that
+        // redraws 60 times a second without a layer lets the window server
+        // composite half-drawn frames — the whole mascot strobes.
+        root.wantsLayer = true
+        ghost.wantsLayer = true
+        ghost.canDrawSubviewsIntoLayer = true
+        ghost.layerContentsRedrawPolicy = .onSetNeedsDisplay
         root.addSubview(ghost)
 
         bubble = NSTextField(wrappingLabelWithString: "")
@@ -431,12 +469,47 @@ final class App: NSObject, NSApplicationDelegate {
 
         Timer.scheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) { _ in
             // one place decides the mood, so the face never argues with itself
-            if self.synth.isSpeaking            { self.ghost.mood = .speaking }
-            else if self.busy                   { self.ghost.mood = .thinking }
-            else if !self.yesBtn.isHidden       { self.ghost.mood = .listening }
-            else                                { self.ghost.mood = .idle }
+            // the two signals the face is allowed to animate from
+            self.ghost.hearLevel = self.ear.level
+            self.ghost.mouthDrive = self.mouth.speaking ? self.mouth.drive : -1
+
+            if self.mouth.speaking                    { self.ghost.mood = .speaking }
+            else if self.busy                         { self.ghost.mood = .thinking }
+            else if self.ear.running && (self.armed || self.ear.level > 0.05) {
+                self.ghost.mood = .listening }
+            else if !self.yesBtn.isHidden             { self.ghost.mood = .alert }
+            else                                      { self.ghost.mood = .idle }
             self.ghost.tick(dt: 1.0 / 60)
         }
+        // ---- the ear -------------------------------------------------------
+        // He listens all the time but only ANSWERS when addressed. Anything
+        // else and a companion turns into a thing that talks over your calls.
+        mouth.onFinish = { [weak self] in
+            guard let self = self else { return }
+            self.ear.muted = false            // safe to hear you again
+        }
+        ear.onPartial = { [weak self] text in
+            guard let self = self, !text.isEmpty else { return }
+            self.bubble.stringValue = "\u{201C}" + text + "\u{201D}"
+        }
+        ear.onUtterance = { [weak self] text in self?.heard(text) }
+
+        ghost.onClick = { [weak self] in self?.armForOneTurn() }
+
+        Ear.requestAccess { [weak self] ok, why in
+            guard let self = self else { return }
+            self.earStatus = ok ? "listening" : why
+            if ok {
+                self.ear.start()
+                if !self.ear.running { self.earStatus = self.ear.lastError }
+            }
+            self.writeStatus()
+        }
+        // A GUI app launched with `open` has nowhere to print. One status line
+        // on disk is how the ear can be checked without asking the owner what
+        // he sees on his own screen.
+        Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in self.writeStatus() }
+
         Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { _ in self.check() }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { self.check() }
     }
@@ -456,11 +529,8 @@ final class App: NSObject, NSApplicationDelegate {
 
     func say(_ text: String) {
         bubble.stringValue = text
-        let u = AVSpeechUtterance(string: text)
-        u.rate = 0.5
-        u.voice = AVSpeechSynthesisVoice(identifier: "com.apple.voice.compact.en-US.Samantha")
-            ?? AVSpeechSynthesisVoice(language: "en-US")
-        synth.speak(u)
+        ear.muted = true                 // never answer his own last sentence
+        mouth.say(text)
     }
 
     /// Poll meditate. If there's something worth saying AND you're at a pause,
@@ -472,7 +542,7 @@ final class App: NSObject, NSApplicationDelegate {
                 let hasSomething = !b.headline.isEmpty && b.kind != "clear"
                 self.ghost.glow = hasSomething ? 1.0 : 0.25
                 guard hasSomething, b.canInterrupt, b.headline != self.lastSpoken,
-                      !self.synth.isSpeaking else { return }
+                      !self.mouth.speaking else { return }
                 self.lastSpoken = b.headline
                 self.pendingAction = b.action
                 let offer = b.action.isEmpty ? "" :
@@ -492,6 +562,73 @@ final class App: NSObject, NSApplicationDelegate {
             let first = out.split(separator: "\n").first.map(String.init) ?? "Done."
             DispatchQueue.main.async { self.say(first) }
         }
+    }
+
+    /// Click him and he takes the next thing you say, no name needed.
+    func armForOneTurn() {
+        if mouth.speaking { mouth.shutUp(); ear.muted = false; return }
+        guard ear.running else {
+            // A companion that is silently deaf is worse than one that says so
+            // and shows you the switch. macOS only ever asks once, so being
+            // denied is a dead end unless he offers the way out.
+            if earStatus.contains("not authorised") {
+                say("I can't hear you — microphone access is off. "
+                    + "I'll open the setting; switch Casper on and click me again.")
+                let pane = earStatus.contains("speech")
+                    ? "Privacy_SpeechRecognition" : "Privacy_Microphone"
+                if let u = URL(string:
+                    "x-apple.systempreferences:com.apple.preference.security?" + pane) {
+                    NSWorkspace.shared.open(u)
+                }
+            } else {
+                say(earStatus.isEmpty ? "I can't hear anything yet."
+                                      : "I can't listen right now — " + earStatus)
+            }
+            return
+        }
+        armed = true
+        bubble.stringValue = "Go ahead, I'm listening."
+        DispatchQueue.main.asyncAfter(deadline: .now() + 12) { self.armed = false }
+    }
+
+    /// One finished utterance. Decide whether it was aimed at him at all.
+    func heard(_ raw: String) {
+        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lower = text.lowercased()
+        let names = ["casper", "hey casper", "ok casper", "jasper"]
+        var addressed = armed
+        var question = text
+        for n in names where lower.hasPrefix(n) {
+            addressed = true
+            question = String(text.dropFirst(n.count))
+                .trimmingCharacters(in: CharacterSet(charactersIn: " ,.?!"))
+        }
+        if !addressed && lower.contains("casper") { addressed = true }
+        guard addressed, question.count > 2 else { return }
+        armed = false
+        busy = true
+        bubble.stringValue = "\u{201C}" + question + "\u{201D}"
+        DispatchQueue.global().async {
+            let answer = Meditate.advise(question)
+            DispatchQueue.main.async {
+                self.busy = false
+                self.say(answer.isEmpty ? "I don't know that one yet." : answer)
+            }
+        }
+    }
+
+    func writeStatus() {
+        var parts: [String] = []
+        parts.append("ear=" + (ear.running ? "on" : "off"))
+        parts.append("status=" + (earStatus.isEmpty ? "?" : earStatus))
+        parts.append(String(format: "level=%.3f", Double(ear.level)))
+        parts.append("speaking=" + (mouth.speaking ? "yes" : "no"))
+        parts.append(String(format: "mouth=%.3f", Double(mouth.drive)))
+        parts.append("armed=" + (armed ? "yes" : "no"))
+        parts.append("said=" + String(bubble.stringValue.prefix(70)))
+        let line: String = parts.joined(separator: "  ")
+        try? line.write(toFile: "/tmp/casper-status.txt", atomically: true,
+                        encoding: String.Encoding.utf8)
     }
 
     @objc func sayNo() {
@@ -549,14 +686,3 @@ func renderFrames(to dir: String) {
         }
     }
 }
-
-if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--render" {
-    _ = NSApplication.shared                     // AppKit needs to exist to draw
-    renderFrames(to: CommandLine.arguments[2])
-    exit(0)
-}
-
-let app = NSApplication.shared
-let delegate = App()
-app.delegate = delegate
-app.run()

@@ -100,15 +100,23 @@ case "${1:-}" in
     ;;
   casper|mascot|ghost|companion)
     shift
-    # the NATIVE desktop ghost — not a browser tab. Builds once, then floats.
-    if [ ! -x "$DIR/mascot/casper" ] || [ "$DIR/mascot/Casper.swift" -nt "$DIR/mascot/casper" ]; then
+    # The NATIVE desktop companion — an .app bundle, not a bare binary. The
+    # bundle is not cosmetic: macOS only grants microphone and speech access to
+    # a signed bundle with usage strings in its Info.plist, so "he listens"
+    # depends on packaging before it depends on code.
+    NEWEST=$(ls -t "$DIR/mascot"/*.swift 2>/dev/null | head -1)
+    if [ ! -x "$DIR/mascot/Casper.app/Contents/MacOS/casper" ] \
+       || [ -n "$NEWEST" -a "$NEWEST" -nt "$DIR/mascot/Casper.app/Contents/MacOS/casper" ]; then
       echo "  building Casper..."
-      ( cd "$DIR/mascot" && swiftc -O -o casper Casper.swift -framework Cocoa -framework AVFoundation ) || {
-        echo "  couldn't build the desktop ghost (needs Xcode command line tools)"; exit 1; }
+      bash "$DIR/mascot/build.sh" >/dev/null || {
+        echo "  couldn't build the companion (needs Xcode command line tools)"; exit 1; }
     fi
-    pkill -f "$DIR/mascot/casper" 2>/dev/null || true
-    nohup "$DIR/mascot/casper" >/dev/null 2>&1 &
+    pkill -f "$DIR/mascot/Casper.app/Contents" 2>/dev/null || true
+    pkill -x casper 2>/dev/null || true
+    open "$DIR/mascot/Casper.app"
     echo "Casper is awake — bottom-right of your screen. Drag him anywhere."
+    echo "Click him and talk, or say \"Casper, ...\" — he answers from what he"
+    echo "knows about your work. Everything he hears stays on this Mac."
     ;;
   advise|advice|think)
     shift

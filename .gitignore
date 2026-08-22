@@ -2,3 +2,8 @@ __pycache__/
 *.pyc
 *.pyo
 .DS_Store
+
+# built mascot artifacts — build.sh reproduces these, and an ad-hoc
+# signature made on one machine means nothing on another
+mascot/casper
+mascot/Casper.app/

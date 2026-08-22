@@ -154,6 +154,53 @@ def _idea_of_broken(store_dir: str) -> Optional[Dict[str, str]]:
     return None
 
 
+def _pick(options, seed_text: str) -> str:
+    """Deterministic phrasing: the same thing always gets the same words, but
+    different things get different words.
+
+    Random variation was the obvious move and the wrong one — he would rephrase
+    an identical fact on every poll, which reads as instability rather than
+    personality. Keyed to content, he sounds like someone with a range who
+    means the same thing each time he says it.
+    """
+    import hashlib
+    h = int(hashlib.sha256(seed_text.encode("utf-8", "replace")).hexdigest()[:8], 16)
+    return options[h % len(options)]
+
+
+def mark_spoke(meditation_dir: str = MEDITATION_DIR) -> None:
+    """Stamp the clock when he actually SPEAKS.
+
+    This used to be stamped inside _greeting(), which every poll calls — so the
+    dashboard refreshing in the background reset the clock and he could never
+    greet anyone. Computing a line is not saying it.
+    """
+    try:
+        with open(os.path.join(meditation_dir, "last-spoke"), "w") as f:
+            f.write(str(int(time.time())))
+    except OSError:
+        pass
+
+
+def _greeting(meditation_dir: str = MEDITATION_DIR) -> str:
+    """A short hello, but only when you have actually been away. Greeting
+    someone who never left is the most generic thing a companion can do."""
+    now = time.time()
+    gap = None
+    try:
+        gap = now - os.path.getmtime(os.path.join(meditation_dir, "last-spoke"))
+    except OSError:
+        pass
+    if gap is not None and gap < 5400:      # spoke within 90 min — no hello
+        return ""
+    hour = time.localtime(now).tm_hour
+    if hour < 5:   return "Still up? "
+    if hour < 12:  return "Morning. "
+    if hour < 17:  return ""
+    if hour < 22:  return "Evening. "
+    return "Late one. "
+
+
 def briefing(meditation_dir: str = MEDITATION_DIR, store_dir: str = STORE_DIR,
              goals_dir: Optional[str] = None,
              history_path: Optional[str] = None) -> Dict[str, Any]:
@@ -182,11 +229,22 @@ def briefing(meditation_dir: str = MEDITATION_DIR, store_dir: str = STORE_DIR,
                     more = " There are %d like it." % n
             except ValueError:
                 pass
-            return {"headline": "You told me: %s%s.%s"
-                    % (it["idea"], tail, more),
+            shapes = [
+                "Remember telling me %s? That's not true anymore \u2014 %s.%s",
+                "Something's slipped \u2014 you told me %s, but %s.%s",
+                "%s, you said. Not now, though \u2014 %s.%s",
+            ]
+            because = tail.lstrip().lstrip("\u2014").strip()
+            body = _pick(shapes, it["idea"]) % (it["idea"], because, more)
+            offer = _pick([" Want me to work through them?",
+                           " Shall I go clean those up?",
+                           " I can sort those out if you want."], it["idea"])
+            return {"headline": _greeting(meditation_dir) + body + offer,
                     "action": "meditate fix", "kind": "repair",
                     "next": d.get("next", "")}
-        return {"headline": "Something I know stopped matching reality.",
+        return {"headline": _greeting(meditation_dir) +
+                            "Something I know about your work stopped being "
+                            "true. Want me to find out what?",
                 "action": "meditate fix", "kind": "repair",
                 "next": d.get("next", "")}
 
@@ -197,9 +255,15 @@ def briefing(meditation_dir: str = MEDITATION_DIR, store_dir: str = STORE_DIR,
         nxt = (g.get("next") or "").strip().rstrip(".")
         rest = (" Two others are waiting too." if n == 3 else
                 (" %d others are waiting too." % (n - 1)) if n > 1 else "")
-        return {"headline": "On %s, the next thing is %s. I can put someone on "
-                            "it now.%s" % (g.get("title", g.get("name", "")),
-                                           nxt or "the open milestone", rest),
+        title = g.get("title", g.get("name", ""))
+        step = nxt or "the open milestone"
+        shapes = [
+            "%s is close — %s is what's left. Want me to start it?%s",
+            "The next move on %s is %s. Say the word and I'll get someone on it.%s",
+            "%s needs %s next. I can kick that off now.%s",
+        ]
+        return {"headline": _greeting(meditation_dir) +
+                            _pick(shapes, title + step) % (title, step, rest),
                 "action": "meditate go", "kind": "goals", "next": nxt}
 
     # 3. the portfolio, DISTILLED — imbalance and staleness are the insight,
@@ -232,13 +296,16 @@ def briefing(meditation_dir: str = MEDITATION_DIR, store_dir: str = STORE_DIR,
     # 4. stilling overdue
     days = d.get("still_days")
     if days is None or days > 3:
-        return {"headline": "It's been a while since we cleared the mind — "
-                            "%s sessions are waiting to settle."
-                % (("%.0f days; " % days) if days else ""),
+        how_long = ("%.0f days" % days) if days else "a while"
+        return {"headline": _greeting(meditation_dir) +
+                            "We haven't cleared the decks in %s — there's a "
+                            "pile of sessions waiting to settle. Worth doing "
+                            "before the next big push." % how_long,
                 "action": "/meditate", "kind": "still", "next": ""}
 
-    return {"headline": "All clear — knowledge holds, goals are moving, "
-                        "nothing is bothering me.",
+    return {"headline": _greeting(meditation_dir) +
+                        "Nothing needs you. What I know holds up, the work's "
+                        "moving, and I've got nothing to flag.",
             "action": "", "kind": "clear", "next": ""}
 
 
@@ -246,6 +313,7 @@ def _speak(text: str) -> bool:
     try:
         subprocess.Popen(["say", text[:400]], stdout=subprocess.DEVNULL,
                          stderr=subprocess.DEVNULL)
+        mark_spoke()
         return True
     except Exception:
         return False
