@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.10.0 — 2026-08-22
+
+`meditate brain` — the whole organism, live, in the browser.
+
+### Added
+- brain.py: stdlib-only HTTP server, one auto-refreshing page (4 s): live
+  sessions (sid, last file, age — watched a session's file change between
+  refreshes), goal fleet with bars and scope drift, repair queue items,
+  memory census, drift wins, sangama counts, the done-digest, and the one
+  `next:` decision. GET /api/state serves the same as JSON.
+- Binds 127.0.0.1 ONLY and the test pins it — this page IS the owner's
+  memory and sessions; a brain never faces a network by default. Public
+  hosting stays refused until auth exists (market-ready goal territory).
+- Verbs: `meditate brain|serve|watch` (+ 3 tests; server thread-tested on an
+  ephemeral port, 404 behavior, self-contained page).
+
+
 ## 0.9.2 — 2026-08-22
 
 The lifecycle closes: install -> silent passes -> the call -> the face ->

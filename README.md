@@ -37,6 +37,7 @@ After install, `meditate` is on your PATH:
 ```bash
 meditate              # where am I + the ONE next action
 meditate go           # move everything forward (repair + one agent per goal)
+meditate brain        # LIVE dashboard in the browser — sessions, fleet, all
 meditate grade        # scan + grade + consolidate
 meditate metrics      # drift rate, coverage, health dashboard
 meditate archive      # archive finished/empty sessions (dry-run; --apply)
