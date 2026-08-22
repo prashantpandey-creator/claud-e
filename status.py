@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import time
 from typing import Any, Dict, List, Optional
@@ -75,35 +76,58 @@ def gather(meditation_dir: str = MEDITATION_DIR, store_dir: str = STORE_DIR,
 
 
 def status_text(**kw) -> str:
+    """One screen a stranger can read. No internal vocabulary, and the thing
+    that needs you is the thing that stands out."""
     d = gather(**kw)
     s = d["store"]
+    # ANSI: bold for what needs you, dim for context. Plain text if piped.
+    tty = sys.stdout.isatty()
+    B = "\033[1;33m" if tty else ""      # attention
+    G = "\033[0;32m" if tty else ""      # all good
+    D = "\033[2m" if tty else ""         # quiet detail
+    R = "\033[0m" if tty else ""
+
     lines: List[str] = []
-    vr = 100.0 * s["verified"] / s["active"] if s["active"] else 0.0
-    lines.append("meditate — %d graded memories, %.1f%% verified, %d self-formed"
-                 % (s["active"], vr, s["formed"]))
+    pct = 100.0 * s["verified"] / s["active"] if s["active"] else 0.0
+    lines.append("I know %d things about your work. %.0f%% still check out. "
+                 "%d I picked up on my own."
+                 % (s["active"], pct, s["formed"]))
     if d["heartbeat_h"] is not None:
-        try:
-            from cadence import current_interval_s
-            cyc = (current_interval_s() or 0) / 3600
-        except Exception:
-            cyc = 0
-        # never hardcode the cycle — it is derived and changes (was "6 h" while
-        # the real interval was 1 h: the tool lying about its own rhythm)
-        lines.append("heartbeat %.1f h ago%s" % (
-            d["heartbeat_h"], (" (%.0f h cycle)" % cyc) if cyc else ""))
-    for g in d["goals"]:
-        widen = "  scope +%d" % g["scope_delta"] if g.get("scope_delta", 0) > 0 else ""
-        lines.append("  %-26s %5.1f%%  %d/%d%s  -> %s"
-                     % (g["name"][:26], g["pct"], g["done"], g["total"], widen,
-                        (g["next"] or "—")[:60]))
-    if d["repair_open"]:
-        lines.append("repair queue OPEN — knowledge failed verification")
-    if d["cooling"]:
-        lines.append("%d goal(s) cooling — agents presumed on them" % d["cooling"])
+        lines.append("%sLast self-check %.0f h ago.%s" % (D, d["heartbeat_h"], R))
     lines.append("")
-    lines.append("next: " + d["next"])
-    if "nothing owed" not in d["next"]:
-        lines.append("face: ~/.claude/meditation/dashboard.html  (fresh every heartbeat)")
+
+    if d["goals"]:
+        lines.append("%sWhat you're working on%s" % (D, R))
+        for g in d["goals"]:
+            left = g["total"] - g["done"]
+            grown = "  (grew by %d)" % g["scope_delta"] if g.get("scope_delta", 0) > 0 else ""
+            lines.append("  %-26s %d of %d done%s" %
+                         (g["title"][:26], g["done"], g["total"], grown))
+            if g["next"]:
+                lines.append("      %snext:%s %s" % (D, R, g["next"][:66]))
+        lines.append("")
+
+    if d["repair_open"]:
+        lines.append("%s! Some of what I know stopped matching reality.%s" % (B, R))
+    if d["cooling"]:
+        lines.append("%s%d goal(s) already have someone working on them.%s"
+                     % (D, d["cooling"], R))
+
+    nxt = d["next"]
+    if "nothing owed" in nxt:
+        lines.append("%sNothing needs you. Everything checks out and the work "
+                     "is moving.%s" % (G, R))
+    else:
+        # strip the internal parenthetical, keep the human reason
+        cmd = nxt.split("(")[0].strip()
+        why = nxt.split("(")[1].rstrip(")").strip() if "(" in nxt else ""
+        why = (why.replace("repair queue open — fix knowledge before new work",
+                           "some of what I know needs checking first")
+                  .replace("stilling pass overdue",
+                           "it's been a while since we cleared the decks"))
+        why = re.sub(r"(\d+) goal agent\(s\) ready to launch",
+                     r"\1 piece(s) of work ready to start", why)
+        lines.append("%s→ %s%s%s" % (B, cmd, R, ("   " + D + why + R) if why else ""))
     return "\n".join(lines)
 
 

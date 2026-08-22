@@ -55,7 +55,8 @@ def test_status_single_next_line():
         out = st.status_text(meditation_dir=med, store_dir=store, goals_dir=gdir,
                              history_path=os.path.join(t, "h.jsonl"),
                              ledger_path=os.path.join(t, "d.jsonl"))
-        assert out.count("next:") == 1, out
+        # exactly one DECISION (marked →); per-goal "next:" lines are context
+        assert out.count("\u2192") == 1, out
 
 
 def test_status_priority_repair_beats_goals():
@@ -64,8 +65,9 @@ def test_status_priority_repair_beats_goals():
         out = st.status_text(meditation_dir=med, store_dir=store, goals_dir=gdir,
                              history_path=os.path.join(t, "h.jsonl"),
                              ledger_path=os.path.join(t, "d.jsonl"))
-        nxt = [l for l in out.splitlines() if "next:" in l][0]
-        assert "repair" in nxt.lower(), nxt
+        dec = [l for l in out.splitlines() if "\u2192" in l]
+        assert len(dec) == 1, "there must be exactly ONE decision line: %r" % out
+        assert "check" in dec[0].lower() or "know" in dec[0].lower(), dec[0]
 
 
 def test_status_goals_when_no_repair():
@@ -74,8 +76,9 @@ def test_status_goals_when_no_repair():
         out = st.status_text(meditation_dir=med, store_dir=store, goals_dir=gdir,
                              history_path=os.path.join(t, "h.jsonl"),
                              ledger_path=os.path.join(t, "d.jsonl"))
-        nxt = [l for l in out.splitlines() if "next:" in l][0]
-        assert "meditate go" in nxt, nxt
+        dec = [l for l in out.splitlines() if "\u2192" in l]
+        assert len(dec) == 1, "there must be exactly ONE decision line: %r" % out
+        assert "meditate go" in dec[0], dec[0]
 
 
 def test_go_repair_first_then_goals():
