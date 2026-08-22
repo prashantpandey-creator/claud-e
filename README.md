@@ -1,11 +1,16 @@
 # Meditate
 
-**Your Claude, remembered — and measured.**
+**Your Claude, remembered — and measured. On your machine, and nowhere else.**
 
 Meditate turns everything Claude Code does on your machine into knowledge you
 can trust: facts with receipts, projects with honest progress, and agents you
-dispatch and watch. It runs entirely on your own machine — no account, no
-server of ours, no data leaves your laptop.
+dispatch and watch.
+
+**It is a private island by design.** No account, no sign-up, no server of
+ours, no telemetry, nothing to breach. Every install runs entirely on your own
+machine and reads only your own files — the author cannot see your data, and
+neither can anyone else. That is why it needs no login: there is nothing on
+the other end to log into. Your memory, your sessions, your work — yours.
 
 ```
 444 facts known · 94% still true when re-checked · 75 learned by itself

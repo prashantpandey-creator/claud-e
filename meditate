@@ -120,6 +120,7 @@ case "${1:-}" in
     echo "  meditate go         move everything forward" >&2
     echo "  meditate ask \"...\"  question the graded memory" >&2
     echo "  meditate fix        repair knowledge (--list, or fix <n> for one item)" >&2
+    echo "  meditate voice      Casper: the one thing worth saying + if now is the moment" >&2
     echo "  meditate projects   where your attention went, per project + open tasks" >&2
     echo "  meditate fleet      live progress of dispatched agents" >&2
     echo "  meditate pulse      your Claude live in the browser — click to run (localhost)" >&2
