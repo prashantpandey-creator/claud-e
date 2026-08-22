@@ -155,8 +155,12 @@ def build_launch(cwd: str, kickoff: str, thread_name: str):
     kickoff_file = f"/tmp/claude-kickoff-{safe_name}.txt"
     with open(kickoff_file, "w") as f:
         f.write(kickoff)
+    # Fleet agents run unattended — a permission prompt in an unwatched
+    # Terminal is a silent stall (owner: "should run in allow-all ideally").
+    # The gate moves into the kickoff TEXT: ship discipline rides in the
+    # prompt + the SessionStart hook, not in prompts nobody is there to click.
     shell_cmd = (f"cd '{cwd}' && clear && echo '── {safe_name} ──' && "
-                 f"claude \"$(cat '{kickoff_file}')\"")
+                 f"claude --dangerously-skip-permissions \"$(cat '{kickoff_file}')\"")
     as_escaped = shell_cmd.replace("\\", "\\\\").replace('"', '\\"')
     script = ('tell application "Terminal"\n  activate\n'
               f'  do script "{as_escaped}"\nend tell')

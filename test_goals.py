@@ -103,6 +103,8 @@ def test_kickoff_prompt_content():
         k = gl.kickoff("test-goal", goals_dir=gdir, history_path=hist)
         assert k is not None
         assert "Ship the widget" in k["prompt"]
+        assert "Ship discipline" in k["prompt"], "kickoff must carry the push gate"
+        assert "pre-authorized" in k["prompt"]
         assert "frontend wired" in k["prompt"]
         assert k["cwd"] == "/repo/widget"
 

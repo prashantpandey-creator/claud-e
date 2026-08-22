@@ -174,7 +174,11 @@ def kickoff(name: str, goals_dir: str = GOALS_DIR,
         prompt = ("Long-term goal: %s (%d/%d milestones done, %.0f%%).\n"
                   "Open milestones, in order:\n%s\n"
                   "Take the FIRST open milestone and drive it to done. When it is "
-                  "verifiably complete, tick its checkbox in %s and stop."
+                  "verifiably complete, tick its checkbox in %s and stop.\n"
+                  "Ship discipline: commit to a LOCAL branch and stop — do NOT "
+                  "push or deploy. ONE exception: if this milestone's own text "
+                  "names a push/deploy, that exact push is pre-authorized by the "
+                  "owner, for that milestone only."
                   % (g["title"], g["done"], g["total"], g["pct"],
                      "\n".join("  - " + o for o in opens), g["file"]))
         return {"name": name, "cwd": g["cwd"] or os.path.expanduser("~"),
