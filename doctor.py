@@ -46,6 +46,7 @@ TEST_FILES = [
     "test_drive.py",
     "test_status_go.py",
     "test_brain.py",
+    "test_beacon.py",
 ]
 
 

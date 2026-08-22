@@ -228,7 +228,7 @@ fi
 echo
 echo "  Running test suite..."
 TEST_PASS=true
-for tf in test_sessions.py test_launch.py test_scan.py test_still.py test_doctor.py test_nidra_bridge.py test_metrics.py test_hook.py test_coordination.py test_archive.py test_report.py test_goals.py test_ask.py test_formation.py test_integration.py test_drive.py test_status_go.py test_brain.py; do
+for tf in test_sessions.py test_launch.py test_scan.py test_still.py test_doctor.py test_nidra_bridge.py test_metrics.py test_hook.py test_coordination.py test_archive.py test_report.py test_goals.py test_ask.py test_formation.py test_integration.py test_drive.py test_status_go.py test_brain.py test_beacon.py; do
     if [ -f "$SKILL_DIR/$tf" ]; then
         if python3 "$SKILL_DIR/$tf" > /dev/null 2>&1; then
             echo "  [ok]  $tf"

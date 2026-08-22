@@ -175,12 +175,17 @@ def kickoff(name: str, goals_dir: str = GOALS_DIR,
                   "Open milestones, in order:\n%s\n"
                   "Take the FIRST open milestone and drive it to done. When it is "
                   "verifiably complete, tick its checkbox in %s and stop.\n"
+                  "Report progress back so the dashboard shows what you are doing: "
+                  "run `meditate progress %s \"<one line: what you are doing now>\"` "
+                  "when you start, at each real step, and `meditate progress %s "
+                  "--done \"<result>\"` at the end.\n"
                   "Ship discipline: commit to a LOCAL branch and stop — do NOT "
                   "push or deploy. ONE exception: if this milestone's own text "
                   "names a push/deploy, that exact push is pre-authorized by the "
                   "owner, for that milestone only."
                   % (g["title"], g["done"], g["total"], g["pct"],
-                     "\n".join("  - " + o for o in opens), g["file"]))
+                     "\n".join("  - " + o for o in opens), g["file"],
+                     name, name))
         return {"name": name, "cwd": g["cwd"] or os.path.expanduser("~"),
                 "prompt": prompt}
     return None

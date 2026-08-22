@@ -102,7 +102,11 @@ case "${1:-}" in
     shift
     python3 "$DIR/brain.py" "$@"
     ;;
-  fleet|agents|progress)
+  progress|report-progress)
+    shift
+    python3 "$DIR/beacon.py" "$@"
+    ;;
+  fleet|agents)
     shift
     python3 "$DIR/drive.py" fleet "$@"
     ;;

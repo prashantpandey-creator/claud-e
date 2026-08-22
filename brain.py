@@ -207,10 +207,18 @@ def state() -> Dict[str, Any]:
     from go import repair_items
     from status import gather
     from coordination import live_sessions, done_digest
+    from beacon import latest as beacon_latest
 
     st = gather()
     rep = rp.compute()
     fleet = fleet_status()
+    beacons = beacon_latest()
+    for r in fleet["dispatched"]:
+        bd = beacons.get(r.get("goal"))
+        if bd:
+            r["says"] = bd.get("message", "")
+            r["says_done"] = bd.get("done", False)
+            r["says_ts"] = bd.get("ts", "")[11:19]
     return {
         "generated": time.strftime("%H:%M:%S"),
         "store": st["store"],
@@ -380,11 +388,14 @@ async function tick(){
       <button class="b" style="padding:2px 9px;font-size:11px" title="Opens ONE Terminal agent working only this goal's next milestone: ${esc(g.next||'')}" onclick="act('go','${g.name}')">dispatch</button></div>
       <div style="margin-left:262px;font-size:12px;color:${DIM}">next: ${esc(g.next||"—")}</div></div>`
   ).join("");
-  document.getElementById("fleet").innerHTML = s.fleet.map(f=>
-    `<div style="margin:3px 0">${esc(f.goal)} — sent ${f.dispatched_min}m ago — ${
-      f.milestone_ticked?`<span style="color:${G}">milestone TICKED ✓</span>`:"open"} — ${
-      f.live_session?("agent "+esc(f.live_session)+" on "+esc(f.last_file||"?")+" (presumed)"):"no live session seen"}</div>`
-  ).join("") || `<div style="color:${DIM}">nothing dispatched — <code style="color:${G}">meditate go</code></div>`;
+  document.getElementById("fleet").innerHTML = s.fleet.map(f=>{
+    const status = f.says
+      ? `<span style="color:${f.says_done?G:'#d8d2c4'}">${f.says_done?'✓ ':'▸ '}${esc(f.says)}</span> <span style="color:#4a463c">(${esc(f.says_ts||'')})</span>`
+      : (f.milestone_ticked?`<span style="color:${G}">milestone done ✓</span>`
+         : (f.live_session?`working — ${esc(f.last_file||'')}`:`<span style="color:${DIM}">launched, no report yet</span>`));
+    return `<div style="margin:5px 0"><span style="color:${G}">${esc(f.goal)}</span>
+      <span style="color:#4a463c">· sent ${f.dispatched_min}m ago ·</span> ${status}</div>`;
+  }).join("") || `<div style="color:${DIM}">nothing dispatched — press a goal's <b>dispatch</b>, or <code style="color:${G}">meditate go</code></div>`;
   document.getElementById("repair").innerHTML = s.repair.map((m,i)=>
     `<div style="margin:4px 0"><span style="color:${G}">${i+1}.</span> ${esc(m.statement)}
      <button class="b" style="padding:1px 8px;font-size:11px" title="Opens ONE Terminal agent scoped to only this memory: it checks reality, fixes the .md, and re-grades." onclick="act('fix',String(${i+1}))">fix this</button>
