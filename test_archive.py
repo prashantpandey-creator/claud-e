@@ -151,6 +151,23 @@ def test_archive_retargets_graded_evidence():
             ar.STORE_DIR = old
 
 
+def test_apply_skips_when_store_locked():
+    """archive apply must NOT rewrite memories.jsonl while a grade holds the lock."""
+    import fcntl
+    with tempfile.TemporaryDirectory() as t:
+        proj = os.path.join(t, "projects", "-x")
+        _mk_session(proj, "empty-1")
+        store = os.path.join(t, "store"); os.makedirs(store)
+        holder = open(os.path.join(store, ".grade.lock"), "w")
+        fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        rep = ar.run(projects_root=os.path.join(t, "projects"),
+                     archive_root=os.path.join(t, "arch"), empty_only=True,
+                     apply=True, store_dir=store)
+        holder.close()
+        assert rep["archived"] == 0
+        assert any("skip" in e for e in rep["errors"]), rep["errors"]
+
+
 def test_cli_envelope_and_exit_zero():
     r = subprocess.run([sys.executable, os.path.join(SKILL, "archive.py"), "--json"],
                        capture_output=True, text=True, timeout=30)

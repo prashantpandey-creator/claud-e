@@ -85,6 +85,7 @@ def _parse(path: str) -> Optional[Dict[str, Any]]:
     return {"name": name, "title": meta.get("title", name),
             "project": meta.get("project", ""), "cwd": meta.get("cwd", ""),
             "status": meta.get("status", "active"),
+            "model": meta.get("model", ""),
             "done": done, "total": total,
             "pct": round(100.0 * done / total, 1), "next": nxt, "file": path}
 
@@ -187,7 +188,7 @@ def kickoff(name: str, goals_dir: str = GOALS_DIR,
                      "\n".join("  - " + o for o in opens), g["file"],
                      name, name))
         return {"name": name, "cwd": g["cwd"] or os.path.expanduser("~"),
-                "prompt": prompt}
+                "prompt": prompt, "model": g.get("model", "")}
     return None
 
 

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -161,6 +162,39 @@ def test_derive_label_precision():
             assert br._derive_label(sid3, "/x") == "", "tool-output garbage leaked into the label"
         finally:
             br.PROJECTS_DIR, br.LABELS_CACHE = oldp, oldc
+
+
+def test_rejects_foreign_host():
+    """DNS-rebind defense: a request with a non-loopback Host is refused."""
+    import urllib.request, urllib.error, threading
+    srv = br.make_server(port=0); port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/api/state",
+                                     headers={"Host": "evil.example.com"})
+        try:
+            urllib.request.urlopen(req, timeout=10)
+            raise AssertionError("403 expected for foreign Host")
+        except urllib.error.HTTPError as e:
+            assert e.code == 403, e.code
+        # loopback Host still works
+        req2 = urllib.request.Request(f"http://127.0.0.1:{port}/api/state",
+                                      headers={"Host": f"127.0.0.1:{port}"})
+        with urllib.request.urlopen(req2, timeout=10) as r:
+            assert r.status == 200
+    finally:
+        srv.shutdown()
+
+
+def test_esc_escapes_quotes():
+    """esc() must neutralize both quote kinds — the XSS attribute-break class."""
+    e = br.PAGE  # esc is JS-side; assert the page no longer builds onclick with
+    # the vulnerability was INTERPOLATED data in onclick (act('...${label}...')).
+    # static onclick=act('go','') is constant and safe; forbid only interpolation.
+    assert not re.search(r'onclick="[^"]*\$\{', e), \
+        "no template data may be interpolated into an inline handler"
+    assert "j-go" in e and "j-fix" in e and "addEventListener" in e, \
+        "per-row interactive elements must use delegated data-attribute handlers"
 
 
 def test_state_is_json_serializable():

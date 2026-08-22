@@ -343,15 +343,7 @@ async function act(action, arg, value){
   }catch(e){ t.textContent="failed: "+e }
   setTimeout(tick, 1200);
 }
-function rename(sid, cur){
-  const v = prompt("Name this session (what is it working on?)", cur||"");
-  if(v!==null) act("name", sid, v);
-}
-function stopSess(sid, label){
-  if(confirm(`Stop session "${label}"? Same as closing its window — unsaved chat context ends.`))
-    act("stop", sid);
-}
-function esc(s){const d=document.createElement("i");d.textContent=s||"";return d.innerHTML}
+function esc(s){return String(s||"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]))}
 function bar(p){return `<span style="display:inline-block;width:180px;height:8px;background:#1d1a14;border-radius:4px;vertical-align:middle"><span style="display:block;width:${Math.min(100,p)}%;height:8px;background:${G};border-radius:4px"></span></span>`}
 async function tick(){
   let s; try{ s = await (await fetch("/api/state")).json() }catch(e){ return }
@@ -393,8 +385,8 @@ async function tick(){
       <div style="font-size:12.5px;color:${G};overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(x.label)}</div>
       <div style="font-size:11px;color:${DIM};overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(x.last_file)}</div>
       <div style="font-size:10px;color:#4a463c">${x.age_s<60?x.age_s+"s":Math.round(x.age_s/60)+"m"} ago
-        · <a href="#" style="color:${DIM}" title="Rename this session in your own words — the new name sticks everywhere." onclick="rename('${esc(x.sid)}','${esc(x.label)}');return false">name</a>
-        · <a href="#" style="color:${DIM}" title="End this session — same as closing its window. Its unsaved chat context ends." onclick="stopSess('${esc(x.sid)}','${esc(x.label)}');return false">stop</a></div>
+        · <a href="#" class="j-name" data-sid="${esc(x.sid)}" data-label="${esc(x.label)}" style="color:${DIM}" title="Rename this session in your own words.">name</a>
+        · <a href="#" class="j-stop" data-sid="${esc(x.sid)}" data-label="${esc(x.label)}" style="color:${DIM}" title="End this session — same as closing its window.">stop</a></div>
     </div>`}).join("") || `<div style="color:${DIM};font-size:13px">no living sessions — the field is still</div>`;
   document.getElementById("goals").innerHTML = s.goals.map(g=>
     `<div style="margin:8px 0"><div style="display:flex;gap:12px;align-items:center">
@@ -402,7 +394,7 @@ async function tick(){
       <span style="color:${G}">${Math.round(g.pct)}%</span>
       <span style="color:${DIM}">${g.done}/${g.total}</span>
       ${g.scope_delta>0?`<span style="color:${G}">scope +${g.scope_delta}</span>`:""}
-      <button class="b" style="padding:2px 9px;font-size:11px" title="Opens ONE Terminal agent working only this goal's next milestone: ${esc(g.next||'')}" onclick="act('go','${g.name}')">dispatch</button></div>
+      <button class="b j-go" data-goal="${esc(g.name)}" style="padding:2px 9px;font-size:11px" title="Opens ONE Terminal agent working only this goal's next milestone: ${esc(g.next||'')}">dispatch</button></div>
       <div style="margin-left:262px;font-size:12px;color:${DIM}">next: ${esc(g.next||"—")}</div></div>`
   ).join("");
   document.getElementById("fleet").innerHTML = s.fleet.map(f=>{
@@ -415,7 +407,7 @@ async function tick(){
   }).join("") || `<div style="color:${DIM}">nothing dispatched — press a goal's <b>dispatch</b>, or <code style="color:${G}">meditate go</code></div>`;
   document.getElementById("repair").innerHTML = s.repair.map((m,i)=>
     `<div style="margin:4px 0"><span style="color:${G}">${i+1}.</span> ${esc(m.statement)}
-     <button class="b" style="padding:1px 8px;font-size:11px" title="Opens ONE Terminal agent scoped to only this memory: it checks reality, fixes the .md, and re-grades." onclick="act('fix',String(${i+1}))">fix this</button>
+     <button class="b j-fix" data-n="${i+1}" style="padding:1px 8px;font-size:11px" title="Opens ONE Terminal agent scoped to only this memory: it checks reality, fixes the .md, and re-grades.">fix this</button>
      ${m.fails.map(f=>`<div style="margin-left:18px;color:${DIM};font-size:12px">FAILS ${esc(f)}</div>`).join("")}</div>`
   ).join("") || `<div style="color:${DIM}">clean — nothing failed verification</div>`;
   document.getElementById("activity").innerHTML = (s.activity||[]).map(a=>
@@ -423,8 +415,26 @@ async function tick(){
     "<div>no recorded activity yet</div>";
   document.getElementById("digest").textContent = s.digest || "";
 }
+document.addEventListener("click", e=>{
+  const t = e.target.closest("a,button"); if(!t) return;
+  if(t.classList.contains("j-name")){e.preventDefault();
+    const v=prompt("Name this session (what is it working on?)", t.dataset.label||"");
+    if(v!==null) act("name", t.dataset.sid, v);}
+  else if(t.classList.contains("j-stop")){e.preventDefault();
+    if(confirm(`Stop session "${t.dataset.label}"? Same as closing its window.`)) act("stop", t.dataset.sid);}
+  else if(t.classList.contains("j-go")){act("go", t.dataset.goal);}
+  else if(t.classList.contains("j-fix")){act("fix", t.dataset.n);}
+});
 tick(); setInterval(tick, 4000);
 </script></body>"""
+
+
+def _host_ok(handler) -> bool:
+    """Reject any request whose Host isn't loopback — defeats DNS rebinding,
+    where attacker.com resolves to 127.0.0.1 and the custom header no longer
+    helps because the page is 'same-origin'."""
+    host = (handler.headers.get("Host") or "").split(":")[0].strip().lower()
+    return host in ("127.0.0.1", "localhost", "[::1]", "::1", "")
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -432,6 +442,9 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             # CSRF guard: any web page can POST to localhost, but a custom
             # header forces a CORS preflight we never answer. No header = 403.
+            if not _host_ok(self):
+                self.send_error(403, "bad Host")
+                return
             if self.path != "/api/act":
                 self.send_error(404)
                 return
@@ -471,6 +484,9 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         try:
+            if not _host_ok(self):
+                self.send_error(403, "bad Host")
+                return
             if self.path == "/api/state":
                 body = json.dumps(state()).encode()
                 ctype = "application/json"

@@ -150,17 +150,32 @@ def _archive_one(row: Dict[str, Any], archive_root: str) -> None:
 
 def run(projects_root: str = PROJECTS_ROOT, archive_root: str = ARCHIVE_ROOT,
         empty_only: bool = True, older_than_days: Optional[int] = None,
-        apply: bool = False) -> Dict[str, Any]:
+        apply: bool = False, store_dir: Optional[str] = None) -> Dict[str, Any]:
     cands = candidates(projects_root, empty_only, older_than_days)
     archived = 0
     errors = []
     if apply:
+        # _retarget_evidence rewrites memories.jsonl; take the SAME lock the
+        # grade pass holds, or a concurrent grade + this archive interleave
+        # two full rewrites and one silently drops the other's memories.
+        import fcntl
+        sd = store_dir or STORE_DIR
+        os.makedirs(sd, exist_ok=True)
+        _lk = open(os.path.join(sd, ".grade.lock"), "w")
+        try:
+            fcntl.flock(_lk, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            _lk.close()
+            return {"would_archive": len(cands), "archived": 0,
+                    "bytes_reclaimed": 0, "candidates": cands,
+                    "errors": [{"skip": "a grade pass holds the store lock; try again"}]}
         for row in cands:
             try:
                 _archive_one(row, archive_root)
                 archived += 1
             except Exception as e:
                 errors.append({"sid": row["sid"], "error": str(e)})
+        _lk.close()
     return {"would_archive": len(cands), "archived": archived,
             "bytes_reclaimed": sum(r["bytes"] for r in cands) if apply else 0,
             "candidates": cands, "errors": errors}

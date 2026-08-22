@@ -141,7 +141,10 @@ def find_archive_candidates(threads: list) -> list:
     return candidates
 
 
-def build_launch(cwd: str, kickoff: str, thread_name: str):
+FLEET_MODEL = os.environ.get("MEDITATE_FLEET_MODEL", "sonnet")
+
+
+def build_launch(cwd: str, kickoff: str, thread_name: str, model: str = ""):
     """Build (kickoff_file, shell_cmd, applescript) — separated so tests can
     verify the command without opening windows.
 
@@ -159,17 +162,19 @@ def build_launch(cwd: str, kickoff: str, thread_name: str):
     # Terminal is a silent stall (owner: "should run in allow-all ideally").
     # The gate moves into the kickoff TEXT: ship discipline rides in the
     # prompt + the SessionStart hook, not in prompts nobody is there to click.
+    mdl = model or FLEET_MODEL
     shell_cmd = (f"cd '{cwd}' && clear && echo '── {safe_name} ──' && "
-                 f"claude --dangerously-skip-permissions \"$(cat '{kickoff_file}')\"")
+                 f"claude --model {mdl} --dangerously-skip-permissions "
+                 f"\"$(cat '{kickoff_file}')\"")
     as_escaped = shell_cmd.replace("\\", "\\\\").replace('"', '\\"')
     script = ('tell application "Terminal"\n  activate\n'
               f'  do script "{as_escaped}"\nend tell')
     return kickoff_file, shell_cmd, script
 
 
-def launch_claude(cwd: str, kickoff: str, thread_name: str) -> bool:
+def launch_claude(cwd: str, kickoff: str, thread_name: str, model: str = "") -> bool:
     """Open a Terminal running a REAL interactive claude on the kickoff."""
-    _, _, script = build_launch(cwd, kickoff, thread_name)
+    _, _, script = build_launch(cwd, kickoff, thread_name, model)
     try:
         subprocess.run(["osascript", "-e", script], check=True, timeout=10)
         return True

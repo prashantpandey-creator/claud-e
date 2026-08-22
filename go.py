@@ -122,7 +122,8 @@ def run(n: Optional[int] = None, repair_only: bool = False,
                 continue
             ok = False
             try:
-                ok = bool(launcher(k["cwd"], k["prompt"], "goal-" + g["name"][:20]))
+                ok = bool(launcher(k["cwd"], k["prompt"], "goal-" + g["name"][:20],
+                                   k.get("model", "")))
             except Exception:
                 ok = False
             if not ok:

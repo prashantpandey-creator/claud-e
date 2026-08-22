@@ -136,8 +136,10 @@ def test_build_launch_interactive_not_piped():
     from launch import build_launch
     kf, cmd, script = build_launch("/Users/x/vedic puran", "Fix Apple's rejection\nline2", "goal-mila-live")
     assert "| claude" not in cmd, cmd
-    assert "claude --dangerously-skip-permissions \"$(cat" in cmd, \
-        "fleet agents must not stall on permission prompts: " + cmd
+    assert "--dangerously-skip-permissions" in cmd
+    assert "--model sonnet" in cmd, "fleet default model must be pinned: " + cmd
+    _, cmd2, _ = build_launch("/x", "k", "t", model="opus")
+    assert "--model opus" in cmd2, "per-goal model override must win: " + cmd2
     assert "cd '/Users/x/vedic puran'" in cmd, cmd
     assert open(kf).read() == "Fix Apple's rejection\nline2"
     assert 'do script "' in script and "tell application" in script
