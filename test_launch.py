@@ -122,6 +122,43 @@ def test_kickoff_resolves_per_thread_file_and_fenceless_prompt():
         shutil.rmtree(tmp)
 
 
+def test_kickoff_keeps_prose_after_a_fenced_cd_block():
+    """The template fences only the `cd` line; the PROMPT follows it.
+
+    The extractor took the text between the first two ``` markers, so a chat
+    written that way handed the terminal a bare `cd` and threw the prompt
+    away — the thread opened in the right directory with nothing to do.
+    """
+    import tempfile
+    with tempfile.TemporaryDirectory() as base:
+        _write_index(base, "s1", [{"n": 1, "thread": "Thread A",
+                                   "status": "🟢 live", "memory": "→ **a.md**"}])
+        with open(os.path.join(base, "s1", "a.md"), "w") as f:
+            f.write("## Start a fresh chat with\n\n```\ncd \"/tmp/x\"\n```\n\n"
+                    "Resume the real work and do the right thing.\n")
+        live = [t for t in launch.find_threads(base) if t["status"] == "live"]
+        k = live[0].get("kickoff", "")
+        assert "do the right thing" in k, f"prompt after the fence was dropped: {k!r}"
+        assert "```" not in k, f"fence markers leaked into the kickoff: {k!r}"
+
+
+def test_live_thread_without_a_chat_is_reported_not_swallowed():
+    """Silent truncation reads as 'covered everything' when it did not.
+
+    A live row whose Memory column names no file got no kickoff and vanished
+    from the report — the count said 14 live when 17 were found.
+    """
+    import tempfile
+    with tempfile.TemporaryDirectory() as base:
+        _write_index(base, "s1", [{"n": 1, "thread": "Orphan thread",
+                                   "status": "🟢 live", "memory": "[[some-memory]]"}])
+        live = [t for t in launch.find_threads(base) if t["status"] == "live"]
+        assert len(live) == 1, live
+        assert live[0].get("kickoff", "") == "", "orphan should have no kickoff"
+        assert live[0].get("no_chat") is True, \
+            "a live thread with no continuation chat must be flagged, not dropped"
+
+
 def test_launcher_waits_for_claude_instead_of_guessing():
     """A fixed delay silently loses the kickoff when claude boots slowly —
     the text lands in the shell and the owner sees 'only a terminal'."""

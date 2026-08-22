@@ -103,20 +103,28 @@ def find_threads(session_dir: str = None) -> list:
                     marker = "## Start a fresh chat with"
                     prompt_start = chat_content.find(marker)
                     kickoff = ""
-                    if prompt_start > 0:
+                    if prompt_start >= 0:      # find() returns 0 when the file
+                                               # STARTS with the marker; `> 0`
+                                               # silently yielded no kickoff
                         tail = chat_content[prompt_start + len(marker):]
-                        fence = tail.find("```")
-                        if fence != -1:
-                            fence_end = tail.find("```", fence + 3)
-                            if fence_end > 0:
-                                kickoff = tail[fence + 3:fence_end].strip()
-                        if not kickoff:
-                            # The documented template has NO fence — take the
-                            # prose up to the next heading (or EOF).
-                            nxt = tail.find("\n## ")
-                            kickoff = (tail[:nxt] if nxt > 0 else tail).strip()
+                        # Take EVERYTHING up to the next heading, then strip
+                        # fence markers. Reading only between the first two
+                        # ``` handed the terminal a bare `cd` and threw the
+                        # prompt away whenever the template fenced just the
+                        # cd line — the thread opened in the right directory
+                        # with nothing to do.
+                        nxt = tail.find("\n## ")
+                        body = tail[:nxt] if nxt > 0 else tail
+                        kickoff = "\n".join(
+                            l for l in body.splitlines()
+                            if not l.strip().startswith("```")).strip()
                     row["path"] = chat_path
                     row["kickoff"] = kickoff
+                else:
+                    # No continuation chat for a LIVE thread. Report it —
+                    # dropping it silently made the count read 14 when 17
+                    # were found, which looks like "everything is covered".
+                    row["no_chat"] = True
 
             threads.append(row)
 
@@ -234,6 +242,10 @@ def launch_all(auto_open: bool = False):
     """Analyze, report archive candidates, and optionally launch live threads."""
     threads = find_threads()
     live = [t for t in threads if t.get("status") == "live" and t.get("kickoff")]
+    # Live but with no continuation chat to open. These used to be filtered
+    # out here and never mentioned, so the count read "14 live" while 17 were
+    # found — silent truncation that looks like full coverage.
+    orphans = [t for t in threads if t.get("status") == "live" and t.get("no_chat")]
     archive_candidates = find_archive_candidates(threads)
 
     if not live and not archive_candidates:
@@ -252,6 +264,14 @@ def launch_all(auto_open: bool = False):
             print(f"{i+1:<3} {t['thread']:<35} {mem:<30} {action}")
     else:
         print("🧘 No live threads to open.")
+
+    if orphans:
+        print(f"\n⚠️  {len(orphans)} live thread(s) have NO continuation chat "
+              f"— they cannot be opened:")
+        for t in orphans:
+            print(f"   {t['session']}: {t['thread'][:64]}")
+        print("   Name the chat file in that row's Memory column "
+              "(e.g. `→ **thread-name.md**`), or write the chat.")
 
     if archive_candidates:
         print(f"\n📦 {len(archive_candidates)} session(s) fully settled — ready to archive:")
