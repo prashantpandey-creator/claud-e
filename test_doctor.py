@@ -14,7 +14,7 @@ import doctor
 
 
 def test_envelope_shape():
-    env = doctor.run()
+    env = doctor.run(run_tests=False)
     assert isinstance(env, dict), "envelope must be dict"
     assert "success" in env, "missing success"
     assert "data" in env, "missing data"
@@ -24,7 +24,7 @@ def test_envelope_shape():
 
 
 def test_data_fields():
-    d = doctor.run()["data"]
+    d = doctor.run(run_tests=False)["data"]
     for key in ("version", "healthy", "issues", "prereqs", "tests", "hook", "stillness", "output"):
         assert key in d, f"missing data.{key}"
     assert isinstance(d["version"], str), "version must be string"
@@ -33,7 +33,7 @@ def test_data_fields():
 
 
 def test_prereqs_include_python_and_claude():
-    d = doctor.run()["data"]
+    d = doctor.run(run_tests=False)["data"]
     names = [p["name"] for p in d["prereqs"]]
     assert "python3" in names, "must check python3"
     assert "claude_code" in names, "must check claude_code"
@@ -41,15 +41,8 @@ def test_prereqs_include_python_and_claude():
     assert python_check["ok"] is True, "we are running on python3"
 
 
-def test_tests_field_covers_all_test_files():
-    d = doctor.run()["data"]
-    files = [t["file"] for t in d["tests"]["files"]]
-    for expected in doctor.TEST_FILES:
-        assert expected in files, f"test suite missing {expected}"
-
-
 def test_stillness_fields():
-    d = doctor.run()["data"]
+    d = doctor.run(run_tests=False)["data"]
     s = d["stillness"]
     assert "exists" in s, "missing exists"
     assert "overdue" in s, "missing overdue"
@@ -59,9 +52,22 @@ def test_stillness_fields():
 
 
 def test_json_serializable():
-    env = doctor.run()
+    env = doctor.run(run_tests=False)
     serialized = json.dumps(env)
     assert len(serialized) > 100, "envelope too small"
+
+
+def test_discovers_every_suite_without_running_them():
+    """Cheap proof that discovery is real: every test_*.py on disk is in the
+    list (minus self-referential ones). Actually EXECUTING them is what
+    `meditate doctor` does — duplicating that here just doubled the cost."""
+    import os as _os
+    on_disk = {f for f in _os.listdir(doctor.SKILL_DIR)
+               if f.startswith("test_") and f.endswith(".py")}
+    listed = set(doctor.TEST_FILES)
+    missing = on_disk - listed - doctor.SELF_REFERENTIAL
+    assert not missing, "suites invisible to doctor: %s" % sorted(missing)
+    assert len(listed) >= 20, listed
 
 
 def _main():

@@ -32,9 +32,15 @@ VERSION = open(os.path.join(SKILL_DIR, "VERSION")).read().strip()
 # four suites when two sessions edited this file, and dispatch tests sat RED
 # for four commits because doctor never ran them. Every test_*.py on disk is
 # part of the health check, by construction.
+# test_doctor.py calls doctor.run() — including it here makes doctor run a
+# suite that runs doctor that runs the suite. Auto-discovery introduced that
+# recursion and it showed up as a >120s "red" that was really an infinite
+# regress. Self-referential suites are excluded by name, not by luck.
+SELF_REFERENTIAL = {"test_doctor.py"}
+
 TEST_FILES = sorted(
     f for f in os.listdir(SKILL_DIR)
-    if f.startswith("test_") and f.endswith(".py")
+    if f.startswith("test_") and f.endswith(".py") and f not in SELF_REFERENTIAL
 )
 
 
@@ -221,9 +227,14 @@ def _check_nidra() -> Dict[str, Any]:
     return {"connected": True, "total": total, "active": active, "by_status": statuses}
 
 
-def run() -> Dict[str, Any]:
+def run(run_tests: bool = True) -> Dict[str, Any]:
+    """run_tests=False returns the same envelope without executing 26 suites.
+    test_doctor.py calls run() three times to check STRUCTURE; making it
+    actually run every suite each time turned one test file into a
+    multi-minute job (and, with auto-discovery, a recursion)."""
     prereqs = _check_prereqs()
-    tests = _check_tests()
+    tests = _check_tests() if run_tests else {
+        "all_pass": True, "files": [], "skipped": "run_tests=False"}
     hook = _check_hook()
     heartbeat = _check_heartbeat()
     stillness = _check_stillness()
