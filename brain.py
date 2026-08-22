@@ -252,6 +252,7 @@ def state() -> Dict[str, Any]:
         "stilling": rep["stilling"],
         "sangama": rep["sangama"],
         "digest": done_digest(),
+        "projects": _projects_rollup(),
         "activity": _recent_events(),
     }
     try:
@@ -260,6 +261,14 @@ def state() -> Dict[str, Any]:
     except Exception:
         d["insights"] = {"headline": "", "projects": [], "needs_you": [], "moving": []}
     return d
+
+
+def _projects_rollup() -> List[Dict[str, Any]]:
+    try:
+        from projects import rollup
+        return [r for r in rollup() if r["messages"] or r["goals"]][:8]
+    except Exception:
+        return []
 
 
 def _recent_events(n: int = 10) -> List[Dict[str, str]]:
@@ -318,6 +327,8 @@ PAGE = """<!doctype html><meta charset="utf-8">
        background:radial-gradient(circle at 35% 35%, #f5d68a, #E3B140 55%, #6b4e12);
        animation:prana 2s ease-in-out infinite; margin:0 auto 8px; }
 </style>
+<div style="letter-spacing:.3em;font-size:11px;color:#6b6557;margin-top:26px">PROJECTS <span style="letter-spacing:0;color:#4a463c">— where your attention actually went, and what is open in each</span></div>
+<div id="projects" style="font-size:13px;margin-top:8px"></div>
 <div style="letter-spacing:.3em;font-size:11px;color:#6b6557;margin-top:22px">GOALS</div>
 <div id="goals"></div>
 <div style="letter-spacing:.3em;font-size:11px;color:#6b6557;margin-top:22px">FLEET</div>
@@ -410,6 +421,18 @@ async function tick(){
      <button class="b j-fix" data-n="${i+1}" style="padding:1px 8px;font-size:11px" title="Opens ONE Terminal agent scoped to only this memory: it checks reality, fixes the .md, and re-grades.">fix this</button>
      ${m.fails.map(f=>`<div style="margin-left:18px;color:${DIM};font-size:12px">FAILS ${esc(f)}</div>`).join("")}</div>`
   ).join("") || `<div style="color:${DIM}">clean — nothing failed verification</div>`;
+  const tot = (s.projects||[]).reduce((a,p)=>a+p.messages,0)||1;
+  document.getElementById("projects").innerHTML = (s.projects||[]).map(p=>{
+    const share = 100*p.messages/tot;
+    return `<div style="margin:7px 0">
+      <div style="display:flex;gap:12px;align-items:center">
+        <span style="width:140px;color:${G}">${esc(p.project)}</span>
+        ${bar(share,140)}
+        <span style="color:${DIM};width:150px">${share.toFixed(0)}% · ${p.messages} msgs · ${p.sessions} chats</span>
+        <span style="color:${DIM}">${p.facts} facts${p.repair_items?` · <span style="color:${G}">${p.repair_items} to fix</span>`:""}</span>
+      </div>
+      ${(p.open_tasks||[]).map(t=>`<div style="margin-left:152px;font-size:11.5px;color:${DIM}">↳ ${esc(t.task)}</div>`).join("")}
+    </div>`}).join("") || `<div style="color:${DIM}">no project data yet</div>`;
   document.getElementById("activity").innerHTML = (s.activity||[]).map(a=>
     `<div>${esc(a.ts)} · ${esc(a.type)} · ${esc(a.what)}</div>`).join("") ||
     "<div>no recorded activity yet</div>";
