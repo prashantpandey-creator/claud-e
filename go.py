@@ -58,11 +58,20 @@ def _repair_kickoff(meditation_dir: str, store_dir: str = STORE_DIR,
     prompt = (
         "Repair these graded memories — their evidence failed verification:\n"
         "%s\n"
-        "For each: read the failing claim, check the world, then either fix the "
-        "source .md memory file (memory right but stale) or supersede/correct it "
-        "(world moved on). When done run `meditate grade` — a clean re-check "
-        "clears the queue and counts as a REPAIR. Do not push; commit local if "
-        "you touch a repo." % detail)
+        "FIRST, for each failing claim, run ONE cheap check: `ls` the path, or "
+        "`ls` the memory dir for the wikilink target. If it EXISTS, the grader "
+        "is wrong — do not edit the memory, do not investigate further; just "
+        "note it and move on. Measured 2026-08-23: 28 of 30 queue items were "
+        "the grader inventing claims, and an agent that investigated each one "
+        "burned ~44k tokens producing no change. The cheap check costs ~200.\n"
+        "Only for claims that are genuinely gone: fix the source .md (say the "
+        "thing was removed — phrasing it as an absence is both true and clears "
+        "the claim) or supersede the memory. When done run `meditate grade` — "
+        "a clean re-check clears the queue and counts as a REPAIR. Do not push; "
+        "commit local if you touch a repo.\n"
+        "If MOST items turn out to be grader error, stop and say so: the fix "
+        "belongs in nidra/adapters/memory_files.py with a test, not in the "
+        "memory files." % detail)
     name = "repair-" + (items[0]["id"][-6:] if select else "queue")
     return {"cwd": os.path.expanduser("~"), "prompt": prompt, "name": name}
 
