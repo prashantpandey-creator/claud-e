@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.9.1 — 2026-08-22
+
+Install = consent. The owner: maximum things should run silently — whoever
+installs a memory manager wants memory managed.
+
+### Changed
+- **The heartbeat now does everything safe-and-reversible, silently**: grade
+  + sleep + index + queues (as before) + archive empty sessions (--apply is
+  reversible by design) + regenerate the dashboard HTML. Observed live: one
+  beat ran all three stages. An integration test fails if a stage ever falls
+  off the plist.
+- **Intuitive verbs** — the typed surface answers intent, not module names:
+  `meditate what|search|find|recall ...` = ask; `meditate fix|repair` =
+  launch the repair agent (new --repair-only path); `go|run|work|act` = go;
+  `status|state|where` = status. An unknown word prints the four-line
+  product, not an error.
+
+The remaining human verbs are exactly the intention gates: `go`/`fix`
+(spending agents), distill (judgment), push (production). Everything else
+is the tool doing its job unasked.
+
+
 ## 0.9.0 — 2026-08-22
 
 Two verbs. The owner was right to be unsatisfied: 15 subcommands is a menu,

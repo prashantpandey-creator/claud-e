@@ -45,7 +45,7 @@ def _repair_kickoff(meditation_dir: str) -> Optional[Dict[str, str]]:
     return {"cwd": os.path.expanduser("~"), "prompt": prompt, "name": "repair-queue"}
 
 
-def run(n: Optional[int] = None,
+def run(n: Optional[int] = None, repair_only: bool = False,
         meditation_dir: str = MEDITATION_DIR, store_dir: str = STORE_DIR,
         goals_dir: Optional[str] = None, history_path: Optional[str] = None,
         ledger_path: Optional[str] = None,
@@ -81,6 +81,8 @@ def run(n: Optional[int] = None,
         except Exception:
             pass
 
+    if repair_only:
+        budget = 0
     if budget > 0:
         kw = {}
         if goals_dir:
@@ -116,9 +118,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="Move everything forward")
     ap.add_argument("n", nargs="?", type=int, default=None,
                     help="optional cap on launches (0 = dry-run)")
+    ap.add_argument("--repair-only", action="store_true",
+                    help="only the repair agent (this is `meditate fix`)")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
-    data = run(n=args.n)
+    data = run(n=args.n, repair_only=args.repair_only)
     env = {"tool_name": "meditate_go", "success": True, "data": data,
            "metadata": {"dry_run": args.n == 0}, "errors": []}
     if args.json:

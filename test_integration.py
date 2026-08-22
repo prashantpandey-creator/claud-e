@@ -124,6 +124,15 @@ def test_edge_heartbeat_fresh():
     assert age_h < 12.5, f"last heartbeat {age_h:.1f}h ago (interval 6h)"
 
 
+def test_edge_heartbeat_runs_all_silent_stages():
+    """Install = consent: grade + archive-empties + dashboard all ride the
+    heartbeat; a plist missing a stage silently re-manualizes the product."""
+    plist = os.path.expanduser("~/Library/LaunchAgents/com.meditate.grade.plist")
+    body = open(plist).read()
+    for stage in ("nidra_bridge.py", "archive.py", "dashboard.py"):
+        assert stage in body, f"heartbeat missing silent stage: {stage}"
+
+
 def test_edge_hook_installed_matches_repo():
     """the injected surface must be the version the repo tests."""
     with open(os.path.join(SKILL, "hooks", "meditate-hook.sh"), "rb") as a, \

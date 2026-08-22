@@ -51,7 +51,7 @@ case "${1:-}" in
     shift
     python3 "$DIR/formation.py" "$@"
     ;;
-  ask)
+  ask|what|search|find|recall)
     shift
     python3 "$DIR/ask.py" "$@"
     ;;
@@ -90,16 +90,25 @@ case "${1:-}" in
   "")
     python3 "$DIR/status.py"
     ;;
-  go)
+  go|run|work|act)
     shift
     python3 "$DIR/go.py" "$@"
     ;;
-  status)
+  fix|repair)
+    shift
+    python3 "$DIR/go.py" --repair-only "$@"
+    ;;
+  status|state|where)
     shift
     python3 "$DIR/status.py" "$@"
     ;;
   *)
-    echo "unknown: $1 — try: meditate help" >&2
+    echo "don't know '$1'. The product is:" >&2
+    echo "  meditate            where am I + the one next action" >&2
+    echo "  meditate go         move everything forward" >&2
+    echo "  meditate ask \"...\"  question the graded memory" >&2
+    echo "  meditate fix        launch the repair agent" >&2
+    echo "everything else runs itself on the heartbeat (meditate help for plumbing)" >&2
     exit 1
     ;;
 esac

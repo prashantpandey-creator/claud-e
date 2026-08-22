@@ -203,7 +203,7 @@ fi
 
 # ---- 5b. Heartbeat — grade runs every 6h without being asked
 echo
-echo "  Installing heartbeat (launchd, every 6h)..."
+echo "  Installing heartbeat (grade + archive empties + dashboard, every 6h)..."
 PLIST="$HOME/Library/LaunchAgents/com.meditate.grade.plist"
 cat > "$PLIST" <<PLIST_EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -212,7 +212,7 @@ cat > "$PLIST" <<PLIST_EOF
   <key>Label</key><string>com.meditate.grade</string>
   <key>ProgramArguments</key>
   <array><string>/bin/bash</string><string>-lc</string>
-    <string>python3 "$SKILL_DIR/nidra_bridge.py" --sleep >> "$HOME/.claude/meditation/heartbeat.log" 2>&1</string></array>
+    <string>python3 "$SKILL_DIR/nidra_bridge.py" --sleep >> "$HOME/.claude/meditation/heartbeat.log" 2>&1; python3 "$SKILL_DIR/archive.py" --apply >> "$HOME/.claude/meditation/heartbeat.log" 2>&1; python3 "$SKILL_DIR/dashboard.py" >> "$HOME/.claude/meditation/heartbeat.log" 2>&1</string></array>
   <key>StartInterval</key><integer>21600</integer>
   <key>RunAtLoad</key><false/>
 </dict></plist>
