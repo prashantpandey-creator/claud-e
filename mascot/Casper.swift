@@ -501,7 +501,7 @@ final class App: NSObject, NSApplicationDelegate {
 
             if self.mouth.speaking                    { self.ghost.mood = .speaking }
             else if self.busy                         { self.ghost.mood = .thinking }
-            else if self.ear.running && (self.armed || self.ear.level > 0.05) {
+            else if self.ear.running && (self.armed || self.ear.level > self.ear.noiseFloor * 2.2) {
                 self.ghost.mood = .listening }
             else if !self.yesBtn.isHidden             { self.ghost.mood = .alert }
             else                                      { self.ghost.mood = .idle }
@@ -592,9 +592,19 @@ final class App: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Click him and he takes the next thing you say, no name needed.
+    /// Click him and he stays open until you click again.
+    ///
+    /// This was a 12-second window, which meant racing a timer you cannot see
+    /// — click, think, start talking, and it has already closed on you. A
+    /// toggle you can look at is the difference between talking to him and
+    /// performing for him.
     func armForOneTurn() {
         if mouth.speaking { mouth.shutUp(); ear.muted = false; return }
+        if armed {
+            armed = false
+            bubble.stringValue = "Not listening. Click me, or just say my name."
+            return
+        }
         guard ear.running else {
             // A companion that is silently deaf is worse than one that says so
             // and shows you the switch. macOS only ever asks once, so being
@@ -615,14 +625,16 @@ final class App: NSObject, NSApplicationDelegate {
             return
         }
         armed = true
-        bubble.stringValue = "Go ahead, I'm listening."
-        DispatchQueue.main.asyncAfter(deadline: .now() + 12) { self.armed = false }
+        bubble.stringValue = "Listening. Say what you like \u{2014} click me to stop."
     }
 
     /// One finished utterance. Decide whether it was aimed at him at all.
     func heard(_ raw: String) {
-        guard let question = addressedQuestion(raw, armed: armed) else { return }
-        armed = false
+        guard let question = addressedQuestion(raw, armed: armed) else {
+            // Not a black box: show that he heard it and let it go.
+            bubble.stringValue = "(heard, not for me)"
+            return
+        }
         busy = true
         bubble.stringValue = "\u{201C}" + question + "\u{201D}"
         DispatchQueue.global().async {
@@ -642,6 +654,9 @@ final class App: NSObject, NSApplicationDelegate {
         parts.append("mic=" + String(AVCaptureDevice.authorizationStatus(for: .audio).rawValue))
         parts.append("speech=" + String(SFSpeechRecognizer.authorizationStatus().rawValue))
         parts.append(String(format: "level=%.3f", Double(ear.level)))
+        parts.append(String(format: "floor=%.3f", Double(ear.noiseFloor)))
+        parts.append(String(format: "quiet=%.1f", ear.quietFor))
+        parts.append("heard=" + String(ear.heardSoFar.prefix(40)))
         parts.append("speaking=" + (mouth.speaking ? "yes" : "no"))
         parts.append(String(format: "mouth=%.3f", Double(mouth.drive)))
         parts.append("armed=" + (armed ? "yes" : "no"))

@@ -43,8 +43,17 @@ final class Ear: NSObject {
     private var partial = ""
     private var lastLoudAt = Date()
     private var silenceTimer: Timer?
-    private let speechFloor: CGFloat = 0.055     // below this counts as silence
     private let endOfTurnGap: TimeInterval = 1.1 // quiet this long = your turn ended
+
+    /// The room's own noise, learned continuously. A FIXED threshold was the
+    /// bug: 0.055 was picked by eye, and this room's ambient measured
+    /// 0.033-0.060 — so silence itself kept counting as speech, lastLoudAt
+    /// never went stale, and he could never tell you had stopped talking.
+    private(set) var noiseFloor: CGFloat = 0.02
+    /// Seconds since he last heard something above the floor. Readable so the
+    /// end-of-turn decision can be watched from outside instead of guessed at.
+    var quietFor: TimeInterval { Date().timeIntervalSince(lastLoudAt) }
+    var heardSoFar: String { partial }
 
     /// Ask for both consents up front. Returns on the main queue.
     static func requestAccess(_ done: @escaping (Bool, String) -> Void) {
@@ -68,26 +77,12 @@ final class Ear: NSObject {
         guard let rec = recognizer, rec.isAvailable else {
             lastError = "recogniser unavailable"; return
         }
-        let req = SFSpeechAudioBufferRecognitionRequest()
-        req.shouldReportPartialResults = true
-        // On-device only. If the machine cannot do it, stay deaf rather than
-        // quietly uploading the owner's voice.
-        if rec.supportsOnDeviceRecognition {
-            req.requiresOnDeviceRecognition = true
-        } else {
+        guard rec.supportsOnDeviceRecognition else {
+            // Stay deaf rather than quietly uploading the owner's voice.
             lastError = "on-device recognition unavailable — staying deaf"
             return
         }
-        request = req
-
-        task = rec.recognitionTask(with: req) { [weak self] result, error in
-            guard let self = self else { return }
-            if let r = result {
-                self.partial = r.bestTranscription.formattedString
-                self.onPartial?(self.partial)
-            }
-            if error != nil { self.lastError = "\(error!)" }
-        }
+        beginTurn(rec)
 
         let input = engine.inputNode
         let fmt = input.outputFormat(forBus: 0)
@@ -99,7 +94,14 @@ final class Ear: NSObject {
                 // fast attack, slow release — reads as a voice, not a meter
                 let k: CGFloat = rms > self.level ? 0.55 : 0.12
                 self.level += (rms - self.level) * k
-                if rms > self.speechFloor { self.lastLoudAt = Date() }
+
+                // Learn the room: fall to quiet quickly, rise very slowly, so
+                // a passing voice cannot drag the floor up and deafen him.
+                let fk: CGFloat = rms < self.noiseFloor ? 0.20 : 0.0008
+                self.noiseFloor += (rms - self.noiseFloor) * fk
+
+                let speechAt = max(0.018, self.noiseFloor * 2.2 + 0.012)
+                if rms > speechAt { self.lastLoudAt = Date() }
             }
             guard !self.muted else { return }
             self.request?.append(buf)
@@ -116,14 +118,41 @@ final class Ear: NSObject {
         }
     }
 
+    /// A fresh recognition task, i.e. a fresh transcript.
+    ///
+    /// One long-lived task was the second bug: bestTranscription is CUMULATIVE
+    /// for the life of a task, so after the first utterance the same words came
+    /// straight back on the next callback, `partial` refilled itself, and no
+    /// second thing you said was ever processed as new.
+    private func beginTurn(_ rec: SFSpeechRecognizer) {
+        task?.cancel()
+        request?.endAudio()
+        let req = SFSpeechAudioBufferRecognitionRequest()
+        req.shouldReportPartialResults = true
+        req.requiresOnDeviceRecognition = true
+        request = req
+        partial = ""
+        task = rec.recognitionTask(with: req) { [weak self] result, error in
+            guard let self = self else { return }
+            if let r = result {
+                self.partial = r.bestTranscription.formattedString
+                self.onPartial?(self.partial)
+            }
+            if let e = error as NSError?, e.code != 301 {   // 301 = we cancelled
+                self.lastError = "\(e.localizedDescription)"
+            }
+        }
+    }
+
     /// A turn ends when YOU go quiet, not when the recogniser decides. Waiting
     /// for isFinal makes him feel deaf for seconds after you stop.
     private func checkEndOfTurn() {
         guard running, !muted else { return }
         let text = partial.trimmingCharacters(in: .whitespacesAndNewlines)
         guard text.count >= 2 else { return }
-        guard Date().timeIntervalSince(lastLoudAt) > endOfTurnGap else { return }
+        guard quietFor > endOfTurnGap else { return }
         partial = ""
+        if let rec = recognizer { beginTurn(rec) }      // fresh transcript next turn
         onUtterance?(text)
     }
 

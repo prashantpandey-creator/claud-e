@@ -4,6 +4,7 @@
 // a target has more than one source file. Everything else is types.
 
 import Cocoa
+import Speech
 
 // `casper --say "text"` speaks and prints the amplitude envelope it drove the
 // mouth with. This is the proof that the animation follows the audio: if the
@@ -11,6 +12,31 @@ import Cocoa
 // `casper --hear "casper what should I work on"` runs a spoken utterance
 // through the REAL chain — addressing rule, advisor, mouth — without needing
 // a microphone. It is how the companion's wiring gets checked end to end.
+// `casper --transcribe <audiofile>` proves on-device recognition works on THIS
+// machine, without needing anyone to talk. It runs inside the bundle because a
+// bare binary cannot request speech authorisation at all — it aborts.
+if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--transcribe" {
+    _ = NSApplication.shared
+    guard let rec = SFSpeechRecognizer(locale: Locale(identifier: "en-US")) else {
+        print("no recogniser"); exit(1)
+    }
+    print("available=\(rec.isAvailable) onDevice=\(rec.supportsOnDeviceRecognition)")
+    let req = SFSpeechURLRecognitionRequest(
+        url: URL(fileURLWithPath: CommandLine.arguments[2]))
+    req.requiresOnDeviceRecognition = true
+    rec.recognitionTask(with: req) { result, error in
+        if let e = error { print("ERROR: \(e.localizedDescription)"); exit(1) }
+        if let r = result, r.isFinal {
+            print("transcript: \(r.bestTranscription.formattedString)")
+            exit(0)
+        }
+    }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 40) {
+        print("TIMED OUT — recogniser never returned"); exit(1)
+    }
+    RunLoop.main.run()
+}
+
 if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--hear" {
     _ = NSApplication.shared
     let said = CommandLine.arguments[2]
