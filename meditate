@@ -102,6 +102,22 @@ case "${1:-}" in
     shift
     python3 "$DIR/brain.py" "$@"
     ;;
+  say|talk|hey)
+    shift
+    python3 "$DIR/converse.py" "$@"
+    ;;
+  voice|casper|ghost|brief)
+    shift
+    python3 "$DIR/voice.py" "$@"
+    ;;
+  projects|proj|where)
+    shift
+    python3 "$DIR/projects.py" "$@"
+    ;;
+  cadence|tempo|rhythm)
+    shift
+    python3 "$DIR/cadence.py" "$@"
+    ;;
   progress|report-progress)
     shift
     python3 "$DIR/beacon.py" "$@"
@@ -132,6 +148,7 @@ case "${1:-}" in
     echo "  meditate go         move everything forward" >&2
     echo "  meditate ask \"...\"  question the graded memory" >&2
     echo "  meditate fix        repair knowledge (--list, or fix <n> for one item)" >&2
+    echo "  meditate say \"...\"  talk to it: ask about a project, memory, or status" >&2
     echo "  meditate voice      Casper: the one thing worth saying + if now is the moment" >&2
     echo "  meditate projects   where your attention went, per project + open tasks" >&2
     echo "  meditate fleet      live progress of dispatched agents" >&2
