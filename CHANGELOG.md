@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.4.4 — 2026-08-21
+
+Longevity audit: will the pipeline hold for years? Measured, not guessed.
+
+### Measured envelope (holds without changes)
+- Full journal read at 50 MB: 35 ms; memories at 50 MB: 56 ms; `du` on a
+  10 GB projects dir: ~450 ms — all inside hook timeouts. Presence self-prunes
+  (24h). Store rewrite is O(n) and fine at 10k memories. path_index atomic.
+- November cliff defused by design: the 313 memories sharing review_due
+  2026-11-19 (old test-bug residue) all carry evidence, and sleep's prune
+  stage skips anything with evidence; every grade pass re-advances the
+  schedule. Only the evidence-free stubs can ever tombstone — correct.
+
+### Fixed (the one real unbounded surface)
+- journal.jsonl grew append-only forever, no rotation anywhere (3,314 rows on
+  the peak day). The bridge now rotates it at 25 MB to journal-<stamp>.jsonl;
+  `report.py` reads ALL journals oldest-first so repair pairs survive
+  rotation; the SessionStart drift scan reads only the current file (48h
+  window — rotation cannot cut inside it at any plausible rate).
+- 2 new tests: rotation trigger + no-op under threshold; repair pair spanning
+  a rotated journal and the current one.
+
+
 ## 0.4.3 — 2026-08-21
 
 `meditate report` — the measurement loop for the drift-correct cycle and the

@@ -310,7 +310,7 @@ with `meditate metrics --json` and `meditate doctor --json`.
 ```
 ~/.claude/skills/meditate/
 ├── README.md              this file
-├── VERSION                0.4.3
+├── VERSION                0.4.4
 ├── CHANGELOG.md           history
 ├── SKILL.md               /meditate slash command definition
 ├── INTERNALS.md           developer docs (vritti/antaraya/nirodha formulas)

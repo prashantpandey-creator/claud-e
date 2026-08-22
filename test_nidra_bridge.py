@@ -97,6 +97,24 @@ def test_memory_dirs_missing_root():
     assert nidra_bridge._memory_dirs("/nonexistent/path/xyz") == []
 
 
+def test_journal_rotation():
+    """Unbounded journal is the one measured long-run defect: 3,314 rows/day
+    at current cadence with no rotation anywhere. The bridge rotates at the
+    threshold; report globs the rotated files so history is never lost."""
+    with tempfile.TemporaryDirectory() as td:
+        sd = os.path.join(td, "store")
+        os.makedirs(sd)
+        jp = os.path.join(sd, "journal.jsonl")
+        with open(jp, "w") as f:
+            f.write(json.dumps({"event": "x"}) + "\n")
+        nidra_bridge._rotate_journal(sd, max_bytes=1)      # force rotation
+        assert not os.path.exists(jp), "journal not rotated"
+        rotated = [f for f in os.listdir(sd) if f.startswith("journal-")]
+        assert len(rotated) == 1, rotated
+        nidra_bridge._rotate_journal(sd, max_bytes=10**9)  # under threshold: no-op
+        assert len([f for f in os.listdir(sd) if f.startswith("journal-")]) == 1
+
+
 def test_path_index_built():
     """The bridge must emit path_index.json — coordination.py serves facts from it."""
     with tempfile.TemporaryDirectory() as td:

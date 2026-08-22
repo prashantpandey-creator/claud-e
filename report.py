@@ -52,12 +52,23 @@ def _ts(s: str) -> Optional[float]:
         return None
 
 
+def _journals(store_dir: str) -> List[str]:
+    """All journal files, oldest first — rotated (journal-<stamp>) then current.
+    Alphabetical gives chronology: 'journal-' sorts before 'journal.'."""
+    try:
+        names = sorted(f for f in os.listdir(store_dir)
+                       if f.startswith("journal") and f.endswith(".jsonl"))
+    except OSError:
+        return []
+    return [os.path.join(store_dir, f) for f in names]
+
+
 def _drift(store_dir: str) -> Dict[str, Any]:
-    """Caught / repaired / time-to-repair from the journal; open from the store."""
+    """Caught / repaired / time-to-repair from ALL journals; open from the store."""
     down_at: Dict[str, float] = {}
     caught = repaired = 0
     repair_hours: List[float] = []
-    for e in _jsonl(os.path.join(store_dir, "journal.jsonl")):
+    for e in (row for jp in _journals(store_dir) for row in _jsonl(jp)):
         if e.get("event") != "sleep.regraded":
             continue
         d = e.get("detail", "")

@@ -118,6 +118,23 @@ def test_sangama_event_counts():
         assert d["sangama"]["collisions_warned"] == 1
 
 
+def test_repair_pairs_across_rotated_journals():
+    """A downgrade in a rotated journal + repair in the current one must pair."""
+    with tempfile.TemporaryDirectory() as t:
+        store, arch, coord, med = _world(t)
+        with open(os.path.join(store, "journal-20260801-000000.jsonl"), "w") as f:
+            f.write(json.dumps({"event": "sleep.regraded", "id": "mem_r",
+                "detail": "machine_checked -> unverified (x)",
+                "ts": "2026-08-01T00:00:00+00:00"}) + "\n")
+        with open(os.path.join(store, "journal.jsonl"), "w") as f:
+            f.write(json.dumps({"event": "sleep.regraded", "id": "mem_r",
+                "detail": "unverified -> machine_checked (y)",
+                "ts": "2026-08-02T00:00:00+00:00"}) + "\n")
+        d = rp.compute(store_dir=store, archive_root=arch,
+                       coord_root=coord, meditation_dir=med)
+        assert d["drift"]["repaired"] == 1, d["drift"]
+
+
 def test_cli_envelope():
     r = subprocess.run([sys.executable, os.path.join(SKILL, "report.py"), "--json"],
                        capture_output=True, text=True, timeout=30)

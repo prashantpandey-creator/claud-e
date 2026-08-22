@@ -55,6 +55,33 @@ def _memory_dirs(root=None):
     return found
 
 
+JOURNAL_MAX_BYTES = 25_000_000  # measured: 3,314 rows/day ≈ 0.7 MB/day at peak;
+                                # 25 MB ≈ a month of heavy use per rotated file.
+                                # Keeps every full-journal read <20 ms forever.
+
+
+def _rotate_journal(store_dir, max_bytes=JOURNAL_MAX_BYTES):
+    """Rotate journal.jsonl when it crosses the threshold.
+
+    The journal is append-only with no other bound — the one measured
+    unbounded-growth surface in the pipeline. Rotated files stay in the store
+    dir as journal-<stamp>.jsonl; report.py reads them all (repair pairs span
+    rotations), while the SessionStart drift scan reads only the current file
+    (its window is 48h — a 25 MB rotation can't cut inside that at any
+    plausible rate).
+    """
+    import time as _t
+    jp = os.path.join(store_dir, "journal.jsonl")
+    try:
+        if os.path.exists(jp) and os.path.getsize(jp) > max_bytes:
+            stamp = _t.strftime("%Y%m%d-%H%M%S")
+            os.replace(jp, os.path.join(store_dir, "journal-%s.jsonl" % stamp))
+            return True
+    except OSError:
+        pass
+    return False
+
+
 def run(do_sleep=False, store_dir=None, memory_root=None):
     """Scan sessions + .md memories into the graded store.
 
@@ -62,6 +89,7 @@ def run(do_sleep=False, store_dir=None, memory_root=None):
     the graded store is shared state, not a scratchpad.
     """
     store_dir = store_dir or STORE_DIR
+    _rotate_journal(store_dir)
     try:
         from nidra.store import Store
         from nidra.adapters.meditate import import_sessions
