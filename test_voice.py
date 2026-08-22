@@ -35,34 +35,56 @@ def _coord(tmp, files_age_s=None):
 
 # ---- interruptibility: measured, never guessed --------------------------
 
-def test_flow_when_editing_seconds_ago():
+# The timing layer now measures the PERSON — keyboard/mouse idle and the app
+# in front — instead of guessing from session file timestamps. Signals are
+# injected here so the tests do not depend on whether someone is at this Mac
+# while they run.
+
+def test_flow_when_hands_are_moving():
+    r = vc.interruptibility(sig={"idle_s": 2, "frontmost": "Terminal"})
+    assert r["state"] == "flow", r
+    assert r["interrupt_ok"] is False, "never break flow"
+    assert "Terminal" in r["why"], "should say WHERE they are working"
+
+
+def test_pause_when_hands_have_been_still_a_moment():
+    r = vc.interruptibility(sig={"idle_s": 45, "frontmost": "Terminal"})
+    assert r["state"] == "pause" and r["interrupt_ok"] is True, r
+
+
+def test_settled_when_stepped_back_but_still_around():
+    r = vc.interruptibility(sig={"idle_s": 400, "frontmost": "Terminal"})
+    assert r["state"] == "settled" and r["interrupt_ok"] is True, r
+
+
+def test_away_when_nobody_has_touched_the_machine():
+    r = vc.interruptibility(sig={"idle_s": 1800, "frontmost": "Terminal"})
+    assert r["state"] == "away" and r["interrupt_ok"] is False, r
+
+
+def test_never_speaks_into_a_meeting():
+    """The one hard no: another human already has the conversation."""
+    r = vc.interruptibility(sig={"idle_s": 1, "frontmost": "zoom.us",
+                                 "in_meeting": True})
+    assert r["state"] == "meeting", r
+    assert r["interrupt_ok"] is False, "must not talk over a call"
+
+
+def test_falls_back_to_file_activity_when_the_keyboard_cannot_be_read():
+    """No HID signal is not the same as nobody home — the old proxy still
+    answers, and says out loud that it is guessing."""
     with tempfile.TemporaryDirectory() as t:
         cd = _coord(t, files_age_s=20)
-        r = vc.interruptibility(coord_dir=cd)
+        r = vc.interruptibility(coord_dir=cd, sig={})
         assert r["state"] == "flow", r
-        assert r["interrupt_ok"] is False, "never break flow"
+        assert "guess" in r["basis"].lower(), "a guess must announce itself"
 
 
-def test_pause_when_live_but_idle_a_few_minutes():
-    with tempfile.TemporaryDirectory() as t:
-        cd = _coord(t, files_age_s=8 * 60)   # 8 min since last edit, still live
-        r = vc.interruptibility(coord_dir=cd)
-        assert r["state"] == "pause", r
-        assert r["interrupt_ok"] is True, "a pause is the moment"
-
-
-def test_away_when_no_live_session():
-    with tempfile.TemporaryDirectory() as t:
-        cd = _coord(t, files_age_s=None)     # nobody live
-        r = vc.interruptibility(coord_dir=cd)
-        assert r["state"] == "away", r
-        assert r["interrupt_ok"] is False, "don't talk to an empty room"
-
-
-def test_proxy_is_labeled_not_mood():
-    with tempfile.TemporaryDirectory() as t:
-        r = vc.interruptibility(coord_dir=_coord(t, files_age_s=20))
-        assert "proxy" in r["basis"].lower() or "activity" in r["basis"].lower()
+def test_basis_is_labeled_as_measurement_not_mood():
+    r = vc.interruptibility(sig={"idle_s": 2, "frontmost": "Terminal"})
+    b = r["basis"].lower()
+    assert "idle" in b or "measured" in b, r["basis"]
+    assert "mood" not in b, "it measures presence, and must not claim more"
 
 
 # ---- briefing: one thing, highest leverage ------------------------------

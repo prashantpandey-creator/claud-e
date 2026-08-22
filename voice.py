@@ -41,42 +41,90 @@ STORE_DIR = os.environ.get("MEDITATE_STORE_DIR") or os.path.join(
 COORD_DIR = os.environ.get("MEDITATE_COORD_DIR") or os.path.expanduser(
     "~/.claude/coordination/sessions")
 
-FLOW_S = 90          # edited within this = in flow, do NOT interrupt
-PAUSE_MAX_S = 1800   # live but idle up to 30 min = a pause worth speaking into
+FLOW_S = 25          # hands moving within this = in flow, do NOT interrupt
+PAUSE_MAX_S = 180    # hands still up to 3 min = a gap worth speaking into
+AWAY_S = 900         # no key or mouse for 15 min = not at the desk
 LIVE_S = 3600        # presence younger than this = the session still counts
 
 
-def interruptibility(coord_dir: str = COORD_DIR) -> Dict[str, Any]:
-    """flow | pause | away — from real activity, labeled as a proxy."""
+def interruptibility(coord_dir: str = COORD_DIR,
+                     sig: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """flow | pause | settled | meeting | away — and WHY.
+
+    This used to be inferred from how long ago a session touched a file, which
+    is a guess about a human made from the timestamps of a program. It told the
+    companion "no live session — no one to speak to" while two sessions were
+    running and someone was typing at the keyboard, and that one wrong guess
+    kept him silent all evening.
+
+    Now it asks the machine about the PERSON: seconds since the last key or
+    mouse event, and what app is in front. The file proxy is still here, but
+    only for when those signals cannot be read.
+    """
+    if sig is None:
+        try:
+            import attention
+            sig = attention.signals()
+        except Exception:
+            sig = {}
+    basis = "measured from keyboard and mouse idle, and the app in front"
+    idle = sig.get("idle_s")
+
+    # Someone else already has the conversation. Nothing is worth cutting in.
+    if sig.get("in_meeting"):
+        return {"state": "meeting", "interrupt_ok": False,
+                "since_s": int(idle) if idle is not None else None,
+                "basis": basis,
+                "why": "%s is in front — you're talking to someone"
+                       % sig.get("frontmost", "a meeting app")}
+
+    if idle is not None:
+        if idle > AWAY_S:
+            return {"state": "away", "interrupt_ok": False, "since_s": int(idle),
+                    "basis": basis,
+                    "why": "no key or mouse for %d min" % (idle // 60)}
+        if idle < FLOW_S:
+            where = sig.get("frontmost") or "something"
+            return {"state": "flow", "interrupt_ok": False, "since_s": int(idle),
+                    "basis": basis,
+                    "why": "typing in %s right now — never break that" % where}
+        if idle < PAUSE_MAX_S:
+            return {"state": "pause", "interrupt_ok": True, "since_s": int(idle),
+                    "basis": basis,
+                    "why": "hands still for %d s — a natural gap" % int(idle)}
+        return {"state": "settled", "interrupt_ok": True, "since_s": int(idle),
+                "basis": basis,
+                "why": "away from the keys %d min but still here" % (idle // 60)}
+
+    # ---- fallback: no HID signal, so guess from session file activity -------
     newest = None
     now = time.time()
     if os.path.isdir(coord_dir):
         for fn in os.listdir(coord_dir):
             if not fn.endswith(".json"):
                 continue
-            p = os.path.join(coord_dir, fn)
             try:
-                age = now - os.path.getmtime(p)
+                age = now - os.path.getmtime(os.path.join(coord_dir, fn))
             except OSError:
                 continue
             if age > LIVE_S:
                 continue
             if newest is None or age < newest:
                 newest = age
-    basis = "proxy for receptiveness, measured from edit activity (not mood)"
+    guess = "guessed from session file activity — the keyboard could not be read"
     if newest is None:
         return {"state": "away", "interrupt_ok": False,
-                "since_s": None, "basis": basis,
+                "since_s": None, "basis": guess,
                 "why": "no live session — no one to speak to"}
     if newest < FLOW_S:
         return {"state": "flow", "interrupt_ok": False, "since_s": int(newest),
-                "basis": basis, "why": "editing seconds ago — never break flow"}
+                "basis": guess, "why": "editing seconds ago — never break flow"}
     if newest < PAUSE_MAX_S:
         return {"state": "pause", "interrupt_ok": True, "since_s": int(newest),
-                "basis": basis,
+                "basis": guess,
                 "why": "live but idle %d min — a natural pause" % (newest // 60)}
     return {"state": "settled", "interrupt_ok": True, "since_s": int(newest),
-            "basis": basis, "why": "long idle — safe to surface something"}
+            "basis": guess, "why": "long idle — safe to surface something"}
 
 
 def _as_idea(statement: str) -> str:

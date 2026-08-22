@@ -24,6 +24,8 @@ if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--transcribe" {
     let req = SFSpeechURLRecognitionRequest(
         url: URL(fileURLWithPath: CommandLine.arguments[2]))
     req.requiresOnDeviceRecognition = true
+    req.contextualStrings = Ear.vocabulary
+    print("vocabulary=\(Ear.vocabulary.count) terms")
     rec.recognitionTask(with: req) { result, error in
         if let e = error { print("ERROR: \(e.localizedDescription)"); exit(1) }
         if let r = result, r.isFinal {

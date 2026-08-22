@@ -55,6 +55,26 @@ final class Ear: NSObject {
     var quietFor: TimeInterval { Date().timeIntervalSince(lastLoudAt) }
     var heardSoFar: String { partial }
 
+    /// The names this workspace is made of. A general recogniser has never
+    /// heard of them, and measured on this machine it got 4 of 14 words wrong
+    /// on a sentence made of them. Loaded once — this shells out to python.
+    static let vocabulary: [String] = {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        p.arguments = ["python3",
+                       (("~/.claude/skills/meditate/vocabulary.py" as NSString)
+                            .expandingTildeInPath)]
+        let pipe = Pipe()
+        p.standardOutput = pipe
+        p.standardError = Pipe()
+        do { try p.run() } catch { return [] }
+        let d = pipe.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        return (String(data: d, encoding: .utf8) ?? "")
+            .split(separator: "\n").map(String.init)
+            .filter { !$0.isEmpty }
+    }()
+
     /// Ask for both consents up front. Returns on the main queue.
     static func requestAccess(_ done: @escaping (Bool, String) -> Void) {
         SFSpeechRecognizer.requestAuthorization { speechAuth in
@@ -130,6 +150,7 @@ final class Ear: NSObject {
         let req = SFSpeechAudioBufferRecognitionRequest()
         req.shouldReportPartialResults = true
         req.requiresOnDeviceRecognition = true
+        req.contextualStrings = Ear.vocabulary      // your words, not the world's
         request = req
         partial = ""
         task = rec.recognitionTask(with: req) { [weak self] result, error in
