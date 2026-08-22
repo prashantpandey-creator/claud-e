@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Under the hardened runtime an app that does not DECLARE the microphone
+       is denied it silently — no prompt, no entry in System Settings, just
+       authorizationStatus == denied. The usage strings in Info.plist are not
+       enough on their own; they only supply the words for a prompt that never
+       gets asked. -->
+  <key>com.apple.security.device.audio-input</key>
+  <true/>
+</dict>
+</plist>

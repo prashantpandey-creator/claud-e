@@ -48,8 +48,7 @@ swiftc -O -o "$BIN" main.swift Casper.swift Voice.swift \
 # Ad-hoc signature: enough for TCC to pin consent to this bundle, so the user
 # is asked once instead of on every rebuild.
 codesign --force --sign - --identifier com.meditate.casper \
-         --options runtime "$APP" 2>/dev/null \
-  || codesign --force --sign - --identifier com.meditate.casper "$APP"
+         --options runtime --entitlements Casper.entitlements "$APP"
 
 cp "$BIN" ./casper          # bare binary stays, for --render and tests
 echo "built $APP  ($(stat -f%z "$BIN") bytes)"

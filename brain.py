@@ -26,6 +26,7 @@ from typing import Any, Dict, List, Optional
 SKILL_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SKILL_DIR)
 
+from coordination import last_file as _last_file
 from casper_page import CASPER_PAGE          # the mascot's face
 
 DEFAULT_PORT = 7711
@@ -241,9 +242,7 @@ def state() -> Dict[str, Any]:
                                     or _dispatch_label(s, fleet["dispatched"])
                                     or _derive_label(s.get("sid", ""), s.get("cwd", ""))
                                     or (os.path.basename(s.get("cwd", "").rstrip("/")) or "~"),
-                           "last_file": os.path.basename(
-                               sorted(s.get("files", {"": 0}),
-                                      key=s.get("files", {"": 0}).get)[-1])}
+                           "last_file": _last_file(s)}
                           for s in live_sessions()],
         "fleet": fleet["dispatched"],
         "repair": [{"id": m["id"], "statement": m["statement"][:140],

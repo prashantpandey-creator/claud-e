@@ -100,6 +100,22 @@ def events_path(coord_dir: str = COORD_DIR) -> str:
     return os.path.join(os.path.dirname(coord_dir.rstrip("/")), "events.jsonl")
 
 
+def last_file(session) -> Optional[str]:
+    """The most recently touched file in a presence record, or None.
+
+    A session that has registered but not yet edited anything has files={} —
+    and `{}` does not trigger a dict-default, so the inline expression this
+    replaces did sorted([])[-1] and raised IndexError. That is every
+    brand-new session. It was written out by hand in three places; two of
+    them crashed, and fixing them one at a time is how the third survived to
+    take down /api/state.
+    """
+    files = (session or {}).get("files") or {}
+    if not files:
+        return None
+    return os.path.basename(sorted(files, key=files.get)[-1])
+
+
 def load_presence(sid: str, coord_dir: str = COORD_DIR) -> Dict[str, Any]:
     try:
         with open(_pfile(sid, coord_dir)) as f:

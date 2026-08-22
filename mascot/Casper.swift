@@ -11,6 +11,7 @@
 
 import Cocoa
 import AVFoundation
+import Speech
 
 // MARK: - talking to meditate (the same commands the terminal runs)
 
@@ -128,6 +129,30 @@ final class Meditate {
         return result
     }
 }
+
+/// Was this said TO him, and if so what is the question?
+///
+/// Kept out of the view controller on purpose: this is the rule that decides
+/// whether a desktop companion speaks over your meeting or not, and a rule
+/// that can only be exercised by talking at a live window is a rule nobody
+/// checks. Returns nil when the utterance was not aimed at him.
+func addressedQuestion(_ raw: String, armed: Bool) -> String? {
+    let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    let lower = text.lowercased()
+    let names = ["hey casper", "ok casper", "okay casper", "casper", "jasper"]
+    var addressed = armed
+    var question = text
+    for n in names where lower.hasPrefix(n) {
+        addressed = true
+        question = String(text.dropFirst(n.count))
+            .trimmingCharacters(in: CharacterSet(charactersIn: " ,.?!"))
+        break
+    }
+    if !addressed && lower.contains("casper") { addressed = true }
+    guard addressed, question.count > 2 else { return nil }
+    return question
+}
+
 
 // MARK: - the ghost
 //
@@ -406,6 +431,7 @@ final class App: NSObject, NSApplicationDelegate {
     let ear = Ear()
     var armed = false          // click him = one turn without his name
     var earStatus = ""
+    var serverState = "?"
 
     var pendingAction = ""
     var lastSpoken = ""
@@ -537,7 +563,9 @@ final class App: NSObject, NSApplicationDelegate {
     /// brighten, speak it once, and OFFER the fix as a question.
     func check() {
         DispatchQueue.global().async {
-            guard let b = Meditate.brief() else { return }
+            let viaServer = Meditate.briefFromServer()
+            DispatchQueue.main.async { self.serverState = viaServer != nil ? "up" : "down" }
+            guard let b = viaServer ?? Meditate.brief() else { return }
             DispatchQueue.main.async {
                 let hasSomething = !b.headline.isEmpty && b.kind != "clear"
                 self.ghost.glow = hasSomething ? 1.0 : 0.25
@@ -593,18 +621,7 @@ final class App: NSObject, NSApplicationDelegate {
 
     /// One finished utterance. Decide whether it was aimed at him at all.
     func heard(_ raw: String) {
-        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        let lower = text.lowercased()
-        let names = ["casper", "hey casper", "ok casper", "jasper"]
-        var addressed = armed
-        var question = text
-        for n in names where lower.hasPrefix(n) {
-            addressed = true
-            question = String(text.dropFirst(n.count))
-                .trimmingCharacters(in: CharacterSet(charactersIn: " ,.?!"))
-        }
-        if !addressed && lower.contains("casper") { addressed = true }
-        guard addressed, question.count > 2 else { return }
+        guard let question = addressedQuestion(raw, armed: armed) else { return }
         armed = false
         busy = true
         bubble.stringValue = "\u{201C}" + question + "\u{201D}"
@@ -621,10 +638,26 @@ final class App: NSObject, NSApplicationDelegate {
         var parts: [String] = []
         parts.append("ear=" + (ear.running ? "on" : "off"))
         parts.append("status=" + (earStatus.isEmpty ? "?" : earStatus))
+        // raw TCC verdicts: 0 notDetermined, 1 restricted, 2 denied, 3 authorized
+        parts.append("mic=" + String(AVCaptureDevice.authorizationStatus(for: .audio).rawValue))
+        parts.append("speech=" + String(SFSpeechRecognizer.authorizationStatus().rawValue))
         parts.append(String(format: "level=%.3f", Double(ear.level)))
         parts.append("speaking=" + (mouth.speaking ? "yes" : "no"))
         parts.append(String(format: "mouth=%.3f", Double(mouth.drive)))
         parts.append("armed=" + (armed ? "yes" : "no"))
+        // Which connections are actually live, checked at runtime rather than
+        // by reading the source and calling it wired.
+        var wired: [String] = []
+        if ear.onPartial   != nil { wired.append("ear>bubble") }
+        if ear.onUtterance != nil { wired.append("ear>brain") }
+        if mouth.onFinish  != nil { wired.append("mouth>unmute") }
+        if ghost.onClick   != nil { wired.append("click>listen") }
+        if ghost.hearLevel == ear.level { wired.append("mic>face") }
+        parts.append("wired=" + wired.joined(separator: ","))
+        // Cached from the 20s poll. Asking the server here would block the
+        // main thread for up to 8s every 2s — a diagnostic that freezes the
+        // thing it is diagnosing is not a diagnostic.
+        parts.append("server=" + serverState)
         parts.append("said=" + String(bubble.stringValue.prefix(70)))
         let line: String = parts.joined(separator: "  ")
         try? line.write(toFile: "/tmp/casper-status.txt", atomically: true,

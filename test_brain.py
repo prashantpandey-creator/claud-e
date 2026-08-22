@@ -207,6 +207,18 @@ def test_state_is_json_serializable():
     json.dumps(br.state())
 
 
+def test_state_survives_a_session_that_has_touched_no_files():
+    """/api/state returned HTTP 500 for the whole time any registered session
+    had files={} — the third hand-written copy of sorted([])[-1]."""
+    d = br.state()
+    assert "briefing" in d and "timing" in d
+    # and the helper itself, since that is the thing three sites duplicated
+    from coordination import last_file
+    assert last_file({"files": {}}) is None
+    assert last_file(None) is None
+    assert last_file({"files": {"/a/late.py": 9, "/a/early.py": 1}}) == "late.py"
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

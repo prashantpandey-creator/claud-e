@@ -119,17 +119,7 @@ def run(go: int = 0, goals_dir: Optional[str] = None,
             "cooling": cooling, "launched": launched, "sent": sent}
 
 
-def _last_file(session):
-    """The most recently touched file, or None.
-
-    A session that has registered but not yet edited anything has files={} —
-    and `{}` does not trigger a dict-default, so the old inline expression did
-    sorted([])[-1] and raised IndexError. That is every brand-new session.
-    """
-    files = (session or {}).get("files") or {}
-    if not files:
-        return None
-    return os.path.basename(sorted(files, key=files.get)[-1])
+from coordination import last_file as _last_file      # one definition, shared
 
 
 def fleet_status(goals_dir=None, ledger_path=None, history_path=None):

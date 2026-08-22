@@ -8,6 +8,36 @@ import Cocoa
 // `casper --say "text"` speaks and prints the amplitude envelope it drove the
 // mouth with. This is the proof that the animation follows the audio: if the
 // envelope is flat or empty, the mouth is lying.
+// `casper --hear "casper what should I work on"` runs a spoken utterance
+// through the REAL chain — addressing rule, advisor, mouth — without needing
+// a microphone. It is how the companion's wiring gets checked end to end.
+if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--hear" {
+    _ = NSApplication.shared
+    let said = CommandLine.arguments[2]
+    guard let q = addressedQuestion(said, armed: false) else {
+        print("NOT ADDRESSED -> stays quiet (correct for overheard talk)")
+        exit(0)
+    }
+    print("heard:     \(said)")
+    print("question:  \(q)")
+    let answer = Meditate.advise(q)
+    print("answer:    \(answer.isEmpty ? "(empty)" : answer)")
+    guard !answer.isEmpty else { print("CHAIN BROKE: advisor returned nothing"); exit(1) }
+    let m = Mouth()
+    var spoke = false
+    m.onStart = { spoke = true }
+    m.say(answer)
+    let t0 = Date()
+    Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { tm in
+        if (spoke && !m.speaking) || Date().timeIntervalSince(t0) > 25 {
+            tm.invalidate()
+            print("spoke:     \(spoke ? "yes" : "NO — mouth never started")")
+            exit(spoke ? 0 : 1)
+        }
+    }
+    RunLoop.main.run()
+}
+
 if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--say" {
     _ = NSApplication.shared
     let m = Mouth()
