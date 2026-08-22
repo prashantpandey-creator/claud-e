@@ -70,14 +70,18 @@ def _envelope(tool, success, data, errors=None):
 
 # ---- presence ---------------------------------------------------------------
 
-def _log_event(coord_dir: str, etype: str, sid: str, path: str) -> None:
+def _log_event(coord_dir: str, etype: str, sid: str, path: str,
+               mem_id: str = "") -> None:
     """Durable one-line record per serve/warn — the efficacy report reads this.
     Presence files self-prune in 24h; without this log the wins are unmeasurable."""
     try:
         root = os.path.dirname(coord_dir.rstrip("/")) or coord_dir
         with open(os.path.join(root, "events.jsonl"), "a") as f:
-            f.write(json.dumps({"type": etype, "sid": sid[:16], "path": path,
-                                "ts": _iso(time.time())}) + "\n")
+            row = {"type": etype, "sid": sid[:16], "path": path,
+                   "ts": _iso(time.time())}
+            if mem_id:
+                row["mem_id"] = mem_id
+            f.write(json.dumps(row) + "\n")
     except OSError:
         pass                                   # fail-open: never break the hook
 
@@ -152,7 +156,7 @@ def facts_for(path: str, served: List[str], store_dir: str = STORE_DIR) -> List[
         key = path + "|" + e.get("statement", "")[:60]
         if key in served:
             continue
-        out.append((key, e.get("statement", "").strip()))
+        out.append((key, e.get("statement", "").strip(), e.get("id", "")))
         if len(out) >= FACT_CAP:
             break
     return out
@@ -205,11 +209,13 @@ def hook_edit(payload: Dict[str, Any],
             _log_event(coord_dir, "collision_warned", sid, path)
             break                                          # one warning is enough
 
-    # 2. graded facts about this file, once per session per file
-    for key, stmt in facts_for(path, me["served"], store_dir):
+    # 2. graded facts about this file, once per session per file.
+    # The memory id rides in the event log — reinforcement (which knowledge
+    # actually gets USED) is computable only if serves are attributable.
+    for key, stmt, mem_id in facts_for(path, me["served"], store_dir):
         lines.append("GRADED FACT (machine-checked) about this file: %s" % stmt)
         me["served"].append(key)
-        _log_event(coord_dir, "fact_served", sid, path)
+        _log_event(coord_dir, "fact_served", sid, path, mem_id=mem_id)
 
     # 3. guard rules
     if PIPELINE_RE.search(path):

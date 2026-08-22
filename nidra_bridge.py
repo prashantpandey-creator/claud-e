@@ -181,7 +181,8 @@ def run(do_sleep=False, store_dir=None, memory_root=None, form_days=None):
                 if loc.startswith("path:"):
                     p = os.path.expanduser(loc[5:])
                     index.setdefault(p, []).append(
-                        {"statement": m.get("statement", "")[:200], "status": status})
+                        {"id": m.get("id"), "statement": m.get("statement", "")[:200],
+                         "status": status})
         idx_path = os.path.join(store_dir, "path_index.json")
         with open(idx_path + ".tmp", "w") as fh:
             json.dump(index, fh)
