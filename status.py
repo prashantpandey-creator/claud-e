@@ -82,7 +82,15 @@ def status_text(**kw) -> str:
     lines.append("meditate — %d graded memories, %.1f%% verified, %d self-formed"
                  % (s["active"], vr, s["formed"]))
     if d["heartbeat_h"] is not None:
-        lines.append("heartbeat %.1f h ago (6 h cycle)" % d["heartbeat_h"])
+        try:
+            from cadence import current_interval_s
+            cyc = (current_interval_s() or 0) / 3600
+        except Exception:
+            cyc = 0
+        # never hardcode the cycle — it is derived and changes (was "6 h" while
+        # the real interval was 1 h: the tool lying about its own rhythm)
+        lines.append("heartbeat %.1f h ago%s" % (
+            d["heartbeat_h"], (" (%.0f h cycle)" % cyc) if cyc else ""))
     for g in d["goals"]:
         widen = "  scope +%d" % g["scope_delta"] if g.get("scope_delta", 0) > 0 else ""
         lines.append("  %-26s %5.1f%%  %d/%d%s  -> %s"

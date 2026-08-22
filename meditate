@@ -98,6 +98,10 @@ case "${1:-}" in
     shift
     python3 "$DIR/go.py" --repair-only "$@"
     ;;
+  casper|mascot|ghost|companion)
+    shift
+    python3 "$DIR/brain.py" --casper "$@"
+    ;;
   pulse|live|sarathi|brain|serve|watch|soul)
     shift
     python3 "$DIR/brain.py" "$@"
@@ -106,7 +110,7 @@ case "${1:-}" in
     shift
     python3 "$DIR/converse.py" "$@"
     ;;
-  voice|casper|ghost|brief)
+  voice|brief|whisper)
     shift
     python3 "$DIR/voice.py" "$@"
     ;;
@@ -126,19 +130,11 @@ case "${1:-}" in
     shift
     python3 "$DIR/remote.py" "$@"
     ;;
-  projects|proj)
-    shift
-    python3 "$DIR/projects.py" "$@"
-    ;;
-  cadence|tempo|rhythm)
-    shift
-    python3 "$DIR/cadence.py" "$@"
-    ;;
   fleet|agents)
     shift
     python3 "$DIR/drive.py" fleet "$@"
     ;;
-  status|state|where)
+  state|status)
     shift
     python3 "$DIR/status.py" "$@"
     ;;
@@ -152,6 +148,7 @@ case "${1:-}" in
     echo "  meditate voice      Casper: the one thing worth saying + if now is the moment" >&2
     echo "  meditate projects   where your attention went, per project + open tasks" >&2
     echo "  meditate fleet      live progress of dispatched agents" >&2
+    echo "  meditate casper     the companion: a ghost that watches, speaks, listens" >&2
     echo "  meditate pulse      your Claude live in the browser — click to run (localhost)" >&2
     echo "everything else runs itself on the heartbeat (meditate help for plumbing)" >&2
     exit 1
