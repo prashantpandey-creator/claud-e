@@ -181,11 +181,22 @@ def main(argv=None) -> int:
     sub = ap.add_subparsers(dest="cmd")
     pp = sub.add_parser("push"); pp.add_argument("--url", required=True)
     pp.add_argument("--token", required=True); pp.add_argument("--json", action="store_true")
+    sub.add_parser("auto")   # push from saved config (heartbeat calls this)
     sp = sub.add_parser("serve"); sp.add_argument("--port", type=int, default=8899)
     sp.add_argument("--ingest", required=True); sp.add_argument("--view", required=True)
     sp.add_argument("--store", default=os.path.expanduser("~/meditate-remote-latest.json"))
     args = ap.parse_args(argv)
 
+    if args.cmd == "auto":
+        cfg_path = os.path.expanduser("~/.claude/meditation/remote-config.json")
+        try:
+            cfg = json.load(open(cfg_path))
+        except Exception:
+            print("no remote-config.json — remote view not configured (opt-in)")
+            return 0
+        r = push(cfg["url"], cfg["ingest_token"])
+        print("pushed" if r["pushed"] else "failed: " + r.get("error", ""))
+        return 0 if r["pushed"] else 1
     if args.cmd == "push":
         r = push(args.url, args.token)
         print(json.dumps(r) if args.json else

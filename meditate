@@ -106,6 +106,18 @@ case "${1:-}" in
     shift
     python3 "$DIR/beacon.py" "$@"
     ;;
+  remote)
+    shift
+    python3 "$DIR/remote.py" "$@"
+    ;;
+  projects|proj)
+    shift
+    python3 "$DIR/projects.py" "$@"
+    ;;
+  cadence|tempo|rhythm)
+    shift
+    python3 "$DIR/cadence.py" "$@"
+    ;;
   fleet|agents)
     shift
     python3 "$DIR/drive.py" fleet "$@"
