@@ -143,3 +143,23 @@ def test_build_launch_interactive_not_piped():
     assert "cd '/Users/x/vedic puran'" in cmd, cmd
     assert open(kf).read() == "Fix Apple's rejection\nline2"
     assert 'do script "' in script and "tell application" in script
+
+
+def test_cwd_injection_neutralized():
+    """FINDING 4: a shell metachar in cwd must not become a command."""
+    from launch import build_launch
+    import shlex
+    kf, cmd, _ = build_launch("/x'; touch /tmp/pwned; echo '", "k", "t")
+    # the malicious cwd is not a real dir -> falls back to home, shell-quoted
+    assert "touch /tmp/pwned" not in cmd.split("&&")[0] or "cd " + shlex.quote(cmd) , cmd
+    assert "; touch" not in cmd, "cwd injection reached the command: " + cmd
+
+
+def test_kickoff_file_unpredictable():
+    """FINDING 6: kickoff path must not be the guessable /tmp/claude-kickoff-<name>."""
+    from launch import build_launch
+    import os
+    kf, _, _ = build_launch("/tmp", "prompt", "goal-x")
+    assert kf != "/tmp/claude-kickoff-goal-x.txt", "predictable temp path"
+    assert os.path.exists(kf) and oct(os.stat(kf).st_mode)[-3:] == "600", kf
+    os.unlink(kf)
