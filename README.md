@@ -1,24 +1,16 @@
 # Meditate
 
-**Evidence-graded AI agent memory with drift detection.**
+**Your Claude, remembered — and measured.**
 
-Meditate grades your knowledge — not your session transcripts, your actual
-curated memory files — with SHA-256 evidence receipts. Every file path and
-every `[[wikilink]]` is verified against the live filesystem. When the world
-changes, the stale memory silently stops being trusted.
+Meditate turns everything Claude Code does on your machine into knowledge you
+can trust: facts with receipts, projects with honest progress, and agents you
+dispatch and watch. It runs entirely on your own machine — no account, no
+server of ours, no data leaves your laptop.
 
 ```
-358 active memories (274 knowledge files + session maps)
-353 machine-checked (evidence verified against live sources)
-  5 unverified
- 11 tombstoned (stale, pruned by sleep pass)
-  0 stale answers served
-
-1,356 evidence receipts, re-checked every pass:
-    860 wikilinks
-    272 content anchors
-    150 file paths
-     74 session transcripts
+444 facts known · 94% still true when re-checked · 75 learned by itself
+28 failed verification → repair queue
+6 goals across 4 projects · fleet dispatch + live progress
 ```
 
 ---
@@ -26,34 +18,51 @@ changes, the stale memory silently stops being trusted.
 ## Install
 
 ```bash
+git clone https://github.com/prashantpandey-creator/meditate ~/.claude/skills/meditate
+git clone https://github.com/prashantpandey-creator/nidra ~/projects/nidra
 bash ~/.claude/skills/meditate/install.sh
 ```
 
-One command. Checks prerequisites, wires the hooks, grades your memories,
-runs the tests, reports. No sudo, no network, no account. Safe to re-run.
+One command. Wires the hooks, grades your memory, installs a 6-hour
+background pass, runs the tests, opens the dashboard. No sudo, no network,
+no account. Safe to re-run.
 
-After install, `meditate` is on your PATH:
+## The whole product is two verbs
 
 ```bash
-meditate              # where am I + the ONE next action
-meditate go           # move everything forward (repair + one agent per goal)
-meditate pulse        # your Claude, live in the browser: pulsing sessions,
-                      # goals, repair — one click runs and shows what ran
-meditate grade        # scan + grade + consolidate
-meditate metrics      # drift rate, coverage, health dashboard
-meditate archive      # archive finished/empty sessions (dry-run; --apply)
-meditate drive        # dispatch goal agents (dry-run; --go N launches)
-meditate dashboard    # the whole organism, one self-contained HTML page
-meditate ask          # question the graded store — verified facts first
-meditate distill      # formation queue: sessions awaiting distillation
-meditate goals        # long-term goals: %, scope drift, agent kickoffs
-meditate report       # wins + efficacy: drift caught/repaired, stilling
-meditate drift        # memories whose evidence failed — exact claims
-meditate who          # live sessions in this workspace, their files
-meditate sessions     # show sessions ranked by sprawl
-meditate launch       # see live threads (--open to open terminals)
-meditate help         # all commands
+meditate           # where am I + the ONE next action
+meditate go        # move everything forward: repair agent if knowledge
+                   # broke, plus one agent per open goal
 ```
+
+Everything else is there when you want a specific organ:
+
+```bash
+meditate pulse       # LIVE dashboard in your browser (localhost only)
+meditate projects    # where your attention actually went, per project + tasks
+meditate ask "..."   # question the graded memory — verified facts first
+meditate fix         # repair broken knowledge (--list, or fix <n> for one)
+meditate fleet       # live progress of dispatched agents
+meditate report      # wins: drift caught/repaired, stilling, efficacy
+meditate distill     # sessions awaiting distillation into memory
+meditate archive     # tidy finished sessions away (reversible)
+meditate doctor      # health: prereqs, 21 test suites, hooks, heartbeat
+meditate help        # everything
+```
+
+Intent aliases work too — `what`/`search`/`find`/`recall` = ask,
+`run`/`work` = go, `repair` = fix, `where` = status, `live`/`brain` = pulse.
+
+## What "a memory" means here
+
+One fact about your work, saved with a **receipt** — the exact file and line
+it came from. Every 6 hours each receipt is re-checked against reality. A
+fact whose file moved, whose claim went stale, or whose path was deleted
+stops being trusted and goes to the repair queue instead. Nothing unverified
+is ever served.
+
+That is the whole thesis: **form freely, grade ruthlessly, serve only what
+verifies.**
 
 ---
 
