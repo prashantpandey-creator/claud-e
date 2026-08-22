@@ -25,6 +25,8 @@ from typing import Any, Dict, List, Optional
 SKILL_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SKILL_DIR)
 
+from casper_page import CASPER_PAGE          # the mascot's face
+
 DEFAULT_PORT = 7711
 
 ACTIONS = {
@@ -252,6 +254,9 @@ def state() -> Dict[str, Any]:
         "stilling": rep["stilling"],
         "sangama": rep["sangama"],
         "digest": done_digest(),
+        # Casper watches these two: what to say, and whether now is the moment
+        "briefing": _casper_briefing(),
+        "timing": _casper_timing(),
         "projects": _projects_rollup(),
         "activity": _recent_events(),
     }
@@ -261,6 +266,22 @@ def state() -> Dict[str, Any]:
     except Exception:
         d["insights"] = {"headline": "", "projects": [], "needs_you": [], "moving": []}
     return d
+
+
+def _casper_briefing() -> Dict[str, Any]:
+    try:
+        import voice as vc
+        return vc.briefing()
+    except Exception:
+        return {"headline": "", "action": "", "kind": "clear"}
+
+
+def _casper_timing() -> Dict[str, Any]:
+    try:
+        import voice as vc
+        return vc.interruptibility()
+    except Exception:
+        return {"state": "unknown", "interrupt_ok": False}
 
 
 def _projects_rollup() -> List[Dict[str, Any]]:
@@ -481,6 +502,23 @@ class _Handler(BaseHTTPRequestHandler):
                 req = {}
             action = str(req.get("action") or "")
             arg = str(req.get("arg") or "")
+            if action == "say":
+                # the mascot's mouth+ear: one conversational turn over the
+                # graded data. allow_actions stays FALSE by default — the
+                # turn TELLS you the command; the page confirms before running.
+                import converse as cv
+                res = cv.turn(str(req.get("value") or arg or ""),
+                              allow_actions=bool(req.get("allow_actions")))
+                _log_brain_action("say", res.get("intent", ""))
+                body = json.dumps({"started": True, "action": "say",
+                                   "arg": arg, "turn": res,
+                                   "output": res.get("speech", "")}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
             if action == "name":
                 set_name(arg, str(req.get("value") or ""))
                 res = {"started": True, "output": "named"}
@@ -513,6 +551,9 @@ class _Handler(BaseHTTPRequestHandler):
             if self.path == "/api/state":
                 body = json.dumps(state()).encode()
                 ctype = "application/json"
+            elif self.path == "/casper":
+                body = CASPER_PAGE.encode()
+                ctype = "text/html; charset=utf-8"
             elif self.path == "/":
                 body = PAGE.encode()
                 ctype = "text/html; charset=utf-8"
@@ -548,12 +589,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="Live brain server (localhost only)")
     ap.add_argument("--port", type=int, default=DEFAULT_PORT)
     ap.add_argument("--no-open", action="store_true")
+    ap.add_argument("--casper", action="store_true",
+                    help="open the mascot instead of the dashboard")
     args = ap.parse_args(argv)
     try:
         srv = make_server(args.port)
     except OSError:
-        url = "http://127.0.0.1:%d" % args.port
-        print("pulse already running at %s — opening it" % url)
+        url = "http://127.0.0.1:%d%s" % (args.port, "/casper" if args.casper else "")
+        print("already running at %s — opening it" % url)
         if not args.no_open:
             os.system("open '%s' 2>/dev/null" % url)
         return 0

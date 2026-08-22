@@ -100,7 +100,19 @@ case "${1:-}" in
     ;;
   casper|mascot|ghost|companion)
     shift
-    python3 "$DIR/brain.py" --casper "$@"
+    # the NATIVE desktop ghost — not a browser tab. Builds once, then floats.
+    if [ ! -x "$DIR/mascot/casper" ] || [ "$DIR/mascot/Casper.swift" -nt "$DIR/mascot/casper" ]; then
+      echo "  building Casper..."
+      ( cd "$DIR/mascot" && swiftc -O -o casper Casper.swift -framework Cocoa -framework AVFoundation ) || {
+        echo "  couldn't build the desktop ghost (needs Xcode command line tools)"; exit 1; }
+    fi
+    pkill -f "$DIR/mascot/casper" 2>/dev/null || true
+    nohup "$DIR/mascot/casper" >/dev/null 2>&1 &
+    echo "Casper is awake — bottom-right of your screen. Drag him anywhere."
+    ;;
+  advise|advice|think)
+    shift
+    python3 "$DIR/advisor.py" "$@"
     ;;
   pulse|live|sarathi|brain|serve|watch|soul)
     shift
@@ -148,7 +160,8 @@ case "${1:-}" in
     echo "  meditate voice      Casper: the one thing worth saying + if now is the moment" >&2
     echo "  meditate projects   where your attention went, per project + open tasks" >&2
     echo "  meditate fleet      live progress of dispatched agents" >&2
-    echo "  meditate casper     the companion: a ghost that watches, speaks, listens" >&2
+    echo "  meditate casper     the desktop companion — a ghost that watches and asks" >&2
+    echo "  meditate advise \"...\" a junior-dev opinion on your real state" >&2
     echo "  meditate pulse      your Claude live in the browser — click to run (localhost)" >&2
     echo "everything else runs itself on the heartbeat (meditate help for plumbing)" >&2
     exit 1

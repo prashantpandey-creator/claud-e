@@ -28,27 +28,14 @@ MAX_AGE_DAYS = 3
 
 VERSION = open(os.path.join(SKILL_DIR, "VERSION")).read().strip()
 
-TEST_FILES = [
-    "test_sessions.py",
-    "test_launch.py",
-    "test_scan.py",
-    "test_still.py",
-    "test_nidra_bridge.py",
-    "test_metrics.py",
-    "test_hook.py",
-    "test_coordination.py",
-    "test_archive.py",
-    "test_report.py",
-    "test_goals.py",
-    "test_ask.py",
-    "test_formation.py",
-    "test_integration.py",
-    "test_drive.py",
-    "test_status_go.py",
-    "test_brain.py",
-    "test_beacon.py",
-    "test_insights.py",
-]
+# AUTO-DISCOVERED, never hand-maintained. A hand-written list silently lost
+# four suites when two sessions edited this file, and dispatch tests sat RED
+# for four commits because doctor never ran them. Every test_*.py on disk is
+# part of the health check, by construction.
+TEST_FILES = sorted(
+    f for f in os.listdir(SKILL_DIR)
+    if f.startswith("test_") and f.endswith(".py")
+)
 
 
 def _envelope(success, data, metadata, errors):

@@ -38,7 +38,12 @@ def test_status_question_answers_from_briefing():
         w = _world(t, repair=True)
         r = cv.turn("what's bothering me right now", **w)
         assert r["intent"] == "status"
-        assert "true" in r["speech"].lower() or "receipt" in r["speech"].lower()
+        # Casper now speaks the IDEA, not the metric — so assert the CONTRACT
+        # (a real spoken sentence about broken knowledge), not old wording.
+        sp = r["speech"].lower()
+        assert len(r["speech"]) > 20 and "\n" not in r["speech"], r["speech"]
+        assert any(w in sp for w in ("told me", "stopped", "gone", "isn't there",
+                                     "matching", "verif")), r["speech"]
         assert r["action"] is None
 
 
