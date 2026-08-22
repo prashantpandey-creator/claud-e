@@ -496,6 +496,13 @@ def drift_report(store_dir: str = STORE_DIR) -> Dict[str, Any]:
                     elif loc.startswith("wikilink:") and ev.get("source") and \
                             not os.path.exists(ev["source"]):
                         failing.append({"claim": loc, "line": ev.get("excerpt", "")})
+                # "not checked yet" is NOT "broken". Every newly written memory
+                # is `unverified` until its first review comes due, so reporting
+                # status alone put every new memory a user writes into the repair
+                # queue — and the repair queue dispatches agents. Only a claim
+                # that actually fails, or a real drifted flag, is drift.
+                if not failing and "drifted" not in flagged:
+                    continue
                 out.append({"id": m.get("id"), "statement": m.get("statement", "")[:160],
                             "status": status, "flags": flagged, "failing": failing})
     return {"count": len(out), "memories": out}

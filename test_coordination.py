@@ -281,6 +281,38 @@ def test_session_start_registers_its_own_presence():
     assert json.load(open(p))["cwd"] == "/tmp"
 
 
+def test_never_checked_is_not_drift():
+    """"I have not checked this yet" is not "this is broken".
+
+    Every newly written memory is `unverified` until its first review comes
+    due, so reporting unverified-as-drift put every new memory a user writes
+    into their repair queue for a day — and the repair queue dispatches
+    agents. Same two-valued mistake as the extractor, one layer up.
+    """
+    import tempfile, json as _j
+    with tempfile.TemporaryDirectory() as d:
+        real = os.path.join(d, "real.txt")
+        open(real, "w").write("x")
+        rows = [
+          # never checked, but every claim resolves -> NOT drift
+          {"id": "m_new", "active": True, "statement": "fresh memory",
+           "epistemic": {"evidence_status": "unverified"},
+           "evidence": [{"locator": "path:" + real, "source": real, "excerpt": "e"}]},
+          # never checked AND a claim is genuinely gone -> IS drift
+          {"id": "m_bad", "active": True, "statement": "stale memory",
+           "epistemic": {"evidence_status": "unverified"},
+           "evidence": [{"locator": "path:" + d + "/gone", "source": real, "excerpt": "e"}]},
+        ]
+        with open(os.path.join(d, "memories.jsonl"), "w") as f:
+            for r in rows: f.write(_j.dumps(r) + "\n")
+        rep = co.drift_report(d)
+        ids = [m["id"] for m in rep["memories"]]
+        assert "m_bad" in ids, "real drift must still be reported: %s" % ids
+        assert "m_new" not in ids, \
+            "unchecked-but-intact memory reported as drift: %s" % ids
+
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0
