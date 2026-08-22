@@ -45,10 +45,28 @@ echo '</plist>' >> "$APP/Contents/Info.plist"
 swiftc -O -o "$BIN" main.swift Casper.swift Voice.swift \
     -framework Cocoa -framework AVFoundation -framework Speech
 
-# Ad-hoc signature: enough for TCC to pin consent to this bundle, so the user
-# is asked once instead of on every rebuild.
-codesign --force --sign - --identifier com.meditate.casper \
-         --options runtime --entitlements Casper.entitlements "$APP"
+# Sign with a REAL identity when the machine has one.
+#
+# An ad-hoc signature has no stable identity: its cdhash changes with every
+# build, so macOS treats each rebuild as a brand-new app and asks for the
+# microphone again, every single time. A developer certificate is stable, so
+# consent is given once and stays given.
+SIGN_ID="${MEDITATE_SIGN_ID:-}"
+if [ -z "$SIGN_ID" ]; then
+  SIGN_ID=$(security find-identity -v -p codesigning 2>/dev/null \
+            | grep "Apple Development" | head -1 \
+            | sed -E 's/.*"(.*)"/\1/')
+fi
+if [ -n "$SIGN_ID" ]; then
+  codesign --force --sign "$SIGN_ID" --identifier com.meditate.casper \
+           --options runtime --entitlements Casper.entitlements "$APP" \
+    && echo "signed as: $SIGN_ID"
+else
+  echo "no developer certificate — signing ad-hoc (macOS will re-ask for the"
+  echo "microphone after every rebuild; that is the cost of no identity)"
+  codesign --force --sign - --identifier com.meditate.casper \
+           --options runtime --entitlements Casper.entitlements "$APP"
+fi
 
 cp "$BIN" ./casper          # bare binary stays, for --render and tests
 echo "built $APP  ($(stat -f%z "$BIN") bytes)"

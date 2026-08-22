@@ -427,6 +427,7 @@ final class App: NSObject, NSApplicationDelegate {
     var yesBtn: NSButton!
     var noBtn: NSButton!
     var askBtn: NSButton!
+    var micBtn: NSButton!
     let mouth = Mouth()
     let ear = Ear()
     var armed = false          // click him = one turn without his name
@@ -438,7 +439,7 @@ final class App: NSObject, NSApplicationDelegate {
     var busy = false
 
     func applicationDidFinishLaunching(_ n: Notification) {
-        let W: CGFloat = 320, H: CGFloat = 360
+        let W: CGFloat = 200, H: CGFloat = 248
         let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         let frame = NSRect(x: screen.maxX - W - 24, y: screen.minY + 40, width: W, height: H)
 
@@ -454,7 +455,7 @@ final class App: NSObject, NSApplicationDelegate {
         let root = NSView(frame: NSRect(origin: .zero, size: frame.size))
         window.contentView = root
 
-        ghost = GhostView(frame: NSRect(x: 55, y: 8, width: 210, height: 210))
+        ghost = GhostView(frame: NSRect(x: 34, y: 6, width: 132, height: 132))
         // Layer-backed, or he flickers. A borderless transparent window that
         // redraws 60 times a second without a layer lets the window server
         // composite half-drawn frames — the whole mascot strobes.
@@ -465,30 +466,34 @@ final class App: NSObject, NSApplicationDelegate {
         root.addSubview(ghost)
 
         bubble = NSTextField(wrappingLabelWithString: "")
-        bubble.frame = NSRect(x: 20, y: 234, width: W - 40, height: 78)
+        bubble.frame = NSRect(x: 6, y: 146, width: W - 12, height: 66)
         bubble.alignment = .center
-        bubble.font = .systemFont(ofSize: 12.5, weight: .regular)
+        bubble.font = .systemFont(ofSize: 11, weight: .regular)
         bubble.textColor = NSColor(calibratedWhite: 0.88, alpha: 1)
         bubble.backgroundColor = NSColor(calibratedWhite: 0.09, alpha: 0.90)
         bubble.drawsBackground = true
         bubble.isBezeled = false
         bubble.isEditable = false
         bubble.wantsLayer = true
-        bubble.layer?.cornerRadius = 14
+        bubble.layer?.cornerRadius = 10
         bubble.maximumNumberOfLines = 4
         bubble.lineBreakMode = .byTruncatingTail
         root.addSubview(bubble)
 
-        yesBtn = button("Yes, fix it", x: 20)
+        yesBtn = button("Yes, fix it", x: 6, w: 90)
         yesBtn.target = self; yesBtn.action = #selector(sayYes)
         yesBtn.keyEquivalent = "\r"                 // the obvious answer is the default
         yesBtn.bezelColor = NSColor(srgbRed: 0.91, green: 0.71, blue: 0.25, alpha: 1)
-        noBtn = button("Not now", x: 122)
+        noBtn = button("Not now", x: 102, w: 90)
         noBtn.target = self; noBtn.action = #selector(sayNo)
-        askBtn = button("Ask me…", x: 224)
+        askBtn = button("Ask", x: 102, w: 90)
         askBtn.target = self; askBtn.action = #selector(askSomething)
-        [yesBtn, noBtn, askBtn].forEach { root.addSubview($0!) }
+        micBtn = button("Mic", x: 6, w: 90)
+        micBtn.target = self; micBtn.action = #selector(toggleMic)
+        [yesBtn, noBtn, askBtn, micBtn].forEach { root.addSubview($0!) }
         showOffer(false)
+        refreshMicButton()
+        setBubble("")
 
         window.makeKeyAndOrderFront(nil)
         NSApp.setActivationPolicy(.accessory)       // menubar-less companion
@@ -516,20 +521,31 @@ final class App: NSObject, NSApplicationDelegate {
         }
         ear.onPartial = { [weak self] text in
             guard let self = self, !text.isEmpty else { return }
-            self.bubble.stringValue = "\u{201C}" + text + "\u{201D}"
+            // Only echo speech that is aimed at him. He sits on the desktop
+            // while you talk to other people all day; narrating every stray
+            // fragment back at you turns a companion into a caption track.
+            let mine = self.armed || text.lowercased().contains("casper")
+            guard mine else { return }
+            self.setBubble("\u{201C}" + text + "\u{201D}")
         }
         ear.onUtterance = { [weak self] text in self?.heard(text) }
 
         ghost.onClick = { [weak self] in self?.armForOneTurn() }
 
-        Ear.requestAccess { [weak self] ok, why in
-            guard let self = self else { return }
-            self.earStatus = ok ? "listening" : why
-            if ok {
-                self.ear.start()
-                if !self.ear.running { self.earStatus = self.ear.lastError }
+        if micEnabled {
+            Ear.requestAccess { [weak self] ok, why in
+                guard let self = self else { return }
+                self.earStatus = ok ? "listening" : why
+                if ok {
+                    self.ear.start()
+                    if !self.ear.running { self.earStatus = self.ear.lastError }
+                }
+                self.refreshMicButton()
+                self.writeStatus()
             }
-            self.writeStatus()
+        } else {
+            earStatus = "off — mic switched off"
+            writeStatus()
         }
         // A GUI app launched with `open` has nowhere to print. One status line
         // on disk is how the ear can be checked without asking the owner what
@@ -540,21 +556,30 @@ final class App: NSObject, NSApplicationDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { self.check() }
     }
 
-    func button(_ title: String, x: CGFloat) -> NSButton {
+    func button(_ title: String, x: CGFloat, w: CGFloat = 90) -> NSButton {
         let b = NSButton(title: title, target: nil, action: nil)
-        b.frame = NSRect(x: x, y: 320, width: 90, height: 26)
+        b.frame = NSRect(x: x, y: 218, width: w, height: 24)
         b.bezelStyle = .rounded
-        b.font = .systemFont(ofSize: 11.5, weight: .medium)
+        b.font = .systemFont(ofSize: 11, weight: .medium)
         return b
     }
 
+    /// An empty bubble is a grey slab taking up half the window. Hide it, and
+    /// when there is nothing to say he is just a small ghost on your desktop.
+    func setBubble(_ text: String) {
+        bubble.stringValue = text
+        bubble.isHidden = text.isEmpty
+    }
+
     func showOffer(_ on: Bool) {
-        yesBtn.isHidden = !on; noBtn.isHidden = !on
-        askBtn.isHidden = false
+        yesBtn.isHidden = !on
+        noBtn.isHidden = !on
+        askBtn.isHidden = on          // one row, two states — never four buttons
+        micBtn.isHidden = on
     }
 
     func say(_ text: String) {
-        bubble.stringValue = text
+        setBubble(text)
         ear.muted = true                 // never answer his own last sentence
         mouth.say(text)
     }
@@ -584,7 +609,7 @@ final class App: NSObject, NSApplicationDelegate {
     @objc func sayYes() {
         let action = pendingAction
         showOffer(false)
-        bubble.stringValue = "Running \(action)…"
+        setBubble("Running \(action)…")
         DispatchQueue.global().async {
             let out = Meditate.perform(action)
             let first = out.split(separator: "\n").first.map(String.init) ?? "Done."
@@ -602,10 +627,15 @@ final class App: NSObject, NSApplicationDelegate {
         if mouth.speaking { mouth.shutUp(); ear.muted = false; return }
         if armed {
             armed = false
-            bubble.stringValue = "Not listening. Click me, or just say my name."
+            setBubble("Not listening. Click me, or just say my name.")
             return
         }
         guard ear.running else {
+            if !micEnabled {
+                setBubble("My microphone is off. Turn it on below when you "
+                          + "want me to listen.")
+                return
+            }
             // A companion that is silently deaf is worse than one that says so
             // and shows you the switch. macOS only ever asks once, so being
             // denied is a dead end unless he offers the way out.
@@ -625,18 +655,21 @@ final class App: NSObject, NSApplicationDelegate {
             return
         }
         armed = true
-        bubble.stringValue = "Listening. Say what you like \u{2014} click me to stop."
+        setBubble("Listening. Say what you like \u{2014} click me to stop.")
     }
 
     /// One finished utterance. Decide whether it was aimed at him at all.
     func heard(_ raw: String) {
+        // One word followed by a pause is not somebody addressing you. The
+        // end-of-turn gap is 1.1s, so "Also" counts as a complete utterance
+        // unless there is a floor on what a turn even is.
+        let words = raw.split(whereSeparator: { $0 == " " || $0 == "\n" }).count
+        guard armed || words >= 3 else { return }
         guard let question = addressedQuestion(raw, armed: armed) else {
-            // Not a black box: show that he heard it and let it go.
-            bubble.stringValue = "(heard, not for me)"
-            return
+            return          // heard, not for him — and silence is the answer
         }
         busy = true
-        bubble.stringValue = "\u{201C}" + question + "\u{201D}"
+        setBubble("\u{201C}" + question + "\u{201D}")
         DispatchQueue.global().async {
             let answer = Meditate.advise(question)
             DispatchQueue.main.async {
@@ -679,6 +712,50 @@ final class App: NSObject, NSApplicationDelegate {
                         encoding: String.Encoding.utf8)
     }
 
+    /// Listening is OFF until you say otherwise, and it stays however you left
+    /// it. He used to open the microphone the moment he launched — the orange
+    /// dot appears, he starts transcribing the room, and nobody asked him to.
+    /// A companion does not get to decide that for you.
+    static let micKey = "micEnabled"
+
+    var micEnabled: Bool {
+        get { UserDefaults.standard.bool(forKey: App.micKey) }
+        set { UserDefaults.standard.set(newValue, forKey: App.micKey) }
+    }
+
+    @objc func toggleMic() {
+        if ear.running {
+            armed = false
+            ear.stop()
+            micEnabled = false
+            setBubble("Microphone off. I can't hear anything now.")
+        } else {
+            micEnabled = true
+            Ear.requestAccess { [weak self] ok, why in
+                guard let self = self else { return }
+                self.earStatus = ok ? "listening" : why
+                if ok {
+                    self.ear.start()
+                    if !self.ear.running { self.earStatus = self.ear.lastError }
+                }
+                self.refreshMicButton()
+                self.setBubble(self.ear.running
+                    ? "Microphone on. Say my name, or click me and just talk."
+                    : "Can't listen — " + self.earStatus)
+            }
+        }
+        refreshMicButton()
+    }
+
+    func refreshMicButton() {
+        let on = ear.running
+        micBtn.title = on ? "Mic on" : "Mic off"
+        micBtn.bezelColor = on
+            ? NSColor(srgbRed: 0.91, green: 0.71, blue: 0.25, alpha: 1) : nil
+        micBtn.toolTip = on ? "Click to stop listening"
+                            : "Click to let Casper hear you"
+    }
+
     @objc func sayNo() {
         showOffer(false)
         say("Alright — I'll leave it.")
@@ -698,7 +775,7 @@ final class App: NSObject, NSApplicationDelegate {
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         let q = field.stringValue.trimmingCharacters(in: .whitespaces)
         guard q.count > 2 else { return }
-        bubble.stringValue = "Thinking…"
+        setBubble("Thinking…")
         ghost.glow = 1.0
         DispatchQueue.global().async {
             let answer = Meditate.advise(q)
