@@ -122,6 +122,27 @@ def test_kickoff_resolves_per_thread_file_and_fenceless_prompt():
         shutil.rmtree(tmp)
 
 
+def test_launcher_waits_for_claude_instead_of_guessing():
+    """A fixed delay silently loses the kickoff when claude boots slowly —
+    the text lands in the shell and the owner sees 'only a terminal'."""
+    _, _, script = launch.build_launch(os.path.expanduser("~"), "do the thing",
+                                       "probe", "sonnet")
+    assert "repeat" in script and "exit repeat" in script, "no readiness poll"
+    assert "bypass permissions" in script or "for shortcuts" in script, \
+        "poll has nothing to look for"
+    # the kickoff must be typed INSIDE the ready branch, never unconditionally
+    ready_at = script.index("if ready then")
+    assert script.index("do the thing") > ready_at, "kickoff typed before ready"
+    assert "timeout" in script, "caller cannot tell a lost kickoff from a live one"
+
+
+def test_leading_slash_kickoff_is_not_read_as_a_slash_command():
+    _, _, script = launch.build_launch(os.path.expanduser("~"),
+                                       "/meditate then report", "probe", "sonnet")
+    assert '" /meditate' in script or '"  /meditate' in script, \
+        "a kickoff starting with / would fire a slash command instead"
+
+
 if __name__ == "__main__":
     tests = [v for k, v in list(globals().items()) if k.startswith("test_")]
     for t in tests:

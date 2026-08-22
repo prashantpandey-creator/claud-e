@@ -178,12 +178,33 @@ def build_launch(cwd: str, kickoff: str, thread_name: str, model: str = ""):
     # ...then TYPE the kickoff into that live session so the agent actually
     # receives its instructions and keeps working.
     kick = " ".join(kickoff.split())
+    if kick.startswith("/"):
+        kick = " " + kick          # a leading / would be read as a slash command
     kick_escaped = kick.replace("\\", "\\\\").replace('"', '\\"')
+    # WAIT FOR READY, don't guess. `delay 7` worked on an idle machine and
+    # silently lost the kickoff whenever claude took longer to boot — the text
+    # landed in the shell instead of the agent, which is exactly what "only a
+    # terminal opened" looks like. Poll the tab until claude's TUI has painted.
     script = ('tell application "Terminal"\n'
               '  activate\n'
               '  set w to do script "%s"\n'
-              '  delay 7\n'
-              '  do script "%s" in w\n'
+              '  set wid to id of (window 1 whose selected tab is w)\n'
+              '  set ready to false\n'
+              '  repeat 90 times\n'
+              '    delay 0.5\n'
+              '    set txt to contents of selected tab of window id wid\n'
+              '    if txt contains "bypass permissions" or txt contains "for shortcuts" then\n'
+              '      set ready to true\n'
+              '      exit repeat\n'
+              '    end if\n'
+              '  end repeat\n'
+              '  if ready then\n'
+              '    delay 0.8\n'
+              '    do script "%s" in w\n'
+              '    return "ready"\n'
+              '  else\n'
+              '    return "timeout"\n'
+              '  end if\n'
               'end tell' % (as_escaped, kick_escaped))
     return kickoff_file, shell_cmd, script
 
@@ -192,7 +213,17 @@ def launch_claude(cwd: str, kickoff: str, thread_name: str, model: str = "") -> 
     """Open a Terminal running a REAL interactive claude on the kickoff."""
     _, _, script = build_launch(cwd, kickoff, thread_name, model)
     try:
-        subprocess.run(["osascript", "-e", script], check=True, timeout=40)  # the script itself waits 7s for claude to boot
+        # the script polls for up to 45s for claude's TUI, so allow more here
+        r = subprocess.run(["osascript", "-e", script], check=True,
+                           timeout=75, capture_output=True, text=True)
+        out = (r.stdout or "").strip()
+        if out == "timeout":
+            # a window opened but claude never came up, so the kickoff was NOT
+            # delivered. Saying "launched" here is how a dead agent gets
+            # counted as a live one.
+            print(f"  {thread_name}: terminal opened but claude never came up — "
+                  f"kickoff not delivered")
+            return False
         return True
     except Exception as e:
         print(f"  osascript error: {e}")
