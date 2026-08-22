@@ -75,8 +75,7 @@ def _log_event(coord_dir: str, etype: str, sid: str, path: str,
     """Durable one-line record per serve/warn — the efficacy report reads this.
     Presence files self-prune in 24h; without this log the wins are unmeasurable."""
     try:
-        root = os.path.dirname(coord_dir.rstrip("/")) or coord_dir
-        with open(os.path.join(root, "events.jsonl"), "a") as f:
+        with open(events_path(coord_dir), "a") as f:
             row = {"type": etype, "sid": sid[:16], "path": path,
                    "ts": _iso(time.time())}
             if mem_id:
@@ -89,6 +88,16 @@ def _log_event(coord_dir: str, etype: str, sid: str, path: str,
 def _pfile(sid: str, coord_dir: str) -> str:
     safe = re.sub(r"[^A-Za-z0-9_-]", "_", sid)[:64] or "unknown"
     return os.path.join(coord_dir, safe + ".json")
+
+
+def events_path(coord_dir: str = COORD_DIR) -> str:
+    """The single place the activity log's path is decided.
+
+    Every writer goes through here so that setting MEDITATE_COORD_DIR
+    redirects ALL of them at once. Two separate files used to derive this
+    path by hand; both leaked test traffic into the owner's real trail.
+    """
+    return os.path.join(os.path.dirname(coord_dir.rstrip("/")), "events.jsonl")
 
 
 def load_presence(sid: str, coord_dir: str = COORD_DIR) -> Dict[str, Any]:
@@ -330,7 +339,7 @@ def done_digest(store_dir: str = STORE_DIR, coord_dir: str = COORD_DIR,
         except OSError:
             pass
     served = 0
-    ev = os.path.join(os.path.dirname(coord_dir.rstrip("/")), "events.jsonl")
+    ev = events_path(coord_dir)
     if os.path.exists(ev):
         try:
             with open(ev, errors="replace") as f:

@@ -24,7 +24,27 @@ import urllib.request
 
 SKILL = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SKILL)
+import tempfile
+# isolate BEFORE importing brain: these tests POST real actions, and their
+# records must never land in the owner's live activity trail.
+_ISO = tempfile.mkdtemp(prefix="casper-test-")
+os.environ["MEDITATE_COORD_DIR"] = os.path.join(_ISO, "sessions")
+os.makedirs(os.environ["MEDITATE_COORD_DIR"], exist_ok=True)
+
 import brain as br
+
+
+def test_tests_do_not_touch_the_live_activity_log():
+    """The guard: this suite fires real POSTs; none may reach the live log."""
+    live = os.path.expanduser("~/.claude/coordination/events.jsonl")
+    before = os.path.getsize(live) if os.path.exists(live) else 0
+    srv, base = _serve()
+    try:
+        _post(base, {"action": "say", "value": "push it to production"})
+    finally:
+        srv.shutdown()
+    after = os.path.getsize(live) if os.path.exists(live) else 0
+    assert after == before, "test POSTs leaked into the owner's live activity log"
 
 
 def _serve():

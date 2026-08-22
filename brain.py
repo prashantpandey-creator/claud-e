@@ -17,6 +17,7 @@ import html
 import json
 import os
 import sys
+import threading
 import time
 import subprocess
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -184,7 +185,8 @@ def _log_brain_action(action: str, arg: str) -> None:
     """Every click leaves a durable record — the page's ACTIVITY section and
     the efficacy report both read this."""
     try:
-        ev = os.path.expanduser("~/.claude/coordination/events.jsonl")
+        from coordination import events_path
+        ev = events_path()
         with open(ev, "a") as f:
             f.write(json.dumps({"type": "brain_action", "path": action +
                                 ((" " + arg) if arg else ""), "sid": "brain",
@@ -284,12 +286,39 @@ def _casper_timing() -> Dict[str, Any]:
         return {"state": "unknown", "interrupt_ok": False}
 
 
-def _projects_rollup() -> List[Dict[str, Any]]:
-    try:
-        from projects import rollup
-        return [r for r in rollup() if r["messages"] or r["goals"]][:8]
-    except Exception:
-        return []
+_ROLLUP_CACHE: Dict[str, Any] = {"at": 0.0, "rows": []}
+ROLLUP_TTL_S = 120.0
+
+
+def _projects_rollup(ttl_s: float = ROLLUP_TTL_S) -> List[Dict[str, Any]]:
+    """Which projects have your attention.
+
+    Counting this means walking every session log on disk — ~10s here. The
+    mascot polls state every few seconds, so uncached this endpoint was the
+    whole reason it felt dead. Attention does not change second to second;
+    a 2-minute-old answer is the same answer."""
+    if time.time() - _ROLLUP_CACHE["at"] < ttl_s:
+        return _ROLLUP_CACHE["rows"]
+    _refresh_rollup_async()
+    return _ROLLUP_CACHE["rows"]      # never block a poll; fills in shortly
+
+
+def _refresh_rollup_async() -> None:
+    if _ROLLUP_CACHE.get("running"):
+        return
+    _ROLLUP_CACHE["running"] = True
+
+    def work():
+        try:
+            from projects import rollup
+            rows = [r for r in rollup() if r["messages"] or r["goals"]][:8]
+            _ROLLUP_CACHE.update({"at": time.time(), "rows": rows})
+        except Exception:
+            _ROLLUP_CACHE["at"] = time.time()   # don't hot-loop on a failure
+        finally:
+            _ROLLUP_CACHE["running"] = False
+
+    threading.Thread(target=work, daemon=True).start()
 
 
 def _recent_events(n: int = 10) -> List[Dict[str, str]]:

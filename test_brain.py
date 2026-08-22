@@ -23,6 +23,12 @@ import urllib.request
 
 SKILL = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SKILL)
+import tempfile
+# isolate BEFORE importing brain: this suite POSTs real actions, and their
+# records must never land in the owner's live activity trail.
+os.environ["MEDITATE_COORD_DIR"] = tempfile.mkdtemp(prefix="brain-test-") + "/sessions"
+os.makedirs(os.environ["MEDITATE_COORD_DIR"], exist_ok=True)
+
 import brain as br
 
 
