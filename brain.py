@@ -1,6 +1,6 @@
-"""brain — the whole organism, live, in the browser.
+"""pulse — the whole organism, live, in the browser.
 
-    meditate brain            # serve http://127.0.0.1:7711 and open it
+    meditate pulse            # serve http://127.0.0.1:7711 and open it
     meditate brain --port N
 
 One page, auto-refreshing every 4 s: live sessions (who is working, on what,
@@ -133,10 +133,10 @@ def _recent_events(n: int = 10) -> List[Dict[str, str]]:
 
 
 PAGE = """<!doctype html><meta charset="utf-8">
-<title>Sārathi — the charioteer</title>
+<title>Pulse — your Claude, live</title>
 <body style="background:#0b0a08;color:#d8d2c4;font:14px/1.5 -apple-system,Helvetica,sans-serif;margin:0;padding:40px 52px;max-width:1000px">
-<div style="letter-spacing:.35em;font-size:11px;color:#6b6557">MEDITATE · SĀRATHI</div>
-<div style="font-size:22px;margin:6px 0 2px;color:#E3B140">Sārathi — the charioteer <span style="font-size:13px;color:#8a8578">· the one who conducts; your sessions are the horses, this is the reins</span></div>
+<div style="letter-spacing:.35em;font-size:11px;color:#6b6557">MEDITATE · PULSE</div>
+<div style="font-size:22px;margin:6px 0 2px;color:#E3B140">Pulse <span style="font-size:13px;color:#8a8578">· your sessions, goals, memory and fleet — live. One click runs, and shows what ran.</span></div>
 <div id="meta" style="font-size:12px;color:#8a8578"></div>
 <div id="next" style="margin:14px 0;color:#E3B140"></div>
 <div style="display:flex;gap:8px;flex-wrap:wrap">
@@ -148,7 +148,7 @@ PAGE = """<!doctype html><meta charset="utf-8">
 <pre id="out" style="display:none;background:#12100c;border:1px solid #2a2620;border-radius:8px;padding:10px 14px;font-size:12px;color:#d8d2c4;white-space:pre-wrap;margin:10px 0 0"></pre>
 <style>.b{cursor:pointer;border:1px solid #2a2620;background:transparent;color:#E3B140;border-radius:7px;padding:6px 13px;font-size:13px}.b:hover{background:#1d1a14}</style>
 <div id="stats" style="display:flex;flex-wrap:wrap;gap:24px;margin:18px 0"></div>
-<div style="letter-spacing:.3em;font-size:11px;color:#6b6557;margin-top:26px">PRĀṆA · THE LIVING SESSIONS <span style="letter-spacing:0;color:#4a463c">— each orb beats with its session; fast = working now, ember = stilling</span></div>
+<div style="letter-spacing:.3em;font-size:11px;color:#6b6557;margin-top:26px">LIVE SESSIONS <span style="letter-spacing:0;color:#4a463c">— each orb beats with its session: fast = working right now, dim ember = gone quiet (prāṇa, the breath)</span></div>
 <div id="live" style="display:flex;flex-wrap:wrap;gap:26px;margin-top:14px"></div>
 <style>
 @keyframes prana {

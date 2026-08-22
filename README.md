@@ -37,8 +37,8 @@ After install, `meditate` is on your PATH:
 ```bash
 meditate              # where am I + the ONE next action
 meditate go           # move everything forward (repair + one agent per goal)
-meditate sarathi      # the charioteer: LIVE conductor page — pulsing sessions,
-                      # fleet, repair, one-click actions (localhost only)
+meditate pulse        # your Claude, live in the browser: pulsing sessions,
+                      # goals, repair — one click runs and shows what ran
 meditate grade        # scan + grade + consolidate
 meditate metrics      # drift rate, coverage, health dashboard
 meditate archive      # archive finished/empty sessions (dry-run; --apply)
