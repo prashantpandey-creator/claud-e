@@ -162,13 +162,29 @@ def build_launch(cwd: str, kickoff: str, thread_name: str, model: str = ""):
     # Terminal is a silent stall (owner: "should run in allow-all ideally").
     # The gate moves into the kickoff TEXT: ship discipline rides in the
     # prompt + the SessionStart hook, not in prompts nobody is there to click.
+    import shlex
     mdl = model or FLEET_MODEL
-    shell_cmd = (f"cd '{cwd}' && clear && echo '── {safe_name} ──' && "
-                 f"claude --model {mdl} --dangerously-skip-permissions "
-                 f"\"$(cat '{kickoff_file}')\"")
+    if not all(c.isalnum() or c in "-._" for c in mdl):
+        mdl = "sonnet"
+    safe_cwd = cwd if os.path.isdir(cwd) else os.path.expanduser("~")
+    # Start a LIVE interactive session. Do NOT pass the prompt as an argument:
+    # `claude "prompt"` answers once and EXITS, leaving a bare shell prompt —
+    # that is exactly why dispatched agents looked like "only a terminal opened".
+    shell_cmd = ("cd %s && clear && echo %s && claude --model %s "
+                 "--dangerously-skip-permissions"
+                 % (shlex.quote(safe_cwd),
+                    shlex.quote("\u2500\u2500 " + safe_name + " \u2500\u2500"), mdl))
     as_escaped = shell_cmd.replace("\\", "\\\\").replace('"', '\\"')
-    script = ('tell application "Terminal"\n  activate\n'
-              f'  do script "{as_escaped}"\nend tell')
+    # ...then TYPE the kickoff into that live session so the agent actually
+    # receives its instructions and keeps working.
+    kick = " ".join(kickoff.split())
+    kick_escaped = kick.replace("\\", "\\\\").replace('"', '\\"')
+    script = ('tell application "Terminal"\n'
+              '  activate\n'
+              '  set w to do script "%s"\n'
+              '  delay 7\n'
+              '  do script "%s" in w\n'
+              'end tell' % (as_escaped, kick_escaped))
     return kickoff_file, shell_cmd, script
 
 
@@ -176,7 +192,7 @@ def launch_claude(cwd: str, kickoff: str, thread_name: str, model: str = "") -> 
     """Open a Terminal running a REAL interactive claude on the kickoff."""
     _, _, script = build_launch(cwd, kickoff, thread_name, model)
     try:
-        subprocess.run(["osascript", "-e", script], check=True, timeout=10)
+        subprocess.run(["osascript", "-e", script], check=True, timeout=40)  # the script itself waits 7s for claude to boot
         return True
     except Exception as e:
         print(f"  osascript error: {e}")
