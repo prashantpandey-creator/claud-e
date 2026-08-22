@@ -108,7 +108,18 @@ def render(d: Dict[str, Any]) -> str:
     repair = ('<div style="color:%s;margin-top:6px">⚠ repair queue open — '
               'knowledge failed verification</div>' % G) if d["repair_queue"] else ""
 
-    return """<!doctype html><meta charset="utf-8">
+    chips = []
+    nxt = "meditate go" if (d["repair_queue"] or d["goals"]) else "/meditate"
+    for cmd, label in (("meditate", "where am I"),
+                       (nxt, "do the next thing"),
+                       ("meditate fix", "repair knowledge") if d["repair_queue"] else ("meditate ask \"...\"", "question memory"),
+                       ("/meditate", "full stilling pass")):
+        chips.append('<code style="border:1px solid #2a2620;border-radius:6px;'
+                     'padding:7px 12px;color:%s;font-size:13px">%s'
+                     '<span style="color:%s;font-size:11px;margin-left:8px">%s</span></code>'
+                     % (G, html.escape(cmd), DIM, html.escape(label)))
+    chips_html = "".join(chips)
+    return ("""<!doctype html><meta charset="utf-8">
 <title>meditate — the organism</title>
 <body style="background:%s;color:%s;font:14px/1.5 -apple-system,Helvetica,sans-serif;
 margin:0;padding:48px 56px;max-width:960px">
@@ -118,10 +129,11 @@ margin:0;padding:48px 56px;max-width:960px">
 <div style="display:flex;flex-wrap:wrap;gap:26px;margin:30px 0 8px">%s</div>
 <div style="letter-spacing:.3em;font-size:11px;color:%s;margin-top:30px">GOALS</div>
 %s
-<div style="color:%s;font-size:12px;margin-top:26px">meditate drive --go N launches one agent
-per goal · checkboxes tick only when work verifies · push only on the owner's go</div>
+<div style="letter-spacing:.3em;font-size:11px;color:#6b6557;margin-top:30px">ACT</div>
+<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px">__CHIPS__</div>
+<div style="color:%s;font-size:12px;margin-top:22px">checkboxes tick only when work verifies · push only on the owner's go</div>
 </body>""" % (BG, FG, "#6b6557", G, DIM, e(d["generated"]), repair, stats,
-              "#6b6557", "".join(rows), DIM)
+              "#6b6557", "".join(rows), DIM)).replace("__CHIPS__", chips_html)
 
 
 def main(argv: Optional[List[str]] = None) -> int:

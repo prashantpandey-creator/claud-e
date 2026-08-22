@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.9.2 — 2026-08-22
+
+The lifecycle closes: install -> silent passes -> the call -> the face ->
+action. Plus the other half of communication.
+
+### Added
+- **Install finale = the first meditation call**: after the initial pass and
+  tests, install generates the dashboard and opens it — the user's first
+  sight of the product is their own state with action chips (`meditate`,
+  `meditate go`, `meditate fix`, `/meditate`), not a README.
+- **Done-digest at SessionStart**: the hooks now tell the user what the
+  silent machinery DID, not only what is owed — one line, last 24h, from
+  durable logs only: "Done silently (24h): graded 6x, formed 74
+  commit-facts, archived 7 sessions, served 2 fact/warn events." Empty day =
+  no line. Observed live through the installed hook.
+- status points at the face when something is owed; dashboard carries ACT
+  chips with the exact commands.
+
+### Fixed
+- done_digest read the archive index from a hardcoded live path — isolated
+  tests saw the real machine's history (third occurrence of this disease;
+  the archive root now follows the store like the repair queue does).
+- dashboard chips: two-pass %-format collided with CSS percent signs;
+  placeholder replace instead.
+
+
 ## 0.9.1 — 2026-08-22
 
 Install = consent. The owner: maximum things should run silently — whoever

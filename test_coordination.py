@@ -212,6 +212,26 @@ def test_session_start_nudges_repair_queue():
         assert "Repair queue" in out, f"queue nudge missing: {out!r}"
 
 
+def test_done_digest_reports_silent_work():
+    with tempfile.TemporaryDirectory() as t:
+        coord, store = _env(t)
+        now = co._iso(time.time())
+        with open(os.path.join(store, "journal.jsonl"), "w") as f:
+            f.write(json.dumps({"event": "sleep.completed", "actions": 3,
+                                "contested": 0, "ts": now}) + "\n")
+            f.write(json.dumps({"event": "formation.commit_facts", "formed": 5,
+                                "ts": now}) + "\n")
+        out = co.session_start({"session_id": "s", "cwd": "/repo"},
+                               coord_dir=coord, store_dir=store)
+        assert "Done silently" in out and "formed 5" in out and "graded 1x" in out, out
+
+
+def test_done_digest_empty_day_is_silent():
+    with tempfile.TemporaryDirectory() as t:
+        coord, store = _env(t)
+        assert co.done_digest(store_dir=store, coord_dir=coord) == ""
+
+
 def test_session_start_quiet_when_alone_and_clean():
     with tempfile.TemporaryDirectory() as t:
         coord, store = _env(t)

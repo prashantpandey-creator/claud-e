@@ -187,9 +187,12 @@ def test_session_count_matches_maxdepth_two():
     )
     _, out, _ = fire({"hook_event_name": "SessionStart"})
     ctx = context_of(out)
-    if "sessions," not in ctx:
+    # Parse the CHECKPOINT line specifically — the done-digest line also
+    # contains "sessions," (archived N sessions) and matched first.
+    cp = [l for l in ctx.split("\n") if l.startswith("Meditation checkpoint:")]
+    if not cp:
         return  # not overdue, no census emitted
-    reported = int(ctx.split(" sessions,")[0].split()[-1])
+    reported = int(cp[0].split(" sessions,")[0].split()[-1])
     assert reported == expected, f"hook says {reported} sessions, filesystem says {expected}"
 
 

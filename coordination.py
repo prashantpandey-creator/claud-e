@@ -259,6 +259,86 @@ def _recent_drift(store_dir: str) -> List[str]:
     return list(hits)
 
 
+def _utc_epoch(ts: str) -> float:
+    import calendar
+    try:
+        return calendar.timegm(time.strptime(str(ts)[:19], "%Y-%m-%dT%H:%M:%S"))
+    except Exception:
+        return 0.0
+
+
+def done_digest(store_dir: str = STORE_DIR, coord_dir: str = COORD_DIR,
+                window_s: int = 24 * 3600) -> str:
+    """One line of WHAT THE SILENT MACHINERY DID in the last day.
+
+    The hooks mostly nudge about what is owed; the owner asked for the other
+    half — the tool telling the user what it has done and recorded. Reads only
+    durable logs; empty day = empty string, never invented activity.
+    """
+    cutoff = time.time() - window_s
+    beats = formed = 0
+    jp = os.path.join(store_dir, "journal.jsonl")
+    if os.path.exists(jp):
+        try:
+            with open(jp, errors="replace") as f:
+                for line in f:
+                    if '"sleep.completed"' not in line and '"formation.commit_facts"' not in line:
+                        continue
+                    try:
+                        e = json.loads(line)
+                    except Exception:
+                        continue
+                    if _utc_epoch(e.get("ts", "")) < cutoff:
+                        continue
+                    if e.get("event") == "sleep.completed":
+                        beats += 1
+                    elif e.get("event") == "formation.commit_facts":
+                        formed += int(e.get("formed") or 0)
+        except OSError:
+            pass
+    archived = 0
+    # archive lives beside the store (meditation dir) — NEVER a hardcoded live
+    # path, or isolated tests read the real machine's history (they did).
+    ai = os.path.join(os.path.dirname(store_dir.rstrip("/")),
+                      "archive", "ARCHIVE-INDEX.jsonl")
+    if os.path.exists(ai):
+        try:
+            with open(ai, errors="replace") as f:
+                for line in f:
+                    try:
+                        if _utc_epoch(json.loads(line).get("archived_at", "")) >= cutoff:
+                            archived += 1
+                    except Exception:
+                        continue
+        except OSError:
+            pass
+    served = 0
+    ev = os.path.join(os.path.dirname(coord_dir.rstrip("/")), "events.jsonl")
+    if os.path.exists(ev):
+        try:
+            with open(ev, errors="replace") as f:
+                for line in f:
+                    try:
+                        if _utc_epoch(json.loads(line).get("ts", "")) >= cutoff:
+                            served += 1
+                    except Exception:
+                        continue
+        except OSError:
+            pass
+    parts = []
+    if beats:
+        parts.append("graded %dx" % beats)
+    if formed:
+        parts.append("formed %d commit-fact%s" % (formed, "s" if formed != 1 else ""))
+    if archived:
+        parts.append("archived %d session%s" % (archived, "s" if archived != 1 else ""))
+    if served:
+        parts.append("served %d fact/warn event%s" % (served, "s" if served != 1 else ""))
+    if not parts:
+        return ""
+    return "Done silently (24h): " + ", ".join(parts) + "."
+
+
 def session_start(payload: Dict[str, Any],
                   coord_dir: str = COORD_DIR, store_dir: str = STORE_DIR) -> str:
     """Extra SessionStart lines: live sessions + fresh drift. '' when quiet."""
@@ -284,6 +364,11 @@ def session_start(payload: Dict[str, Any],
             "run `meditate drift` to see the failing claims before trusting them."
             % (len(drifted), "y" if len(drifted) == 1 else "ies",
                ", ".join(drifted[:3])))
+
+    # What the silent machinery DID — the other half of communication.
+    dg = done_digest(store_dir, coord_dir)
+    if dg:
+        lines.append(dg)
 
     # Repair queue: caught drift is standing work until a grade pass clears it.
     qp = os.path.join(os.path.dirname(store_dir.rstrip("/")), "repair-queue.md")

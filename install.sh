@@ -239,12 +239,25 @@ for tf in test_sessions.py test_launch.py test_scan.py test_still.py test_doctor
     fi
 done
 
+# ---- 6b. First meditation call — the pass is done, show the face
+echo
+echo "  Generating the dashboard..."
+if python3 "$SKILL_DIR/dashboard.py" > /dev/null 2>&1; then
+    echo "  [ok]  ~/.claude/meditation/dashboard.html (regenerates every heartbeat)"
+    if [ -t 1 ]; then
+        open "$HOME/.claude/meditation/dashboard.html" 2>/dev/null || true
+    fi
+fi
+
 # ---- 7. Report
 echo
 echo "  ================================"
 if [ "$TEST_PASS" = true ]; then
     echo "  meditate v${VERSION} installed. All tests green."
     echo
+    echo "  The dashboard just opened — that is the product. From here:"
+    echo "         meditate            where am I + the one next action"
+    echo "         meditate go         move everything forward"
     echo "  Use:   /meditate            (inside Claude Code)"
     echo "         meditate             (health check)"
     echo "         meditate grade       (scan + grade + consolidate)"

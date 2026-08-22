@@ -94,6 +94,8 @@ def status_text(**kw) -> str:
         lines.append("%d goal(s) cooling — agents presumed on them" % d["cooling"])
     lines.append("")
     lines.append("next: " + d["next"])
+    if "nothing owed" not in d["next"]:
+        lines.append("face: ~/.claude/meditation/dashboard.html  (fresh every heartbeat)")
     return "\n".join(lines)
 
 
