@@ -79,6 +79,81 @@ def interruptibility(coord_dir: str = COORD_DIR) -> Dict[str, Any]:
             "basis": basis, "why": "long idle — safe to surface something"}
 
 
+def _as_idea(statement: str) -> str:
+    """A memory is a sentence you once told me. Say it back as an IDEA.
+
+    Statements are written for a file: emoji markers, ALL-CAPS flags, paths,
+    semicolon clauses. A person hears the first clear thought, not the record.
+    This strips the record and keeps the thought.
+    """
+    import re as _re
+    s = (statement or "").strip()
+    for junk in ("⚠️", "✅", "🔥", "⏳", "📐", "🧪", "⭐", "❌"):
+        s = s.replace(junk, "")
+    s = s.replace("\\", "").replace('"', "")
+    # a spoken sentence has no file paths, no URLs, no bracketed asides
+    s = _re.sub(r"\(([^)]{0,60})\)", "", s)               # short parentheticals
+    s = _re.sub(r"https?://\S+", "", s)
+    s = _re.sub(r"[~/][\w./-]{6,}", "", s)                # paths
+    # SHOUTED words are file-notation, not emphasis in speech
+    s = " ".join(w.lower() if (w.isupper() and len(w) > 2 and w.isalpha())
+                 else w for w in s.split())
+    # an unclosed bracket (left behind after path/URL removal) never speaks
+    if s.count("(") > s.count(")"):
+        s = s[:s.rfind("(")]
+    if s.count("[") > s.count("]"):
+        s = s[:s.rfind("[")]
+    s = _re.sub(r"\s{2,}", " ", s).strip(" -—:,;")
+    # keep the first COMPLETE thought
+    for stop in (" — ", "; ", ". ", ", and ", " but "):
+        i = s.find(stop)
+        if 25 < i < 105:
+            s = s[:i]
+            break
+    s = s.strip(" ,;:-—([")
+    # never end mid-fragment
+    while s and s[-1] in "([{/,-":
+        s = s[:-1].rstrip()
+    return s[:105].rstrip(" .,;:-—")
+
+
+def _speakable(statement: str) -> int:
+    """How well would this read aloud? Higher = better. Used to CHOOSE which
+    broken idea to voice — a ghost that reads a path aloud isn't a companion."""
+    idea = _as_idea(statement)
+    if len(idea) < 25:
+        return 0
+    score = 40
+    score -= sum(6 for ch in "/_@#" if ch in idea)       # residue of notation
+    score -= 8 * sum(1 for w in idea.split() if w.isupper() and len(w) > 3)
+    score -= 10 if any(c.isdigit() for c in idea[:12]) else 0
+    score += 12 if idea[0].isupper() else 0
+    score += 8 if 30 <= len(idea) <= 85 else 0
+    return score
+
+
+def _idea_of_broken(store_dir: str) -> Optional[Dict[str, str]]:
+    """The single most speakable broken idea, with what broke under it."""
+    try:
+        from go import repair_items
+        items = repair_items(store_dir=store_dir)
+    except Exception:
+        items = []
+    items = sorted(items, key=lambda m: -_speakable(m.get("statement", "")))
+    for m in items:
+        idea = _as_idea(m.get("statement", ""))
+        if len(idea) < 25 or _speakable(m.get("statement", "")) <= 0:
+            continue
+        broke = ""
+        for f in (m.get("failing") or []):
+            claim = str(f.get("claim", ""))
+            if claim.startswith("path:"):
+                broke = os.path.basename(claim[5:].rstrip("/")) or claim[5:]
+                break
+        return {"idea": idea, "broke": broke, "n": str(len(items))}
+    return None
+
+
 def briefing(meditation_dir: str = MEDITATION_DIR, store_dir: str = STORE_DIR,
              goals_dir: Optional[str] = None,
              history_path: Optional[str] = None) -> Dict[str, Any]:
@@ -92,10 +167,26 @@ def briefing(meditation_dir: str = MEDITATION_DIR, store_dir: str = STORE_DIR,
     d = st.gather(meditation_dir=meditation_dir, store_dir=store_dir,
                   goals_dir=goals_dir, history_path=history_path)
 
-    # 1. knowledge broke — the ghost's most urgent whisper
+    # 1. knowledge broke — say WHICH IDEA, in the owner's own words.
+    # "23 facts failed" is a metric; "the thing you told me about CarryMate
+    # points at a folder that's gone" is an idea. Only the idea is speakable.
     if d.get("repair_open"):
-        return {"headline": "Some of what I know stopped being true — "
-                            "a few facts failed their own receipts.",
+        it = _idea_of_broken(store_dir)
+        if it:
+            tail = (" — the %s it points to is gone" % it["broke"]) if it["broke"] \
+                   else " — what it points to isn't there anymore"
+            more = ""
+            try:
+                n = int(it["n"])
+                if n > 1:
+                    more = " There are %d like it." % n
+            except ValueError:
+                pass
+            return {"headline": "You told me: %s%s.%s"
+                    % (it["idea"], tail, more),
+                    "action": "meditate fix", "kind": "repair",
+                    "next": d.get("next", "")}
+        return {"headline": "Something I know stopped matching reality.",
                 "action": "meditate fix", "kind": "repair",
                 "next": d.get("next", "")}
 
@@ -103,10 +194,13 @@ def briefing(meditation_dir: str = MEDITATION_DIR, store_dir: str = STORE_DIR,
     if d.get("dispatchable"):
         n = len(d["dispatchable"])
         g = d["dispatchable"][0]
-        return {"headline": "%d goal%s ready to move, starting with %s."
-                % (n, "s" if n != 1 else "", g.get("title", g.get("name", ""))),
-                "action": "meditate go", "kind": "goals",
-                "next": (g.get("next") or "")[:80]}
+        nxt = (g.get("next") or "").strip().rstrip(".")
+        rest = (" Two others are waiting too." if n == 3 else
+                (" %d others are waiting too." % (n - 1)) if n > 1 else "")
+        return {"headline": "On %s, the next thing is %s. I can put someone on "
+                            "it now.%s" % (g.get("title", g.get("name", "")),
+                                           nxt or "the open milestone", rest),
+                "action": "meditate go", "kind": "goals", "next": nxt}
 
     # 3. the portfolio, DISTILLED — imbalance and staleness are the insight,
     # not a per-goal percentage read-out.

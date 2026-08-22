@@ -125,7 +125,10 @@ def test_edge_heartbeat_fresh():
     import cadence as cd
     interval_h = (cd.current_interval_s() or 6 * 3600) / 3600
     age_h = (time.time() - os.path.getmtime(log)) / 3600
-    limit = interval_h * 2 + 0.5
+    # macOS launchd does NOT fire while the lid is closed; it fires once on
+    # wake. A gap of a few hours after sleep is normal, so the alarm floor is
+    # 6h — still well under the 13.7h silent death this test exists to catch.
+    limit = max(interval_h * 2 + 0.5, 6.0)
     assert age_h < limit, \
         f"last heartbeat {age_h:.1f}h ago; interval is {interval_h:.0f}h (limit {limit:.1f}h)"
 
