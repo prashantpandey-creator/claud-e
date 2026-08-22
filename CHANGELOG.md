@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.12.0 — 2026-08-22
+
+Casper — the voice/form: composes the ONE thing worth saying and judges
+whether now is the moment (flow vs pause, measured from edit activity, never
+mood-claimed). briefing() + interruptibility(), 8 tests.
+
+Record correction: voice.py, test_voice.py and the `meditate voice` verb
+actually LANDED in commit e65eafd, which a concurrent session mislabeled
+"docs: private island" — it ran `git add -A` and swept my uncommitted voice
+files into its own push while my commit was mid-flight. The code is correct
+and shipped; the commit message was not. Left unamended on purpose: force-
+pushing to relabel it would stomp the other session's work, which the tool's
+own sangama rule forbids. This note is the honest record instead.
+
+### Added (0.12.1)
+- Delivery: `meditate voice --notify` posts a native macOS notification, and
+  `--speak` says it aloud — BOTH gated by interruptibility, so Casper reaches
+  you only at a pause, never mid-flow. Wired into the heartbeat so it can
+  reach you on its own at the right moment.
+
+
 ## 0.11.0 — 2026-08-22
 
 Sārathi (the charioteer) — the brain becomes a conductor with a soul.

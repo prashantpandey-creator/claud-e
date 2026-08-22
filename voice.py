@@ -140,12 +140,51 @@ def _speak(text: str) -> bool:
         return False
 
 
+LAST_SAID = os.path.join(MEDITATION_DIR, ".casper-last.txt")
+
+
+def _already_said(headline: str) -> bool:
+    try:
+        return open(LAST_SAID).read().strip() == headline.strip()
+    except OSError:
+        return False
+
+
+def _remember_said(headline: str) -> None:
+    try:
+        os.makedirs(MEDITATION_DIR, exist_ok=True)
+        with open(LAST_SAID, "w") as f:
+            f.write(headline.strip())
+    except OSError:
+        pass
+
+
+def _notify(headline: str, action: str) -> bool:
+    """A native, dismissable macOS notification — the gentle delivery. Visual,
+    not a voice barging in. Gated by the caller on interruptibility."""
+    title = "\U0001F47B Casper"
+    sub = action or "meditate"
+    body = headline.replace('"', "'")[:200]
+    script = ('display notification "%s" with title "%s" subtitle "%s"'
+              % (body, title, sub))
+    try:
+        r = subprocess.run(["osascript", "-e", script], timeout=8,
+                           capture_output=True)
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="Casper — what to say, and when")
     ap.add_argument("--speak", action="store_true",
                     help="say the headline aloud IF the moment is right")
+    ap.add_argument("--notify", action="store_true",
+                    help="post a native notification IF the moment is right")
     ap.add_argument("--force", action="store_true",
                     help="speak even if you're in flow (override the gate)")
+    ap.add_argument("--quiet", action="store_true",
+                    help="heartbeat mode: only deliver, print nothing")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
 
@@ -153,16 +192,28 @@ def main(argv: Optional[List[str]] = None) -> int:
     t = interruptibility()
     data = {"briefing": b, "timing": t}
 
-    spoke = False
-    if args.speak and b["headline"] and (t["interrupt_ok"] or args.force):
-        spoke = _speak(b["headline"])
+    moment_ok = t["interrupt_ok"] or args.force
+    # on the heartbeat path (--quiet), suppress a headline already delivered —
+    # don't re-nag the same thing every pause. --force always re-says.
+    fresh = args.force or not _already_said(b["headline"])
+    spoke = notified = False
+    if b["headline"] and moment_ok and b["kind"] != "clear" and fresh:
+        if args.speak:
+            spoke = _speak(b["headline"])
+        if args.notify:
+            notified = _notify(b["headline"], b["action"])
+        if spoke or notified:
+            _remember_said(b["headline"])
     data["spoke"] = spoke
+    data["notified"] = notified
 
     if args.json:
         print(json.dumps({"tool_name": "meditate_voice", "success": True,
                           "data": data, "metadata": {}, "errors": []}, indent=2))
         return 0
 
+    if args.quiet:
+        return 0
     print("👻 Casper")
     print("  \"%s\"" % b["headline"])
     if b["action"]:

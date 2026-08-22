@@ -221,7 +221,7 @@ import plistlib, sys
 skill, plist, log = sys.argv[1], sys.argv[2], sys.argv[3]
 cmd = "; ".join('python3 "%s/%s" %s' % (skill, s, a) for s, a in
                 [("nidra_bridge.py", "--sleep"), ("archive.py", "--apply"),
-                 ("dashboard.py", "")]) + ' >> "%s" 2>&1' % log
+                 ("dashboard.py", ""), ("voice.py", "--notify --quiet")]) + ' >> "%s" 2>&1' % log
 plistlib.dump({"Label": "com.meditate.grade",
                "ProgramArguments": ["/bin/bash", "-lc", cmd],
                "StartInterval": 21600, "RunAtLoad": False},
