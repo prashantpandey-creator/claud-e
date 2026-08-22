@@ -108,13 +108,30 @@ def briefing(meditation_dir: str = MEDITATION_DIR, store_dir: str = STORE_DIR,
                 "action": "meditate go", "kind": "goals",
                 "next": (g.get("next") or "")[:80]}
 
-    # 3. the project you live in, and its open task
+    # 3. the portfolio, DISTILLED — imbalance and staleness are the insight,
+    # not a per-goal percentage read-out.
+    try:
+        import projects as pj
+        from distill_speech import distill_portfolio
+        rows = pj.rollup(**{k: v for k, v in
+                            dict(store_dir=store_dir, goals_dir=goals_dir,
+                                 history_path=history_path).items() if v})
+        line = distill_portfolio(rows)
+        if line and "no imbalance" not in line.lower():
+            return {"headline": line, "action": "meditate projects",
+                    "kind": "task", "next": ""}
+    except Exception:
+        pass
     goals = d.get("goals", [])
     live = [g for g in goals if g.get("next") and g["done"] < g["total"]]
     if live:
         g = live[0]
-        return {"headline": "On %s you're at %.0f%% — next is %s."
-                % (g["title"], g["pct"], (g["next"] or "")[:70]),
+        from distill_speech import distill_project
+        return {"headline": distill_project(
+                    {"project": g["title"], "pct": g["pct"],
+                     "open_tasks": [{"task": g["next"]}],
+                     "scope_delta": g.get("scope_delta", 0),
+                     "last_touched_days": None, "repair_items": 0}),
                 "action": "meditate projects", "kind": "task",
                 "next": g["next"]}
 
