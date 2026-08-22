@@ -138,6 +138,18 @@ case "${1:-}" in
     shift
     python3 "$DIR/beacon.py" "$@"
     ;;
+  tell|msg|message)
+    shift
+    python3 "$DIR/inbox.py" send "$@"
+    ;;
+  inbox|mail)
+    shift
+    python3 "$DIR/inbox.py" read "$@"
+    ;;
+  messages)
+    shift
+    python3 "$DIR/inbox.py" list "$@"
+    ;;
   remote)
     shift
     python3 "$DIR/remote.py" "$@"

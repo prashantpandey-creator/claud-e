@@ -225,7 +225,16 @@ def hook_edit(payload: Dict[str, Any],
         me["served"].append(key)
         _log_event(coord_dir, "fact_served", sid, path, mem_id=mem_id)
 
-    # 3. guard rules
+    # 3. mail from other agents — delivered once, at the agent's next action
+    try:
+        from inbox import fetch as _mail, render as _render_mail
+        mail = _render_mail(_mail(sid, cwd))
+        if mail:
+            lines.append(mail)
+    except Exception:
+        pass
+
+    # 4. guard rules
     if PIPELINE_RE.search(path):
         lines.append(PIPELINE_RULE)
     elif NATIVE_RE.search(path):
@@ -377,6 +386,15 @@ def session_start(payload: Dict[str, Any],
     dg = done_digest(store_dir, coord_dir)
     if dg:
         lines.append(dg)
+
+    # Mail waiting from other agents — the first thing a new session should know.
+    try:
+        from inbox import fetch as _mail, render as _render_mail
+        m = _render_mail(_mail(sid, cwd))
+        if m:
+            lines.append(m)
+    except Exception:
+        pass
 
     # Repair queue: caught drift is standing work until a grade pass clears it.
     qp = os.path.join(os.path.dirname(store_dir.rstrip("/")), "repair-queue.md")
