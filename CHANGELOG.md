@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.5.0 — 2026-08-21
+
+Goals — long-term direction across every project, measured not vibed, with
+scope-widening as a first-class fact.
+
+### Added
+- `goals.py` + 8 tests. A goal = one .md in ~/claude-sync/goals/ (synced,
+  human-editable): frontmatter + '## Milestones' checkboxes. Percentage =
+  checked/total — deterministic; nothing self-reports progress.
+- **Evolving goals**: every scan snapshots (done, total) to
+  goals-history.jsonl; when a goal WIDENS the table shows "scope +N" beside
+  the honestly lower percentage. Growth of ambition is visible, never silent
+  dilution.
+- **North-star nudge**: SessionStart injects one line for the goal governing
+  the session's cwd (deepest cwd match wins; done/paused goals never nudge).
+- **Agent orchestration**: `meditate goals launch <name>` builds a kickoff
+  prompt from the goal's open milestones — "take the FIRST open milestone,
+  drive it to done, tick the checkbox, stop" — and prints the `claude`
+  command or opens a Terminal on it (--open, via launch.py).
+- Seeded 3 real goals from the owner's open items: purangpt-mobile-live
+  (3/8), astrology-readings-instant (3/6), meditate-self-proving (4/7).
+
+
 ## 0.4.4 — 2026-08-21
 
 Longevity audit: will the pipeline hold for years? Measured, not guessed.

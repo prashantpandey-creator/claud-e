@@ -278,6 +278,16 @@ def session_start(payload: Dict[str, Any],
             "run `meditate drift` to see the failing claims before trusting them."
             % (len(drifted), "y" if len(drifted) == 1 else "ies",
                ", ".join(drifted[:3])))
+
+    # North-star nudge: the long-term goal governing this directory, one line.
+    # Fail-open — a broken goals file must never cost the session its rules.
+    try:
+        from goals import goal_for_cwd
+        gline = goal_for_cwd(cwd)
+        if gline:
+            lines.append(gline)
+    except Exception:
+        pass
     return "\n".join(lines)
 
 

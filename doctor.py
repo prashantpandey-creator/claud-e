@@ -39,6 +39,7 @@ TEST_FILES = [
     "test_coordination.py",
     "test_archive.py",
     "test_report.py",
+    "test_goals.py",
 ]
 
 
