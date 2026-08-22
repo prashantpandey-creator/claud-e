@@ -39,6 +39,8 @@ meditate              # health check
 meditate grade        # scan + grade + consolidate
 meditate metrics      # drift rate, coverage, health dashboard
 meditate archive      # archive finished/empty sessions (dry-run; --apply)
+meditate drive        # dispatch goal agents (dry-run; --go N launches)
+meditate dashboard    # the whole organism, one self-contained HTML page
 meditate ask          # question the graded store — verified facts first
 meditate distill      # formation queue: sessions awaiting distillation
 meditate goals        # long-term goals: %, scope drift, agent kickoffs
@@ -265,6 +267,8 @@ meditate              # health check (doctor)
 meditate grade        # scan sessions + .md files, grade, consolidate
 meditate metrics      # drift rate, coverage, health dashboard
 meditate archive      # archive finished/empty sessions (dry-run; --apply)
+meditate drive        # dispatch goal agents (dry-run; --go N launches)
+meditate dashboard    # the whole organism, one self-contained HTML page
 meditate ask          # question the graded store — verified facts first
 meditate distill      # formation queue: sessions awaiting distillation
 meditate goals        # long-term goals: %, scope drift, agent kickoffs

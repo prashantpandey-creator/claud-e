@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.8.0 — 2026-08-22
+
+Drive + dashboard — the fleet layer and the face.
+
+### Added
+- **`meditate drive`** — one command dispatches goal agents: dry-run lists
+  which goals would get one; `--go N` opens up to N Terminal agents, each on
+  its goal's first open milestone with the tick-the-checkbox kickoff. A
+  dispatched goal cools down 4h (no double-send while an agent is presumed
+  working); every send lands in dispatch.jsonl. Deliberately NOT a cron: the
+  owner triggers, the fleet executes, ship discipline rides in via the hook.
+  7 tests (dry-run writes nothing, cap, cooldown, expiry, failed-launch not
+  recorded).
+- **`meditate dashboard`** — the whole organism on one self-contained HTML
+  page (4.2 KB, zero external assets, dark + one gold): goals with scope
+  drift, drift-correct counters, stilling, sangama, formation queue,
+  heartbeat age. `--open` for the browser.
+
+
 ## 0.7.0 — 2026-08-21
 
 Knowledge formation — the owner is right: forming is a natural part. nidra
