@@ -47,6 +47,7 @@ TEST_FILES = [
     "test_status_go.py",
     "test_brain.py",
     "test_beacon.py",
+    "test_insights.py",
 ]
 
 

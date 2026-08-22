@@ -219,13 +219,13 @@ def state() -> Dict[str, Any]:
             r["says"] = bd.get("message", "")
             r["says_done"] = bd.get("done", False)
             r["says_ts"] = bd.get("ts", "")[11:19]
-    return {
+    d = {
         "generated": time.strftime("%H:%M:%S"),
         "store": st["store"],
         "heartbeat_h": st["heartbeat_h"],
         "next": st["next"],
         "goals": [{"name": g["name"], "title": g["title"], "pct": g["pct"],
-                   "done": g["done"], "total": g["total"],
+                   "done": g["done"], "total": g["total"], "cwd": g.get("cwd", ""),
                    "scope_delta": g.get("scope_delta", 0), "next": g["next"]}
                   for g in st["goals"]],
         "live_sessions": [{"sid": s.get("sid", "")[:12], "cwd": s.get("cwd", ""),
@@ -254,6 +254,12 @@ def state() -> Dict[str, Any]:
         "digest": done_digest(),
         "activity": _recent_events(),
     }
+    try:
+        from insights import insights as _ins
+        d["insights"] = _ins(d)
+    except Exception:
+        d["insights"] = {"headline": "", "projects": [], "needs_you": [], "moving": []}
+    return d
 
 
 def _recent_events(n: int = 10) -> List[Dict[str, str]]:
@@ -281,7 +287,12 @@ PAGE = """<!doctype html><meta charset="utf-8">
 <div style="letter-spacing:.35em;font-size:11px;color:#6b6557">MEDITATE · PULSE</div>
 <div style="font-size:22px;margin:6px 0 2px;color:#E3B140">Pulse <span style="font-size:13px;color:#8a8578">· your sessions, goals, memory and fleet — live. One click runs, and shows what ran.</span></div>
 <div id="meta" style="font-size:12px;color:#8a8578"></div>
-<div id="next" style="margin:14px 0;color:#E3B140"></div>
+<div id="headline" style="margin:12px 0 4px;font-size:15px;color:#d8d2c4"></div>
+<div id="next" style="margin:4px 0 14px;color:#E3B140"></div>
+<div style="display:flex;gap:36px;flex-wrap:wrap;margin:4px 0 8px">
+  <div style="min-width:280px"><div style="letter-spacing:.3em;font-size:11px;color:#c96442">NEEDS YOU</div><div id="needs" style="font-size:12.5px;margin-top:6px"></div></div>
+  <div style="min-width:280px"><div style="letter-spacing:.3em;font-size:11px;color:#6b6557">MOVING BY ITSELF</div><div id="moving" style="font-size:12.5px;margin-top:6px"></div></div>
+</div>
 <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start">
   <div style="max-width:180px"><button onclick="act('go','')" class="b" title="Opens one Terminal window per goal below, each with an agent working that goal's next milestone. Repair goes first if the queue is open.">launch fleet</button>
     <div class="cap">opens one Terminal agent per goal below — repair first if open</div></div>
@@ -347,6 +358,12 @@ async function tick(){
   document.getElementById("meta").textContent =
     `refreshed ${s.generated} · every number from the graded store, not recall`;
   document.getElementById("next").textContent = "next: " + s.next;
+  const ins = s.insights||{headline:"",needs_you:[],moving:[]};
+  document.getElementById("headline").textContent = ins.headline||"";
+  document.getElementById("needs").innerHTML = (ins.needs_you||[]).map(x=>
+    `<div style="margin:2px 0">• ${esc(x)}</div>`).join("") || `<div style="color:${DIM}">nothing — all clear</div>`;
+  document.getElementById("moving").innerHTML = (ins.moving||[]).map(x=>
+    `<div style="margin:2px 0;color:#d8d2c4">▸ ${esc(x)}</div>`).join("") || `<div style="color:${DIM}">no agents reporting</div>`;
   const v = s.store.active? (100*s.store.verified/s.store.active).toFixed(1):"0";
   const stat=(val,lab,tip)=>`<div title="${tip||""}" style="cursor:default"><div style="font-size:24px;color:${G}">${val}</div><div style="font-size:12px;color:${DIM}">${lab}</div></div>`;
   document.getElementById("stats").innerHTML =
