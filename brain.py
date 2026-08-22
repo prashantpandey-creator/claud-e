@@ -287,6 +287,7 @@ PAGE = """<!doctype html><meta charset="utf-8">
 <style>.b{cursor:pointer;border:1px solid #2a2620;background:transparent;color:#E3B140;border-radius:7px;padding:6px 13px;font-size:13px}.b:hover{background:#1d1a14}
 .cap{font-size:10.5px;color:#6b6557;margin-top:4px;line-height:1.35}</style>
 <div id="stats" style="display:flex;flex-wrap:wrap;gap:24px;margin:18px 0"></div>
+<div style="font-size:11.5px;color:#6b6557;max-width:760px;margin:-4px 0 4px">what "a memory" means here: one fact about your work, saved with a receipt — the exact file and line it came from. Facts are re-checked against reality; a fact that stops matching goes to the repair queue instead of being trusted. Hover any number for its meaning.</div>
 <div style="letter-spacing:.3em;font-size:11px;color:#6b6557;margin-top:26px">LIVE SESSIONS <span style="letter-spacing:0;color:#4a463c">— each orb beats with its session: fast = working right now, dim ember = gone quiet (prāṇa, the breath)</span></div>
 <div id="live" style="display:flex;flex-wrap:wrap;gap:26px;margin-top:14px"></div>
 <style>
@@ -302,7 +303,7 @@ PAGE = """<!doctype html><meta charset="utf-8">
 <div id="goals"></div>
 <div style="letter-spacing:.3em;font-size:11px;color:#6b6557;margin-top:22px">FLEET</div>
 <div id="fleet" style="font-size:13px"></div>
-<div style="letter-spacing:.3em;font-size:11px;color:#6b6557;margin-top:22px">REPAIR QUEUE</div>
+<div style="letter-spacing:.3em;font-size:11px;color:#6b6557;margin-top:22px">REPAIR QUEUE <span style="letter-spacing:0;color:#4a463c">— facts whose receipts stopped matching reality; not trusted until fixed</span></div>
 <div id="repair" style="font-size:13px"></div>
 <div style="letter-spacing:.3em;font-size:11px;color:#6b6557;margin-top:22px">ACTIVITY</div>
 <div id="activity" style="font-size:12px;color:#8a8578"></div>
@@ -339,14 +340,22 @@ async function tick(){
     `refreshed ${s.generated} · every number from the graded store, not recall`;
   document.getElementById("next").textContent = "next: " + s.next;
   const v = s.store.active? (100*s.store.verified/s.store.active).toFixed(1):"0";
-  const stat=(val,lab)=>`<div><div style="font-size:24px;color:${G}">${val}</div><div style="font-size:12px;color:${DIM}">${lab}</div></div>`;
+  const stat=(val,lab,tip)=>`<div title="${tip||""}" style="cursor:default"><div style="font-size:24px;color:${G}">${val}</div><div style="font-size:12px;color:${DIM}">${lab}</div></div>`;
   document.getElementById("stats").innerHTML =
-    stat(s.store.active,"graded memories")+stat(v+"%","verified")+
-    stat(s.store.formed,"self-formed")+
-    stat(s.wins.caught+" / "+s.wins.repaired,"drift caught / repaired")+
-    stat(s.sangama.facts_served,"facts served")+
-    stat(s.stilling.sessions_archived,"sessions archived")+
-    stat((s.heartbeat_h==null?"—":s.heartbeat_h+" h"),"since heartbeat");
+    stat(s.store.active,"facts it knows",
+      "A memory here = one fact about your work, saved with a receipt: the exact file and line it came from, so it can be re-checked forever.")+
+    stat(v+"%","still true when re-checked",
+      "Every fact's receipt is re-checked against the real files. This is the share that still matches reality right now.")+
+    stat(s.store.formed,"learned by itself",
+      "Facts the system wrote on its own from your git commits — your commit messages become memory automatically.")+
+    stat(s.wins.caught+" / "+s.wins.repaired,"broken by reality / fixed",
+      "When the world changes under a fact (a file moves, a claim goes stale), it is caught and stops being trusted. Fixed = someone repaired it and the re-check passed.")+
+    stat(s.sangama.facts_served,"facts handed to sessions",
+      "When any session edits a file this system knows facts about, those facts are handed to it at that exact moment.")+
+    stat(s.stilling.sessions_archived,"old chats tidied away",
+      "Empty or finished sessions moved out of your session list — reversible, nothing is ever deleted.")+
+    stat((s.heartbeat_h==null?"—":s.heartbeat_h+" h"),"since last self-check",
+      "Every 6 hours the system re-checks all facts, learns from new commits, and tidies up — without being asked.");
   document.getElementById("live").innerHTML = s.live_sessions.map(x=>{
     // the beat IS the recency: <60s -> ~1.1s fast pulse; slows with age;
     // >30 min -> a still ember (no animation, dim)
