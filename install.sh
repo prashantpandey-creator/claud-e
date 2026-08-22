@@ -201,11 +201,34 @@ else
     echo "          Get it: git clone https://github.com/prashantpandey-creator/nidra ~/projects/nidra"
 fi
 
+# ---- 5b. Heartbeat — grade runs every 6h without being asked
+echo
+echo "  Installing heartbeat (launchd, every 6h)..."
+PLIST="$HOME/Library/LaunchAgents/com.meditate.grade.plist"
+cat > "$PLIST" <<PLIST_EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.meditate.grade</string>
+  <key>ProgramArguments</key>
+  <array><string>/bin/bash</string><string>-lc</string>
+    <string>python3 "$SKILL_DIR/nidra_bridge.py" --sleep >> "$HOME/.claude/meditation/heartbeat.log" 2>&1</string></array>
+  <key>StartInterval</key><integer>21600</integer>
+  <key>RunAtLoad</key><false/>
+</dict></plist>
+PLIST_EOF
+launchctl unload "$PLIST" 2>/dev/null || true
+if launchctl load -w "$PLIST" 2>/dev/null; then
+    echo "  [ok]  heartbeat loaded — grade + drift + repair queue every 6h"
+else
+    echo "  [warn]  could not load launchd agent — run: launchctl load -w $PLIST"
+fi
+
 # ---- 6. Run tests
 echo
 echo "  Running test suite..."
 TEST_PASS=true
-for tf in test_sessions.py test_launch.py test_scan.py test_still.py test_doctor.py test_nidra_bridge.py test_metrics.py test_hook.py test_coordination.py test_archive.py test_report.py test_goals.py; do
+for tf in test_sessions.py test_launch.py test_scan.py test_still.py test_doctor.py test_nidra_bridge.py test_metrics.py test_hook.py test_coordination.py test_archive.py test_report.py test_goals.py test_ask.py; do
     if [ -f "$SKILL_DIR/$tf" ]; then
         if python3 "$SKILL_DIR/$tf" > /dev/null 2>&1; then
             echo "  [ok]  $tf"

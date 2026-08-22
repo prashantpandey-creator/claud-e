@@ -39,6 +39,7 @@ meditate              # health check
 meditate grade        # scan + grade + consolidate
 meditate metrics      # drift rate, coverage, health dashboard
 meditate archive      # archive finished/empty sessions (dry-run; --apply)
+meditate ask          # question the graded store — verified facts first
 meditate goals        # long-term goals: %, scope drift, agent kickoffs
 meditate report       # wins + efficacy: drift caught/repaired, stilling
 meditate drift        # memories whose evidence failed — exact claims
@@ -263,6 +264,7 @@ meditate              # health check (doctor)
 meditate grade        # scan sessions + .md files, grade, consolidate
 meditate metrics      # drift rate, coverage, health dashboard
 meditate archive      # archive finished/empty sessions (dry-run; --apply)
+meditate ask          # question the graded store — verified facts first
 meditate goals        # long-term goals: %, scope drift, agent kickoffs
 meditate report       # wins + efficacy: drift caught/repaired, stilling
 meditate drift        # memories whose evidence failed — exact claims
@@ -312,7 +314,7 @@ with `meditate metrics --json` and `meditate doctor --json`.
 ```
 ~/.claude/skills/meditate/
 ├── README.md              this file
-├── VERSION                0.5.0
+├── VERSION                0.6.0
 ├── CHANGELOG.md           history
 ├── SKILL.md               /meditate slash command definition
 ├── INTERNALS.md           developer docs (vritti/antaraya/nirodha formulas)

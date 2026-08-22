@@ -279,6 +279,12 @@ def session_start(payload: Dict[str, Any],
             % (len(drifted), "y" if len(drifted) == 1 else "ies",
                ", ".join(drifted[:3])))
 
+    # Repair queue: caught drift is standing work until a grade pass clears it.
+    qp = os.path.join(os.path.dirname(store_dir.rstrip("/")), "repair-queue.md")
+    if os.path.exists(qp):
+        lines.append("Repair queue: knowledge failed verification — see %s "
+                     "(fix the .md, then `meditate grade` to clear)." % qp)
+
     # North-star nudge: the long-term goal governing this directory, one line.
     # Fail-open — a broken goals file must never cost the session its rules.
     try:

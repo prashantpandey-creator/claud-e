@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.6.0 — 2026-08-21
+
+The missing metabolism. Whole-system analysis found the organs present but no
+pulse: nothing ran unbidden, the store could not be questioned, caught drift
+evaporated at a terminal. All three closed; knowledge FORMATION stays with
+/meditate (judgment), now nagged by exact work items instead of memory.
+
+### Added
+- **Heartbeat** — launchd `com.meditate.grade` runs the full grade + sleep +
+  index + queue pass every 6h, no human needed. Its FIRST live beat caught a
+  real latent bug: system python 3.9 rejects 'Z' timestamps and one crashed
+  the whole sleep pass (interactive 3.14 never saw it). Fixed in nidra
+  `_parse_ts` — a bad timestamp degrades to None, never kills consolidation.
+- **`meditate ask`** — the store can finally be questioned. nidra retrieval
+  over active memories, verified facts ranked first, every hit carries its
+  grade; an unverified hit is marked, never laundered into clean fact.
+- **Repair queue** — every grade pass materializes caught drift as
+  `~/.claude/meditation/repair-queue.md` (exact failing claim + line) and
+  REMOVES it when the world re-verifies. SessionStart nudges while it exists.
+  First live queue caught real work: the liveStream law's worktree path
+  (`.scratch-worktrees/chat-switch-perf`) is GONE while the branch is still
+  awaiting its push go.
+- doctor checks the heartbeat (plist + loaded + last beat); 4+2 new tests.
+
+### Isolation
+- The queue lives beside ITS OWN store (parent dir), so temp-store test runs
+  can never clear the live queue.
+
+
 ## 0.5.0 — 2026-08-21
 
 Goals — long-term direction across every project, measured not vibed, with

@@ -201,6 +201,17 @@ def test_session_start_reports_live_sessions():
         assert "1 other live session" in out, f"presence not reported: {out!r}"
 
 
+def test_session_start_nudges_repair_queue():
+    with tempfile.TemporaryDirectory() as t:
+        coord, store = _env(t)
+        # queue lives beside the store dir (parent = meditation dir)
+        with open(os.path.join(os.path.dirname(store), "repair-queue.md"), "w") as f:
+            f.write("# Repair queue\n")
+        out = co.session_start({"session_id": "s", "cwd": "/repo"},
+                               coord_dir=coord, store_dir=store)
+        assert "Repair queue" in out, f"queue nudge missing: {out!r}"
+
+
 def test_session_start_quiet_when_alone_and_clean():
     with tempfile.TemporaryDirectory() as t:
         coord, store = _env(t)

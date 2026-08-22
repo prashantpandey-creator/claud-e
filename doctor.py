@@ -40,6 +40,7 @@ TEST_FILES = [
     "test_archive.py",
     "test_report.py",
     "test_goals.py",
+    "test_ask.py",
 ]
 
 
@@ -145,6 +146,26 @@ def _check_hook() -> Dict[str, Any]:
     }
 
 
+def _check_heartbeat() -> Dict[str, Any]:
+    """The metabolism: grade must run WITHOUT a human. launchd every 6h."""
+    plist = os.path.expanduser("~/Library/LaunchAgents/com.meditate.grade.plist")
+    exists = os.path.isfile(plist)
+    loaded = False
+    if exists:
+        try:
+            r = subprocess.run(["launchctl", "list"], capture_output=True,
+                               text=True, timeout=10)
+            loaded = "com.meditate.grade" in r.stdout
+        except Exception:
+            pass
+    log = os.path.expanduser("~/.claude/meditation/heartbeat.log")
+    last_beat = None
+    if os.path.exists(log):
+        last_beat = time.strftime("%Y-%m-%d %H:%M",
+                                  time.localtime(os.path.getmtime(log)))
+    return {"plist_exists": exists, "loaded": loaded, "last_beat": last_beat}
+
+
 def _check_stillness() -> Dict[str, Any]:
     if not os.path.isfile(STILLNESS_PATH):
         return {"exists": False, "age_days": None, "overdue": True}
@@ -210,6 +231,7 @@ def run() -> Dict[str, Any]:
     prereqs = _check_prereqs()
     tests = _check_tests()
     hook = _check_hook()
+    heartbeat = _check_heartbeat()
     stillness = _check_stillness()
     output = _check_output()
     nidra = _check_nidra()
@@ -221,6 +243,8 @@ def run() -> Dict[str, Any]:
         issues.append("tests")
     if not hook["all_wired"]:
         issues.append("hook_registration")
+    if not heartbeat["loaded"]:
+        issues.append("heartbeat_not_loaded")
     if stillness["overdue"]:
         issues.append("stillness_overdue")
 
@@ -232,6 +256,7 @@ def run() -> Dict[str, Any]:
         "prereqs": prereqs,
         "tests": tests,
         "hook": hook,
+        "heartbeat": heartbeat,
         "stillness": stillness,
         "output": output,
         "nidra": nidra,
@@ -270,6 +295,11 @@ def main(argv: List[str]) -> int:
         print(f"  [{'ok' if wired else 'MISSING':>7}]  {ev}")
     for s in h.get("stale_registrations", []):
         print(f"  [ STALE ]  retired hook still wired — {s}")
+
+    hb = d.get("heartbeat", {})
+    print(f"\nHeartbeat:")
+    print(f"  [{'ok' if hb.get('loaded') else 'MISSING':>7}]  launchd com.meditate.grade "
+          f"(last beat: {hb.get('last_beat') or 'never'})")
 
     print(f"\nStillness:")
     if d["stillness"]["exists"]:

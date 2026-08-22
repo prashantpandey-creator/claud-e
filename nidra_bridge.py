@@ -176,6 +176,20 @@ def run(do_sleep=False, store_dir=None, memory_root=None):
     except Exception as e:
         result["path_index_error"] = str(e)
 
+    # Close the correction loop: materialize caught drift as WORK. The queue
+    # file appears when evidence fails and disappears when the world is clean
+    # again — `meditate report` counts the round trip as a repair.
+    try:
+        from coordination import drift_report
+        from ask import write_repair_queue
+        # Queue lives beside ITS OWN store (parent dir) — a test run against a
+        # temp store must never touch the live queue.
+        med_dir = os.path.dirname(store_dir.rstrip("/"))
+        qp = write_repair_queue(drift_report(store_dir), meditation_dir=med_dir)
+        result["repair_queue"] = qp or "clean"
+    except Exception as e:
+        result["repair_queue_error"] = str(e)
+
     return _envelope(True, result, None, store_dir)
 
 
