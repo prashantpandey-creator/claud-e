@@ -89,6 +89,21 @@ def run(do_sleep=False, store_dir=None, memory_root=None, form_days=None):
     the graded store is shared state, not a scratchpad.
     """
     store_dir = store_dir or STORE_DIR
+
+    # Three writers now exist (heartbeat, Pulse's grade button, goal agents
+    # running `meditate grade`). Unlocked, two passes interleave load->save
+    # and the later save silently DROPS the earlier one's memories. Per-store
+    # flock: second runner skips with an honest envelope instead of corrupting.
+    import fcntl
+    os.makedirs(store_dir, exist_ok=True)
+    lock_f = open(os.path.join(store_dir, ".grade.lock"), "w")
+    try:
+        fcntl.flock(lock_f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        lock_f.close()
+        return _envelope(True, {"skipped": "another grade pass is already running on this store"},
+                         None, store_dir)
+
     _rotate_journal(store_dir)
     try:
         from nidra.store import Store
@@ -206,6 +221,7 @@ def run(do_sleep=False, store_dir=None, memory_root=None, form_days=None):
     except Exception as e:
         result["repair_queue_error"] = str(e)
 
+    lock_f.close()
     return _envelope(True, result, None, store_dir)
 
 

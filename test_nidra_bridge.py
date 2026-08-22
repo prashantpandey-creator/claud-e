@@ -103,6 +103,24 @@ def test_memory_dirs_missing_root():
     assert nidra_bridge._memory_dirs("/nonexistent/path/xyz") == []
 
 
+def test_concurrent_grade_skips_not_corrupts():
+    """THE concurrency falsifier: while one pass holds the store lock, a
+    second must SKIP with an honest envelope — never interleave saves."""
+    import fcntl
+    with tempfile.TemporaryDirectory() as td:
+        sd = os.path.join(td, "store")
+        os.makedirs(sd)
+        holder = open(os.path.join(sd, ".grade.lock"), "w")
+        fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        env = nidra_bridge.run(store_dir=sd, form_days=0)
+        holder.close()
+        assert env["success"] is True
+        assert "skipped" in env["data"], env["data"]
+        # and after release, a real pass proceeds
+        env2 = nidra_bridge.run(store_dir=sd, form_days=0)
+        assert "skipped" not in env2["data"]
+
+
 def test_journal_rotation():
     """Unbounded journal is the one measured long-run defect: 3,314 rows/day
     at current cadence with no rotation anywhere. The bridge rotates at the

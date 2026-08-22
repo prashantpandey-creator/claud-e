@@ -389,7 +389,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--port", type=int, default=DEFAULT_PORT)
     ap.add_argument("--no-open", action="store_true")
     args = ap.parse_args(argv)
-    srv = make_server(args.port)
+    try:
+        srv = make_server(args.port)
+    except OSError:
+        url = "http://127.0.0.1:%d" % args.port
+        print("pulse already running at %s — opening it" % url)
+        if not args.no_open:
+            os.system("open '%s' 2>/dev/null" % url)
+        return 0
     url = "http://127.0.0.1:%d" % srv.server_address[1]
     print("brain live at %s  (localhost only — Ctrl-C to stop)" % url)
     if not args.no_open:
