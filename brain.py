@@ -57,6 +57,75 @@ def _default_runner(action: str, arg: str) -> Dict[str, Any]:
 ACT_RUNNER = _default_runner   # tests monkeypatch this
 
 NAMES_PATH = os.path.expanduser("~/.claude/coordination/session-names.json")
+LABELS_CACHE = os.path.expanduser("~/.claude/coordination/session-labels.json")
+PROJECTS_DIR = os.path.expanduser("~/.claude/projects")
+
+import re as _re
+_CHAPTER_RE = _re.compile(r'mark_chapter.{0,400}?\\?"title\\?":\s*\\?"([^"\\]{4,70})')
+_ASK_RE = _re.compile(r'"type":\s*"user".{0,2000}?"(?:text|content)":\s*"((?:[^"\\]|\\.){8,160})')
+
+
+def _derive_label(full_sid: str, cwd: str) -> str:
+    """WHAT is this session doing — from its own transcript, precisely.
+
+    Priority: the session's LAST chapter mark (it names its own phase), else
+    its last user ask (the owner's words), else the project dir. Reads only
+    the transcript tail (300 KB) and recomputes at most once per 60 s per
+    session — active transcripts change every few seconds and a full re-read
+    per tick would burn the 4 s budget.
+    """
+    try:
+        with open(LABELS_CACHE) as f:
+            cache = json.load(f)
+    except Exception:
+        cache = {}
+    ent = cache.get(full_sid)
+    now = time.time()
+    if ent and now - ent.get("ts", 0) < 60:
+        return ent.get("label", "")
+    label = ""
+    try:
+        import glob as _glob
+        cands = _glob.glob(os.path.join(PROJECTS_DIR, "*", full_sid + ".jsonl"))
+        if cands:
+            tp = max(cands, key=os.path.getmtime)
+            size = os.path.getsize(tp)
+            with open(tp, "rb") as f:
+                if size > 300_000:
+                    f.seek(size - 300_000)
+                tail = f.read().decode("utf-8", errors="replace")
+            chapters = _CHAPTER_RE.findall(tail)
+            if chapters:
+                label = chapters[-1]
+            else:
+                # transcripts wrap TOOL RESULTS inside "type":"user" rows —
+                # trusting the type alone labeled sessions with "Exit code
+                # 143..." garbage, live. A human ask is a user row WITHOUT
+                # tool_result, and it must read like words.
+                for line in tail.splitlines():
+                    if '"type":"user"' not in line or "tool_result" in line                             or "toolUseResult" in line:
+                        continue
+                    m = _ASK_RE.search(line)
+                    if not m:
+                        continue
+                    a = m.group(1).encode().decode("unicode_escape", errors="replace")
+                    a = _re.sub(r"\s+", " ", a).strip()
+                    if a.startswith(("{", "<", "Exit code", "[")) or " " not in a:
+                        continue
+                    if sum(c.isalpha() for c in a) < len(a) * 0.5:
+                        continue                     # numbers/log spew
+                    label = a[:64]                   # last good one wins
+    except Exception:
+        label = ""
+    cache[full_sid] = {"label": label, "ts": now}
+    try:
+        os.makedirs(os.path.dirname(LABELS_CACHE), exist_ok=True)
+        with open(LABELS_CACHE + ".tmp", "w") as f:
+            json.dump(cache, f)
+        os.replace(LABELS_CACHE + ".tmp", LABELS_CACHE)
+    except OSError:
+        pass
+    return label
 
 
 def _names() -> Dict[str, str]:
@@ -123,6 +192,13 @@ def _log_brain_action(action: str, arg: str) -> None:
         pass
 
 
+def _dispatch_label(s, dispatched) -> str:
+    for r in dispatched or []:
+        if r.get("live_session") and s.get("sid", "").startswith(r["live_session"][:8]):
+            return "goal: " + (r.get("milestone") or "")[:56]
+    return ""
+
+
 def state() -> Dict[str, Any]:
     """Every organ, one dict, all from durable stores — computed per request."""
     import goals as gl
@@ -147,8 +223,12 @@ def state() -> Dict[str, Any]:
         "live_sessions": [{"sid": s.get("sid", "")[:12], "cwd": s.get("cwd", ""),
                            "age_s": s.get("_age_s"),
                            "pid": s.get("pid"),
-                           "label": _names().get(s.get("sid", "")[:12]) or
-                                    ((os.path.basename(s.get("cwd", "").rstrip("/")) or "~")),
+                           # precision ladder: owner's name > goal milestone >
+                           # the session's own chapter/ask > project dir
+                           "label": _names().get(s.get("sid", "")[:12])
+                                    or _dispatch_label(s, fleet["dispatched"])
+                                    or _derive_label(s.get("sid", ""), s.get("cwd", ""))
+                                    or (os.path.basename(s.get("cwd", "").rstrip("/")) or "~"),
                            "last_file": os.path.basename(
                                sorted(s.get("files", {"": 0}),
                                       key=s.get("files", {"": 0}).get)[-1])}

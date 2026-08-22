@@ -129,6 +129,40 @@ def test_names_and_guarded_stop():
         br._pid_is_claude = old_check
 
 
+def test_derive_label_precision():
+    """Precision ladder: chapter mark wins, else last user ask, cached 60s."""
+    import tempfile, glob
+    with tempfile.TemporaryDirectory() as td:
+        proj = os.path.join(td, "projects", "-x"); os.makedirs(proj)
+        sid = "aaaa1111-bbbb-2222"
+        tp = os.path.join(proj, sid + ".jsonl")
+        with open(tp, "w") as f:
+            f.write('{"type":"user","message":{"content":"fix the payment flow on marketplace"}}\n')
+            f.write('{"tool":"mark_chapter","input":"{\\"title\\": \\"Razorpay key restoration\\"}"}\n')
+        oldp, oldc = br.PROJECTS_DIR, br.LABELS_CACHE
+        br.PROJECTS_DIR = os.path.join(td, "projects")
+        br.LABELS_CACHE = os.path.join(td, "labels.json")
+        try:
+            assert br._derive_label(sid, "/x") == "Razorpay key restoration"
+            # no chapters -> last ask
+            sid2 = "cccc3333-dddd-4444"
+            with open(os.path.join(proj, sid2 + ".jsonl"), "w") as f:
+                f.write('{"type":"user","text":"make the goal names precise so i know what is happening"}\n')
+            lab = br._derive_label(sid2, "/x")
+            assert "precise" in lab, lab
+            # cache throttle: mutate file, label stays for 60s
+            with open(os.path.join(proj, sid2 + ".jsonl"), "a") as f:
+                f.write('{"type":"user","text":"completely different topic now"}\n')
+            assert br._derive_label(sid2, "/x") == lab, "must serve cached label inside 60s"
+            # tool_result wrapped in a user row must NEVER become the name
+            sid3 = "eeee5555-ffff-6666"
+            with open(os.path.join(proj, sid3 + ".jsonl"), "w") as f:
+                f.write('{"type":"user","message":{"content":[{"type":"tool_result","text":"Exit code 143 Command timed out after 5m"}]}}\n')
+            assert br._derive_label(sid3, "/x") == "", "tool-output garbage leaked into the label"
+        finally:
+            br.PROJECTS_DIR, br.LABELS_CACHE = oldp, oldc
+
+
 def test_state_is_json_serializable():
     json.dumps(br.state())
 
