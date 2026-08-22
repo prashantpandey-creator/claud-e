@@ -91,7 +91,7 @@ def _project_of(file_path):
 
 def extract_file(path, cap=DEFAULT_CAP, snippet=SNIPPET):
     title = None
-    session_id = None
+    ai_title = None
     cwd = None
     git_branch = None
     ts_start = ts_end = None
@@ -105,10 +105,14 @@ def extract_file(path, cap=DEFAULT_CAP, snippet=SNIPPET):
 
     for o in _iter_objs(path):
         t = o.get("type")
-        if o.get("sessionId") and not session_id:
-            session_id = o["sessionId"]
-        if t == "ai-title" and o.get("aiTitle"):
-            title = o["aiTitle"]            # keep the LAST title seen
+        # NOTE: the in-file sessionId is NOT read here. A resumed or compacted
+        # transcript carries its ANCESTOR's sessionId in its opening rows, so
+        # trusting it collapsed 12 of 132 real transcripts onto 8 ids in the
+        # graded store. The filename is the id (set below).
+        if t == "custom-title" and o.get("customTitle"):
+            title = o["customTitle"]        # keep the LAST title seen
+        elif t == "ai-title" and o.get("aiTitle"):
+            ai_title = o["aiTitle"]         # fallback only
         if cwd is None and o.get("cwd"):
             cwd = o["cwd"]
         if git_branch is None and o.get("gitBranch"):
@@ -175,9 +179,9 @@ def extract_file(path, cap=DEFAULT_CAP, snippet=SNIPPET):
     )
 
     return {
-        "session_id": session_id or os.path.splitext(os.path.basename(path))[0],
+        "session_id": os.path.splitext(os.path.basename(path))[0],
         "file": os.path.basename(path),
-        "title": title,
+        "title": title or ai_title,
         "cwd": cwd,
         "git_branch": git_branch,
         "size_bytes": size,

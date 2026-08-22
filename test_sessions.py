@@ -79,6 +79,38 @@ def main():
         check("Edit" in dict(rec["top_tools"]), "top_tools should include Edit")
         check(rec["sprawl_score"] >= 0, "sprawl_score must be present")
 
+        # --- the filename IS the session id ---
+        # A resumed/compacted transcript carries its ANCESTOR's sessionId in
+        # its first rows. Trusting that made 12 of 132 real transcripts
+        # collide onto 8 ids in the graded store — including the session
+        # doing this pass, which reported itself as a different session.
+        resumed = os.path.join(d, "aaaa1111-2222-3333-4444-555555555555.jsonl")
+        _write(resumed, [{"type": "system", "sessionId": "OLDPARENT", "cwd": "/x",
+                          "timestamp": "2026-06-02T10:00:00.000Z", "content": "boot"},
+                         {"type": "user", "timestamp": "2026-06-02T10:01:00.000Z",
+                          "message": {"role": "user", "content": "carry on with the work"}}])
+        r = sessions.extract_file(resumed)
+        check(r["session_id"] == "aaaa1111-2222-3333-4444-555555555555",
+              f"resumed session took its ancestor's id: {r['session_id']}")
+
+        # --- titles: custom-title is the real one; ai-title is the fallback ---
+        # 123 of 132 real sessions had no ai-title line, so every graded
+        # session memory read "Session '(untitled)' on unknown" — content-free.
+        # The titles were there the whole time under a type the parser ignored.
+        ct = os.path.join(d, "CT.jsonl")
+        _write(ct, [{"type": "ai-title", "aiTitle": "auto guess"},
+                    {"type": "custom-title", "customTitle": "Fix the retry loop"},
+                    {"type": "user", "timestamp": "2026-06-03T10:00:00.000Z",
+                     "message": {"role": "user", "content": "fix it"}}])
+        check(sessions.extract_file(ct)["title"] == "Fix the retry loop",
+              "custom-title must win over ai-title")
+        only_ai = os.path.join(d, "AI.jsonl")
+        _write(only_ai, [{"type": "ai-title", "aiTitle": "auto guess"},
+                         {"type": "user", "timestamp": "2026-06-03T10:00:00.000Z",
+                          "message": {"role": "user", "content": "fix it"}}])
+        check(sessions.extract_file(only_ai)["title"] == "auto guess",
+              "ai-title must still work when there is no custom-title")
+
         # --- capping: a long session must NOT explode the output ---
         many = [{"type": "ai-title", "aiTitle": "Big"}]
         for i in range(200):
