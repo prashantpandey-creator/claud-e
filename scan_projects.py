@@ -50,12 +50,41 @@ DOC_FILES = [
     "docker-compose.yml", "package.json", "requirements.txt", "pyproject.toml",
 ]
 
-DEFAULT_ROOTS = [
-    "/Users/badenath/projects",
-    "/Users/badenath/Documents",
-    "/Users/badenath/cafe management",
-    "/Users/badenath/game-hub",
-]
+def _default_roots():
+    """Where this USER's projects live — derived, never hardcoded.
+
+    Two honest sources: the cwds Claude Code has actually run in (encoded in
+    ~/.claude/projects slugs), and the common dev dirs that exist in THIS
+    home. Env MEDITATE_PROJECT_ROOTS (colon-separated) overrides everything.
+    """
+    env = os.environ.get("MEDITATE_PROJECT_ROOTS")
+    if env:
+        return [p for p in env.split(":") if os.path.isdir(p)]
+    home = os.path.expanduser("~")
+    roots = set()
+    # 1. parents of dirs Claude Code has actually opened
+    proj_dir = os.path.expanduser("~/.claude/projects")
+    if os.path.isdir(proj_dir):
+        for slug in os.listdir(proj_dir):
+            # slug "-Users-alice-code-foo" -> real path "/Users/alice/code/foo"
+            if slug.startswith("-Users-") or slug.startswith("-home-"):
+                # slug is lossy (spaces became dashes) so don't reconstruct deep
+                # paths — just take the direct child of home it lives under.
+                real = "/" + slug[1:].replace("-", "/")
+                if real.startswith(home + "/"):
+                    seg = real[len(home) + 1:].split("/")[0]
+                    child = os.path.join(home, seg)
+                    if seg and os.path.isdir(child):
+                        roots.add(child)
+    # 2. conventional dev dirs that exist in THIS home
+    for name in ("projects", "code", "dev", "src", "work", "repos", "Documents"):
+        p = os.path.join(home, name)
+        if os.path.isdir(p):
+            roots.add(p)
+    return sorted(roots) or [home]
+
+
+DEFAULT_ROOTS = _default_roots()
 
 
 def _git(cwd, *args, timeout=5):

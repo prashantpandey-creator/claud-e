@@ -19,13 +19,16 @@ server of ours, no data leaves your laptop.
 
 ```bash
 git clone https://github.com/prashantpandey-creator/meditate ~/.claude/skills/meditate
-git clone https://github.com/prashantpandey-creator/nidra ~/projects/nidra
 bash ~/.claude/skills/meditate/install.sh
 ```
 
-One command. Wires the hooks, grades your memory, installs a 6-hour
-background pass, runs the tests, opens the dashboard. No sudo, no network,
-no account. Safe to re-run.
+One command. It fetches its own grading engine, wires the hooks, grades your
+memory, installs a background self-check tuned to how fast your work changes,
+runs the tests, and opens the dashboard. No sudo, no account, nothing leaves
+your machine. Safe to re-run.
+
+*(The engine is a small internal library — installed automatically, you never
+touch it. It lives in its own repo only so it can be tested in isolation.)*
 
 ## The whole product is two verbs
 

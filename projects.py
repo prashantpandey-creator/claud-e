@@ -32,40 +32,78 @@ sys.path.insert(0, SKILL_DIR)
 STORE_DIR = os.environ.get("MEDITATE_STORE_DIR") or os.path.expanduser(
     "~/.claude/meditation/nidra_store")
 
-# Longest match wins, so purangpt-next beats purangpt. Worktree/subdir noise
-# folds into the parent product — attention split six ways is attention hidden.
-KNOWN = [
-    ("vedic-puran-purangpt-next", "purangpt-next"),
-    ("vedic-puran-purangpt", "purangpt"),
-    ("vedic-puran-rolly", "rolly"),
-    ("vedic-puran", "purangpt"),          # the umbrella repo IS purangpt work
-    ("mila-english", "mila"),
-    ("claude-skills-meditate", "meditate"),
-    ("projects-nidra", "nidra"),
-    ("projects-vyasa", "vyasa"),
-    ("marketplace", "marketplace"),
-    ("carrymate", "carrymate"),
-    ("awakener", "awakener"),
-    ("voice-cockpit", "voice-cockpit"),
-    ("bro-os", "bro-os"),
-    ("prahari", "prahari"),
-]
+# Optional user-supplied aliases, colon-list of glob=name (MEDITATE_PROJECT_ALIASES),
+# so anyone can fold their own worktree spellings. No owner names baked in.
+ALIAS_FILE = os.path.expanduser("~/.claude/meditation/project-aliases.txt")
+
+
+def _aliases():
+    """User-tunable project folding. Two sources, both optional:
+      - ~/.claude/meditation/project-aliases.txt  (one `pattern=name` per line)
+      - env MEDITATE_PROJECT_ALIASES  (colon-list of pattern=name)
+    Neither is required; without them normalize() is fully algorithmic."""
+    out = []
+    try:
+        with open(ALIAS_FILE) as f:
+            for line in f:
+                line = line.split("#", 1)[0].strip()
+                if "=" in line:
+                    k, v = line.split("=", 1)
+                    if k.strip():
+                        out.append((k.strip().lower(), v.strip()))
+    except OSError:
+        pass
+    for pair in (os.environ.get("MEDITATE_PROJECT_ALIASES") or "").split(":"):
+        if "=" in pair:
+            k, v = pair.split("=", 1)
+            if k.strip():
+                out.append((k.strip().lower(), v.strip()))
+    return out
+
+
+# Noise segments that are NEVER a project name — generic to any machine.
+_NOISE = {"users", "home", "projects", "documents", "code", "dev", "src",
+          "work", "repos", "claude", "worktrees", "worktree", "scratch"}
 
 
 def normalize(slug_or_path: str) -> str:
-    """Fold a session slug / cwd / tag to one project name."""
-    # spaces too: the real cwd is "/Users/badenath/projects/vedic puran",
-    # which never matched the slug form "vedic-puran" and split the project.
+    """Fold a session slug / cwd / tag to one project name — algorithmically.
+
+    A project = the FIRST meaningful path segment after the home/projects
+    prefix, with git-worktree noise ('--claude-worktrees-xyz', trailing
+    subdirs) stripped. No hardcoded project list: the same rule works on any
+    user's machine. Optional MEDITATE_PROJECT_ALIASES tunes edge cases.
+    """
     s = (slug_or_path or "").replace("/", "-").replace("_", "-").replace(" ", "-").lower()
-    s = s.replace("-users-badenath-", "").replace("users-badenath-", "")
-    best = ""
-    for needle, name in KNOWN:
-        if needle in s and len(needle) > len(best):
-            best, chosen = needle, name
-    if best:
-        return chosen
-    parts = [p for p in s.split("-") if p and p not in ("projects", "documents")]
-    return parts[0] if parts else "other"
+    # worktree suffix carries no project identity
+    s = s.split("--claude-worktrees-")[0].split("--worktrees-")[0]
+    for pat, name in _aliases():
+        if pat in s:
+            return name
+    parts = [p for p in s.split("-") if p]
+    # skip the leading machine noise, then take the first two real segments
+    # joined (so a-b-purangpt-next keeps 'purangpt-next', but a monorepo's
+    # first real dir wins). Drop the username (segment right after 'users').
+    real = []
+    skip_next = False
+    for i, p in enumerate(parts):
+        if skip_next:
+            skip_next = False
+            continue
+        if p == "users" or p == "home":
+            skip_next = True            # drop the username that follows
+            continue
+        if p in _NOISE:
+            continue
+        real.append(p)
+    if not real:
+        return "other"
+    # first segment is the project; keep a "-next"/"-web"/"-api" suffix if present
+    name = real[0]
+    if len(real) > 1 and real[1] in ("next", "web", "api", "app", "ios", "android",
+                                     "server", "client", "mobile"):
+        name = real[0] + "-" + real[1]
+    return name
 
 
 def _age_days(ts: str) -> Optional[float]:

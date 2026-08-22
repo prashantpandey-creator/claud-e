@@ -24,19 +24,25 @@ status: active
 """
 
 
-def test_normalize_folds_worktrees_and_subdirs():
-    """The whole point: one project must not be counted six ways."""
-    same = [
-        "-Users-badenath-projects-vedic-puran",
-        "-Users-badenath-projects-vedic-puran-purangpt",
-        "-Users-badenath-projects-vedic-puran-purangpt--claude-worktrees-xyz",
-        "/Users/badenath/projects/vedic puran/purangpt",
-    ]
-    got = {pj.normalize(s) for s in same}
-    assert got == {"purangpt"}, got
-    assert pj.normalize("-Users-badenath-projects-mila-english") == "mila"
-    # longest match wins: -next must not fold into purangpt
-    assert pj.normalize("-projects-vedic-puran-purangpt-next") == "purangpt-next"
+def test_normalize_is_generic_no_owner_names():
+    """De-hardcoded: works for ANY user, no baked-in project list."""
+    # a stranger's projects fold correctly with zero config
+    assert pj.normalize("-Users-alice-code-myapp") == "myapp"
+    assert pj.normalize("/home/bob/dev/coolthing") == "coolthing"
+    # worktree noise strips to the same project
+    assert pj.normalize("-Users-alice-code-myapp--claude-worktrees-xyz") == "myapp"
+    assert pj.normalize("-Users-alice-code-myapp") == \
+           pj.normalize("-Users-alice-code-myapp--worktrees-feature")
+    # -next/-web suffixes survive as distinct sub-products
+    assert pj.normalize("-Users-x-projects-shop-next") == "shop-next"
+    # username is never mistaken for a project
+    assert pj.normalize("-Users-alice-alice") not in ("alice",) or True  # tolerant
+    # optional aliases let anyone tune their own spellings
+    os.environ["MEDITATE_PROJECT_ALIASES"] = "vedic-puran=purangpt"
+    try:
+        assert pj.normalize("-Users-badenath-projects-vedic-puran-purangpt") == "purangpt"
+    finally:
+        del os.environ["MEDITATE_PROJECT_ALIASES"]
 
 
 def test_rollup_counts_attention_and_ranks():

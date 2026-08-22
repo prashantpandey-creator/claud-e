@@ -179,8 +179,17 @@ echo "  [ok]  $MEDITATION_DIR"
 echo
 echo "  Checking nidra grading engine..."
 NIDRA_ROOT="$HOME/projects/nidra"
+if [ ! -d "$NIDRA_ROOT/nidra" ]; then
+    echo "  Fetching the grading engine (one-time)..."
+    mkdir -p "$HOME/projects"
+    if git clone --depth 1 https://github.com/prashantpandey-creator/nidra "$NIDRA_ROOT" >/dev/null 2>&1; then
+        echo "  [ok]  grading engine installed"
+    else
+        echo "  [warn]  could not fetch the grading engine — check your network"
+    fi
+fi
 if [ -d "$NIDRA_ROOT/nidra" ]; then
-    echo "  [ok]  nidra at $NIDRA_ROOT"
+    echo "  [ok]  grading engine ready"
     # Run initial bridge to populate the graded store
     if python3 "$SKILL_DIR/nidra_bridge.py" --sleep > /dev/null 2>&1; then
         NIDRA_COUNT=$(python3 -c "
@@ -197,8 +206,7 @@ else:
         echo "  [warn]  nidra bridge failed — run manually: python3 $SKILL_DIR/nidra_bridge.py --sleep"
     fi
 else
-    echo "  [warn]  nidra not found at $NIDRA_ROOT — grading disabled"
-    echo "          Get it: git clone https://github.com/prashantpandey-creator/nidra ~/projects/nidra"
+    echo "  [warn]  grading engine unavailable — install could not fetch it"
 fi
 
 # ---- 5b. Heartbeat — grade runs every 6h without being asked
