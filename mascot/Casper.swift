@@ -61,17 +61,44 @@ final class Meditate {
         return out.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    /// Run an offered action. Returns what actually happened.
+    /// Run an offered action THROUGH THE SERVER, so every action Casper takes
+    /// is visible in Pulse's activity trail — same endpoint the dashboard
+    /// buttons use, one record of everything that happened. Falls back to
+    /// running it directly if the server isn't up, and says so.
     static func perform(_ action: String) -> String {
-        // "meditate fix" -> go.py --repair-only ; "meditate go" -> go.py
-        if action.contains("fix") {
-            return run([skillDir + "/go.py", "--repair-only"])
-        } else if action.contains("go") {
-            return run([skillDir + "/go.py"])
-        } else if action.contains("grade") {
-            return run([skillDir + "/nidra_bridge.py", "--sleep"])
+        let verb = action.contains("fix") ? "fix"
+                 : action.contains("grade") ? "grade" : "go"
+        if let viaServer = postAct(verb) { return viaServer }
+        let direct: String
+        switch verb {
+        case "fix":   direct = run([skillDir + "/go.py", "--repair-only"])
+        case "grade": direct = run([skillDir + "/nidra_bridge.py", "--sleep"])
+        default:      direct = run([skillDir + "/go.py"])
         }
-        return "Nothing to run."
+        return direct.isEmpty ? "Nothing to run." : direct
+    }
+
+    /// POST to the local Pulse server. nil when it isn't running.
+    static func postAct(_ verb: String) -> String? {
+        guard let url = URL(string: "http://127.0.0.1:7711/api/act") else { return nil }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.timeoutInterval = 30
+        req.setValue("1", forHTTPHeaderField: "X-Meditate")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(
+            withJSONObject: ["action": verb, "arg": ""])
+        var result: String? = nil
+        let sem = DispatchSemaphore(value: 0)
+        URLSession.shared.dataTask(with: req) { data, _, _ in
+            defer { sem.signal() }
+            guard let d = data,
+                  let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any]
+            else { return }
+            result = (j["output"] as? String) ?? "Done."
+        }.resume()
+        _ = sem.wait(timeout: .now() + 32)
+        return result
     }
 }
 
