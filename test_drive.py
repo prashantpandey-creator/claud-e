@@ -60,7 +60,7 @@ def test_dry_run_launches_and_writes_nothing():
         gdir, ledger, hist = _world(t)
         launched = []
         rep = dv.run(go=0, goals_dir=gdir, ledger_path=ledger, history_path=hist,
-                     launcher=lambda cwd, prompt, name: launched.append(name) or True)
+                     launcher=lambda cwd, prompt, name, model='': launched.append(name) or True)
         assert rep["launched"] == 0 and launched == []
         assert not os.path.exists(ledger)
 
@@ -70,7 +70,7 @@ def test_go_launches_records_and_caps():
         gdir, ledger, hist = _world(t, n_goals=3)
         launched = []
         rep = dv.run(go=2, goals_dir=gdir, ledger_path=ledger, history_path=hist,
-                     launcher=lambda cwd, prompt, name: launched.append((cwd, name)) or True)
+                     launcher=lambda cwd, prompt, name, model='': launched.append((cwd, name)) or True)
         assert rep["launched"] == 2 and len(launched) == 2
         rows = [json.loads(l) for l in open(ledger)]
         assert len(rows) == 2
@@ -81,9 +81,9 @@ def test_cooldown_prevents_double_dispatch():
     with tempfile.TemporaryDirectory() as t:
         gdir, ledger, hist = _world(t)
         dv.run(go=1, goals_dir=gdir, ledger_path=ledger, history_path=hist,
-               launcher=lambda *a: True)
+               launcher=lambda *a, **k: True)
         rep2 = dv.run(go=1, goals_dir=gdir, ledger_path=ledger, history_path=hist,
-                      launcher=lambda *a: True)
+                      launcher=lambda *a, **k: True)
         assert rep2["launched"] == 0, "same goal dispatched twice inside cooldown"
         assert rep2["cooling"] == 1
 
@@ -96,7 +96,7 @@ def test_expired_cooldown_allows_redispatch():
             f.write(json.dumps({"goal": "g-0", "milestone": "the next thing",
                                 "ts_epoch": old}) + "\n")
         rep = dv.run(go=1, goals_dir=gdir, ledger_path=ledger, history_path=hist,
-                     launcher=lambda *a: True)
+                     launcher=lambda *a, **k: True)
         assert rep["launched"] == 1
 
 
@@ -104,7 +104,7 @@ def test_failed_launch_not_recorded():
     with tempfile.TemporaryDirectory() as t:
         gdir, ledger, hist = _world(t)
         rep = dv.run(go=1, goals_dir=gdir, ledger_path=ledger, history_path=hist,
-                     launcher=lambda *a: False)
+                     launcher=lambda *a, **k: False)
         assert rep["launched"] == 0
         assert not os.path.exists(ledger) or not open(ledger).read().strip()
 

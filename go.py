@@ -90,7 +90,7 @@ def run(n: Optional[int] = None, repair_only: bool = False,
     would += ["goal: %s -> %s" % (g["name"], g["next"]) for g in cands]
 
     result: Dict[str, Any] = {"would": would, "repair_launched": False,
-                              "goals_launched": 0, "sent": [],
+                              "goals_launched": 0, "sent": [], "errors": [],
                               "cooling": getattr(dv.dispatchable, "cooling", 0)}
     if n == 0:
         return result
@@ -105,8 +105,10 @@ def run(n: Optional[int] = None, repair_only: bool = False,
                 result["repair_launched"] = True
                 result["sent"].append("repair-queue")
                 budget -= 1
-        except Exception:
-            pass
+        except Exception as e:
+            # NOT silent: a launcher that raises (signature drift, missing
+            # Terminal) hid a real break for commits behind "0 launched".
+            result["errors"].append("repair launch failed: %s" % e)
 
     if repair_only:
         budget = 0
@@ -124,8 +126,8 @@ def run(n: Optional[int] = None, repair_only: bool = False,
             try:
                 ok = bool(launcher(k["cwd"], k["prompt"], "goal-" + g["name"][:20],
                                    k.get("model", "")))
-            except Exception:
-                ok = False
+            except Exception as e:
+                result["errors"].append("launch %s failed: %s" % (g["name"], e))
             if not ok:
                 continue
             result["goals_launched"] += 1

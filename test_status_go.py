@@ -85,7 +85,7 @@ def test_go_repair_first_then_goals():
         rep = g.run(n=2, meditation_dir=med, store_dir=store, goals_dir=gdir,
                     history_path=os.path.join(t, "h.jsonl"),
                     ledger_path=os.path.join(t, "d.jsonl"),
-                    launcher=lambda cwd, prompt, name: launched.append(name) or True)
+                    launcher=lambda cwd, prompt, name, model='': launched.append(name) or True)
         assert rep["repair_launched"] is True
         assert rep["goals_launched"] == 1          # cap 2 = 1 repair + 1 goal
         assert launched[0].startswith("repair"), launched
@@ -98,10 +98,25 @@ def test_go_goals_only_when_clean():
         rep = g.run(n=2, meditation_dir=med, store_dir=store, goals_dir=gdir,
                     history_path=os.path.join(t, "h.jsonl"),
                     ledger_path=os.path.join(t, "d.jsonl"),
-                    launcher=lambda cwd, prompt, name: launched.append(name) or True)
+                    launcher=lambda cwd, prompt, name, model='': launched.append(name) or True)
         assert rep["repair_launched"] is False
         assert rep["goals_launched"] == 1
         assert launched and launched[0].startswith("goal-")
+
+
+def test_launcher_error_surfaces_not_swallowed():
+    """A launcher that raises (signature drift) must land in result['errors'],
+    not vanish into a silent goals_launched=0 — that hid a real break for
+    several commits until the full doctor caught it."""
+    with tempfile.TemporaryDirectory() as t:
+        med, store, gdir = _world(t)
+        def boom(*a, **k):
+            raise TypeError("launcher signature drifted")
+        rep = g.run(n=1, meditation_dir=med, store_dir=store, goals_dir=gdir,
+                    history_path=os.path.join(t, "h.jsonl"),
+                    ledger_path=os.path.join(t, "d.jsonl"), launcher=boom)
+        assert rep["goals_launched"] == 0
+        assert rep["errors"] and "drifted" in rep["errors"][0], rep["errors"]
 
 
 def test_go_zero_is_dry():
@@ -111,7 +126,7 @@ def test_go_zero_is_dry():
         rep = g.run(n=0, meditation_dir=med, store_dir=store, goals_dir=gdir,
                     history_path=os.path.join(t, "h.jsonl"),
                     ledger_path=os.path.join(t, "d.jsonl"),
-                    launcher=lambda *a: launched.append(1) or True)
+                    launcher=lambda *a, **k: launched.append(1) or True)
         assert launched == [] and rep["would"], rep
 
 
@@ -150,7 +165,7 @@ def test_go_single_goal_by_name():
         rep = g2.run(only_goal="g-a", meditation_dir=med, store_dir=store,
                      goals_dir=gdir, history_path=os.path.join(t, "h.jsonl"),
                      ledger_path=os.path.join(t, "d.jsonl"),
-                     launcher=lambda cwd, prompt, name: launched.append(name) or True)
+                     launcher=lambda cwd, prompt, name, model='': launched.append(name) or True)
         assert rep["repair_launched"] is False, "named-goal dispatch must not launch repair"
         assert rep["goals_launched"] == 1 and launched == ["goal-g-a"], (rep, launched)
 
