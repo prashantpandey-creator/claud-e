@@ -39,6 +39,10 @@ case "${1:-}" in
     shift
     python3 "$DIR/archive.py" "$@"
     ;;
+  distill)
+    shift
+    python3 "$DIR/formation.py" "$@"
+    ;;
   ask)
     shift
     python3 "$DIR/ask.py" "$@"
@@ -66,6 +70,7 @@ case "${1:-}" in
     echo "  meditate grade     scan sessions, grade into nidra, consolidate"
     echo "  meditate metrics   memory health, drift, coverage dashboard"
     echo "  meditate archive   archive finished sessions (dry-run; --apply to act)"
+    echo "  meditate distill   formation queue: sessions awaiting distillation into memory"
     echo "  meditate ask       query the graded store (verified facts first)"
     echo "  meditate goals     long-term goals: percentage, scope drift, agent launch"
     echo "  meditate report    wins + efficacy: drift caught/repaired, stilling, sangama"

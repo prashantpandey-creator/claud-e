@@ -82,7 +82,7 @@ def _rotate_journal(store_dir, max_bytes=JOURNAL_MAX_BYTES):
     return False
 
 
-def run(do_sleep=False, store_dir=None, memory_root=None):
+def run(do_sleep=False, store_dir=None, memory_root=None, form_days=None):
     """Scan sessions + .md memories into the graded store.
 
     store_dir/memory_root are injectable so tests never touch the live store —
@@ -121,6 +121,20 @@ def run(do_sleep=False, store_dir=None, memory_root=None):
         for k in totals:
             totals[k] += r[k]
 
+    # LANE 1 formation: the day becomes memory. Commits made in sessions are
+    # already-distilled knowledge (the owner wrote the message); each becomes
+    # a memory with evidence born attached, verified next pass like any other.
+    # form_days=0 skips formation (tests own that cost in test_formation.py);
+    # None means the module default window.
+    formed = 0
+    if form_days != 0:
+        try:
+            from formation import form_commit_facts
+            kw = {} if form_days is None else {"since_days": form_days}
+            formed = form_commit_facts(store_dir, sessions, **kw)
+        except Exception:
+            pass
+
     # Import .md memory files (the real knowledge) from EVERY memory store
     mem_files = {"scanned": 0, "imported": 0, "already_exists": 0, "dirs": []}
     try:
@@ -136,6 +150,7 @@ def run(do_sleep=False, store_dir=None, memory_root=None):
 
     result = {
         **totals,
+        "formed_commit_facts": formed,
         "memory_files": mem_files,
         "store_total": len(store.load()),
     }

@@ -29,7 +29,12 @@ def _parse_ts(ts_str: str) -> Optional[datetime]:
     if not ts_str:
         return None
     try:
-        return datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+        # events written by different components differ in offset-awareness;
+        # normalize to aware-UTC so no comparison can ever crash the dashboard
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
     except (ValueError, TypeError):
         return None
 

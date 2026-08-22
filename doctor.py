@@ -41,6 +41,7 @@ TEST_FILES = [
     "test_report.py",
     "test_goals.py",
     "test_ask.py",
+    "test_formation.py",
 ]
 
 

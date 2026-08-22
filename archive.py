@@ -126,7 +126,7 @@ def _retarget_evidence(old_path: str, new_path: str,
                 f.write(json.dumps({"event": "archive.retarget",
                                     "from": old_path, "to": new_path,
                                     "rows": changed,
-                                    "ts": time.strftime("%Y-%m-%dT%H:%M:%S")}) + "\n")
+                                    "ts": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime())}) + "\n")
         except OSError:
             pass
     return changed
@@ -145,7 +145,7 @@ def _archive_one(row: Dict[str, Any], archive_root: str) -> None:
         f.write(json.dumps({"sid": row["sid"], "slug": row["slug"],
                             "from": os.path.dirname(row["path"]),
                             "bytes": row["bytes"], "reason": row["reason"],
-                            "archived_at": time.strftime("%Y-%m-%dT%H:%M:%S")}) + "\n")
+                            "archived_at": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime())}) + "\n")
 
 
 def run(projects_root: str = PROJECTS_ROOT, archive_root: str = ARCHIVE_ROOT,

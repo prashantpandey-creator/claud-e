@@ -19,7 +19,12 @@ import nidra_bridge
 
 
 def _run(**kw):
-    """Run the bridge against a throwaway store."""
+    """Run the bridge against a throwaway store.
+
+    form_days=0: formation reads hundreds of MB of transcripts per fresh
+    store; that cost belongs to test_formation.py, not to every bridge test
+    (7 runs blew doctor's 30s limit at 32.8s measured)."""
+    kw.setdefault("form_days", 0)
     with tempfile.TemporaryDirectory() as td:
         return nidra_bridge.run(store_dir=os.path.join(td, "store"), **kw)
 
@@ -39,6 +44,7 @@ def test_data_fields_on_success():
     if not env["success"]:
         return  # nidra not importable — skip
     d = env["data"]
+    assert "formed_commit_facts" in d, "formation field missing from envelope"
     for key in ("scanned", "imported", "already_exists", "no_anchor", "store_total"):
         assert key in d, f"missing data.{key}"
     assert isinstance(d["store_total"], int)
@@ -60,10 +66,10 @@ def test_idempotent():
     # Both runs must share ONE temp store, or the second sees an empty store.
     with tempfile.TemporaryDirectory() as td:
         sd = os.path.join(td, "store")
-        e1 = nidra_bridge.run(store_dir=sd)
+        e1 = nidra_bridge.run(store_dir=sd, form_days=0)
         if not e1["success"]:
             return
-        e2 = nidra_bridge.run(store_dir=sd)
+        e2 = nidra_bridge.run(store_dir=sd, form_days=0)
         assert e2["success"]
         assert e2["data"]["imported"] == 0
         assert e2["data"]["already_exists"] == e1["data"]["scanned"]
@@ -119,7 +125,7 @@ def test_path_index_built():
     """The bridge must emit path_index.json — coordination.py serves facts from it."""
     with tempfile.TemporaryDirectory() as td:
         sd = os.path.join(td, "store")
-        env = nidra_bridge.run(store_dir=sd)
+        env = nidra_bridge.run(store_dir=sd, form_days=0)
         if not env["success"]:
             return
         idx_path = os.path.join(sd, "path_index.json")

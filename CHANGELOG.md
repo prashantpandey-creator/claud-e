@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.7.0 — 2026-08-21
+
+Knowledge formation — the owner is right: forming is a natural part. nidra
+graded but never formed; the adapters only imported what already existed.
+The rule that makes formation safe was already built: form freely, grade
+ruthlessly, serve only what verifies.
+
+### Added
+- **Lane 1 — commit-facts (deterministic, every heartbeat).** Commits made in
+  sessions ARE distilled knowledge (the owner wrote the message). Each becomes
+  a memory with evidence born attached (source = transcript, excerpt = the
+  literal `[branch hash] subject` stdout line). First live run: 74 formed
+  from 105 sessions, 74/74 graded machine_checked the same pass; store
+  361 -> 435 active. `meditate ask` surfaces them beside curated laws.
+- **Lane 2 — the distillation queue (judgment, orchestrated).**
+  `meditate distill` lists substantive sessions (>=15 user msgs) not yet
+  distilled; `meditate distill <sid>` emits an agent kickoff that writes real
+  memory .md files (Why / How to apply / originSessionId) into the synced
+  store, graded by the next heartbeat; `--done` marks the ledger.
+
+### Refused by evidence
+- The `git log --oneline` pattern was tried and REMOVED: live transcripts are
+  full of hex-prefixed listings and it formed garbage ("83525ed2 can you
+  check if we can find blue lotus..."). Only git commit's own stdout shape is
+  unambiguous. Two tests pin the refusal.
+- Live run also caught `file` being a basename (tests had been too kind —
+  absolute paths only); resolution via _project_dir now tested.
+
+
 ## 0.6.0 — 2026-08-21
 
 The missing metabolism. Whole-system analysis found the organs present but no
