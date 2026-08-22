@@ -119,6 +119,15 @@ def test_cli_envelope():
     assert env["metadata"]["dry_run"] is True
 
 
+def test_fleet_status_survives_a_session_that_has_touched_no_files():
+    """A registered-but-idle session has files={}. That is not a dict-default,
+    so the old inline sorted(...)[-1] raised IndexError on every new session."""
+    assert dv._last_file({"files": {}}) is None
+    assert dv._last_file({}) is None
+    assert dv._last_file(None) is None
+    assert dv._last_file({"files": {"/a/b/late.py": 20, "/a/b/early.py": 10}}) == "late.py"
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

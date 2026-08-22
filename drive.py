@@ -119,6 +119,19 @@ def run(go: int = 0, goals_dir: Optional[str] = None,
             "cooling": cooling, "launched": launched, "sent": sent}
 
 
+def _last_file(session):
+    """The most recently touched file, or None.
+
+    A session that has registered but not yet edited anything has files={} —
+    and `{}` does not trigger a dict-default, so the old inline expression did
+    sorted([])[-1] and raised IndexError. That is every brand-new session.
+    """
+    files = (session or {}).get("files") or {}
+    if not files:
+        return None
+    return os.path.basename(sorted(files, key=files.get)[-1])
+
+
 def fleet_status(goals_dir=None, ledger_path=None, history_path=None):
     """Live progress of dispatched agents, best-effort but honest about it.
 
@@ -162,13 +175,9 @@ def fleet_status(goals_dir=None, ledger_path=None, history_path=None):
             rows.append({"goal": goal, "milestone": r.get("milestone", "")[:70],
                          "dispatched_min": mins, "milestone_ticked": ticked,
                          "live_session": (agent or {}).get("sid", "")[:12] or None,
-                         "last_file": os.path.basename(
-                             sorted((agent or {}).get("files", {"": 0}),
-                                    key=(agent or {}).get("files", {"": 0}).get)[-1]) if agent else None})
+                         "last_file": _last_file(agent) if agent else None})
     others = [{"sid": s.get("sid", "")[:12], "cwd": s.get("cwd", ""),
-               "age_s": s.get("_age_s"),
-               "last_file": os.path.basename(sorted(s.get("files", {"": 0}),
-                                             key=s.get("files", {"": 0}).get)[-1])}
+               "age_s": s.get("_age_s"), "last_file": _last_file(s)}
               for s in live if s.get("sid") not in seen_sids]
     return {"dispatched": rows, "other_live_sessions": others}
 

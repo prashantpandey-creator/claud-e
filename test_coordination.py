@@ -266,6 +266,21 @@ def test_cli_who_envelope():
     assert env["success"] is True
 
 
+def test_session_start_registers_its_own_presence():
+    """A session that only runs shell commands must still exist. Presence was
+    created on the first Write/Edit only, so such a session was invisible."""
+    import tempfile
+    d = tempfile.mkdtemp(prefix="coord-ss-") + "/sessions"
+    os.makedirs(d, exist_ok=True)
+    sid = "brand-new-session-1234"
+    assert not os.path.exists(os.path.join(d, sid + ".json"))
+    co.session_start({"session_id": sid, "cwd": "/tmp"}, coord_dir=d,
+                     store_dir=co.STORE_DIR)
+    p = os.path.join(d, sid + ".json")
+    assert os.path.exists(p), "session_start did not register presence"
+    assert json.load(open(p))["cwd"] == "/tmp"
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

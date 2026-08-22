@@ -372,6 +372,19 @@ def session_start(payload: Dict[str, Any],
     cwd = str(payload.get("cwd") or "")
     lines: List[str] = []
 
+    # Register presence the moment the session opens. Presence used to be
+    # created only on the first Write/Edit, so a session doing shell work
+    # never existed as far as the rest of the tool was concerned — which is
+    # how the timing layer came to report "no live session" with two live
+    # sessions running, silencing the companion permanently.
+    if sid != "unknown":
+        try:
+            p = load_presence(sid, coord_dir)
+            p["cwd"] = cwd or p.get("cwd", "")
+            save_presence(p, coord_dir)
+        except Exception:
+            pass
+
     peers = [p for p in live_sessions(coord_dir, exclude=sid) if p.get("cwd") == cwd]
     if peers:
         newest = peers[0]

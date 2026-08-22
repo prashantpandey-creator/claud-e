@@ -196,6 +196,44 @@ def test_session_count_matches_maxdepth_two():
     assert reported == expected, f"hook says {reported} sessions, filesystem says {expected}"
 
 
+def test_bash_calls_refresh_presence_so_a_shell_session_is_not_declared_dead():
+    """Presence used to update only on Write/Edit. A session doing shell work
+    went stale inside the hour and the timing layer called it away — with the
+    session still running, which silenced the companion permanently."""
+    import subprocess, time
+    sid = "hooktest-" + str(int(time.time()))
+    d = os.path.expanduser("~/.claude/coordination/sessions")
+    os.makedirs(d, exist_ok=True)
+    pf = os.path.join(d, sid + ".json")
+    with open(pf, "w") as f:
+        f.write('{"sid": "%s", "cwd": "", "files": {}, "served": []}' % sid)
+    try:
+        os.utime(pf, (1, 1))                      # ancient
+        payload = ('{"session_id": "%s", "hook_event_name": "PreToolUse",'
+                   ' "tool_input": {"command": "echo hi"}}' % sid)
+        subprocess.run(["bash", HOOK], input=payload, capture_output=True,
+                       text=True, timeout=20)
+        age = time.time() - os.path.getmtime(pf)
+        assert age < 30, "a Bash call did not refresh presence (age %.0fs)" % age
+    finally:
+        try: os.remove(pf)
+        except OSError: pass
+
+
+def test_presence_touch_never_creates_a_file_for_an_unknown_session():
+    """Touch-if-exists only — the hook must not litter the coordination dir."""
+    import subprocess
+    d = os.path.expanduser("~/.claude/coordination/sessions")
+    ghost = os.path.join(d, "definitely-not-a-real-session-xyz.json")
+    assert not os.path.exists(ghost)
+    subprocess.run(["bash", HOOK],
+                   input='{"session_id": "definitely-not-a-real-session-xyz",'
+                         ' "hook_event_name": "PreToolUse",'
+                         ' "tool_input": {"command": "echo hi"}}',
+                   capture_output=True, text=True, timeout=20)
+    assert not os.path.exists(ghost), "hook invented a presence file"
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

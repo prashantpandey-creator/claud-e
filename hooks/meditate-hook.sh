@@ -27,6 +27,17 @@ trap 'printf "{}\n"' EXIT   # any unexpected death still emits valid JSON
 
 IN=$(cat 2>/dev/null || echo '{}')
 
+# ---- Presence heartbeat: every tool call, no subprocess ---------------------
+# This runs BEFORE the prefilter on purpose. Presence used to be refreshed
+# only by Write/Edit, so a session doing shell work went stale inside the hour
+# and the timing layer called it "away" — with the session still running. Pure
+# bash regex + touch: one syscall, no python, safe on the hot path. Only an
+# EXISTING file is touched; creating it is SessionStart's job.
+if [[ "$IN" =~ \"session_id\"[[:space:]]*:[[:space:]]*\"([A-Za-z0-9._-]+)\" ]]; then
+    _PF="$HOME/.claude/coordination/sessions/${BASH_REMATCH[1]}.json"
+    [ -f "$_PF" ] && touch "$_PF" 2>/dev/null
+fi
+
 # ---- File events: one decision point, in python ----------------------------
 # Every Write/Edit goes to the sangama layer (coordination.py): presence
 # recording, collision warnings, graded-fact serving, and the pipeline/native
