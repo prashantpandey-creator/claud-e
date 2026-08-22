@@ -38,9 +38,78 @@ def repair_items(store_dir: str = STORE_DIR):
             if m.get("failing") or "drifted" in (m.get("flags") or [])]
 
 
+def _resolve_claim(claim: str):
+    """Check ONE failing claim. Three-valued on purpose.
+
+    True  = the thing really is gone (real drift, worth an agent)
+    False = it is right there (the grader is wrong, worth nothing)
+    None  = not mechanically checkable from here
+
+    Conflating None with False is the single root cause behind all six
+    grader defects fixed in nidra a1c1baf. A checker that cannot say
+    "I don't know" will say "broken" instead, and someone pays for it.
+    """
+    claim = str(claim or "")
+    if claim.startswith("path:"):
+        return not os.path.exists(os.path.expanduser(claim[5:]))
+    if claim.startswith("wikilink:[[") and claim.endswith("]]"):
+        target = claim[11:-2]
+        if target.endswith(".md"):
+            target = target[:-3]
+        roots = [os.path.expanduser("~/claude-sync/memory")]
+        for root in roots:
+            if not os.path.isdir(root):
+                continue
+            for sub in os.listdir(root):
+                if os.path.exists(os.path.join(root, sub, target + ".md")):
+                    return False
+        return True
+    return None
+
+
+def precheck(items) -> Dict[str, object]:
+    """Measure the queue's precision BEFORE spending an agent on it.
+
+    An `os.path.exists` per item costs microseconds and zero tokens; an
+    agent investigating the same item costs thousands. Measured on a real
+    store 2026-08-23: 28 of 30 items were the grader inventing claims, and
+    the fleet agent that investigated them burned ~44k tokens to change
+    nothing. Any tool that can dispatch work must first gate on whether its
+    own findings are true.
+    """
+    real, fp, unknown, keep = 0, 0, 0, []
+    for m in items:
+        verdicts = [_resolve_claim(f.get("claim")) for f in (m.get("failing") or [])]
+        if not verdicts:
+            unknown += 1
+            continue
+        if any(v is True for v in verdicts):
+            real += 1
+            keep.append(m)
+        elif any(v is False for v in verdicts):
+            fp += 1
+        else:
+            unknown += 1
+    decided = real + fp
+    precision = (real / decided) if decided else 1.0
+    out = {"real": real, "false_positive": fp, "not_checkable": unknown,
+           "precision": precision, "actionable": keep, "verdict": "ok", "message": ""}
+    # Below this line the queue is a bug report about the tool, not a work list.
+    if decided and precision < 0.5:
+        out["verdict"] = "instrument"
+        out["message"] = (
+            "%d of %d checkable findings are FALSE — the paths/links they name "
+            "are right there on disk. That is the grader inventing claims, not "
+            "knowledge drifting. Do NOT dispatch a repair agent: fix the "
+            "extractor in nidra/adapters/memory_files.py with a test that fails "
+            "without the fix, then re-grade." % (fp, decided))
+    return out
+
+
 def _repair_kickoff(meditation_dir: str, store_dir: str = STORE_DIR,
-                    select: Optional[str] = None) -> Optional[Dict[str, str]]:
-    items = repair_items(store_dir)
+                    select: Optional[str] = None,
+                    items: Optional[List[Dict]] = None) -> Optional[Dict[str, str]]:
+    items = repair_items(store_dir) if items is None else items
     if select is not None:
         picked = [m for i, m in enumerate(items, 1)
                   if str(i) == select or m.get("id", "").startswith(select)]
@@ -51,27 +120,31 @@ def _repair_kickoff(meditation_dir: str, store_dir: str = STORE_DIR,
         qp = os.path.join(meditation_dir, "repair-queue.md")
         if not os.path.exists(qp):
             return None
+    # Resolve every claim HERE, deterministically, for zero tokens. An agent
+    # made to re-derive this pays for it in every later turn of its context.
+    gate = precheck(items)
+    if gate["verdict"] == "instrument":
+        return {"cwd": os.path.expanduser("~"), "prompt": "", "name": "repair-blocked",
+                "blocked": gate["message"], "gate": gate}
+    items = gate["actionable"] or items
     detail = "\n".join(
         "- %s: %s%s" % (m["id"], m["statement"][:140],
-                        "".join("\n    FAILS " + f["claim"] for f in m.get("failing", [])))
+                        "".join("\n    CONFIRMED GONE: " + f["claim"]
+                                for f in m.get("failing", [])
+                                if _resolve_claim(f.get("claim")) is True))
         for m in items) or "(see the queue file)"
     prompt = (
-        "Repair these graded memories — their evidence failed verification:\n"
+        "Repair these graded memories. Every claim below was ALREADY CHECKED "
+        "on disk by the dispatcher and confirmed missing — you do not need to "
+        "`ls` anything to reconfirm it:\n"
         "%s\n"
-        "FIRST, for each failing claim, run ONE cheap check: `ls` the path, or "
-        "`ls` the memory dir for the wikilink target. If it EXISTS, the grader "
-        "is wrong — do not edit the memory, do not investigate further; just "
-        "note it and move on. Measured 2026-08-23: 28 of 30 queue items were "
-        "the grader inventing claims, and an agent that investigated each one "
-        "burned ~44k tokens producing no change. The cheap check costs ~200.\n"
-        "Only for claims that are genuinely gone: fix the source .md (say the "
-        "thing was removed — phrasing it as an absence is both true and clears "
-        "the claim) or supersede the memory. When done run `meditate grade` — "
-        "a clean re-check clears the queue and counts as a REPAIR. Do not push; "
-        "commit local if you touch a repo.\n"
-        "If MOST items turn out to be grader error, stop and say so: the fix "
-        "belongs in nidra/adapters/memory_files.py with a test, not in the "
-        "memory files." % detail)
+        "For each: fix the source .md so it states the truth. If the thing was "
+        "removed, SAY it was removed — phrasing it as an absence ('since "
+        "removed', 'no longer exists') is both accurate and clears the claim, "
+        "because the grader stops asserting a path a memory says is gone. If "
+        "the world moved somewhere new, point the memory at the new location.\n"
+        "Then run `meditate grade` — a clean re-check clears the queue and "
+        "counts as a REPAIR. Do not push; commit local if you touch a repo." % detail)
     name = "repair-" + (items[0]["id"][-6:] if select else "queue")
     return {"cwd": os.path.expanduser("~"), "prompt": prompt, "name": name}
 
@@ -94,6 +167,12 @@ def run(n: Optional[int] = None, repair_only: bool = False,
         repair = _repair_kickoff(meditation_dir, store_dir, select=repair_select)
 
     would: List[str] = []
+    # The queue failed its own precision gate: it is a bug report about the
+    # grader, not work. Dispatching here is how ~44k tokens got spent
+    # confirming findings that were false before the agent ever booted.
+    blocked = repair.get("blocked") if repair else None
+    if blocked:
+        repair = None
     if repair:
         would.append("repair: " + os.path.join(meditation_dir, "repair-queue.md"))
     would += ["goal: %s -> %s" % (g["name"], g["next"]) for g in cands]
@@ -101,6 +180,9 @@ def run(n: Optional[int] = None, repair_only: bool = False,
     result: Dict[str, Any] = {"would": would, "repair_launched": False,
                               "goals_launched": 0, "sent": [], "errors": [],
                               "cooling": getattr(dv.dispatchable, "cooling", 0)}
+    if blocked:
+        result["repair_blocked"] = blocked
+        result["errors"].append({"code": "instrument", "message": blocked})
     if n == 0:
         return result
 

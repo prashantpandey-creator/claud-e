@@ -19,6 +19,9 @@ import subprocess
 import sys
 import tempfile
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import go
+
 SKILL = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SKILL)
 import status as st
@@ -199,6 +202,63 @@ def test_cli_status_envelope():
     for k in ("success", "data", "metadata", "errors"):
         assert k in env
     assert env["data"]["next"], "status must always decide a next action"
+
+
+def test_precision_gate_refuses_to_dispatch_a_lying_queue():
+    """A tool must measure its own precision BEFORE spending an agent.
+
+    Measured 2026-08-23 on a real store: 28 of 30 queue items were the grader
+    inventing claims. A fleet agent investigated them one by one and burned
+    ~44k tokens producing no change. The check that would have caught it is
+    an `os.path.exists` per item -- microseconds, zero tokens. Any verifier
+    that can dispatch work must gate on its own precision first.
+    """
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        fake = [{"id": "m1", "statement": "s",
+                 "failing": [{"claim": "path:" + d}]},          # exists -> FALSE POSITIVE
+                {"id": "m2", "statement": "s",
+                 "failing": [{"claim": "path:" + d + "/nope"}]}]  # gone -> real
+        checked = go.precheck(fake)
+        assert checked["real"] == 1, checked
+        assert checked["false_positive"] == 1, checked
+        assert checked["precision"] == 0.5, checked
+
+    with tempfile.TemporaryDirectory() as d:
+        allfake = [{"id": "m%d" % i, "statement": "s",
+                    "failing": [{"claim": "path:" + d}]} for i in range(5)]
+        c = go.precheck(allfake)
+        assert c["precision"] == 0.0
+        assert c["verdict"] == "instrument", c
+        assert "memory_files.py" in c["message"], c["message"]
+
+
+def test_precheck_marks_unresolvable_claims_not_checkable():
+    """Third value: 'I cannot check this' is NOT 'this is false'.
+
+    Conflating the two is the single root cause behind all six grader
+    defects fixed in nidra a1c1baf.
+    """
+    c = go.precheck([{"id": "m1", "statement": "s",
+                      "failing": [{"claim": "content_anchor"}]}])
+    assert c["not_checkable"] == 1, c
+    assert c["real"] == 0 and c["false_positive"] == 0, c
+
+
+def test_kickoff_carries_the_precheck_so_the_agent_need_not_look():
+    """Deterministic work belongs in the dispatcher, not in an agent.
+
+    Every tool call an agent makes stays in its context for every later
+    turn, so making it re-derive what Python already knows is paid many
+    times over. Hand it the verified result instead."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        gone = os.path.join(d, "definitely-gone")
+        k = go._repair_kickoff(d, items=[{"id": "m1", "statement": "the thing",
+                                          "failing": [{"claim": "path:" + gone}]}])
+        assert k, "a real finding must still dispatch"
+        assert gone in k["prompt"]
+        assert "CONFIRMED GONE" in k["prompt"], k["prompt"][:400]
 
 
 def _main():
