@@ -82,7 +82,8 @@ def _rotate_journal(store_dir, max_bytes=JOURNAL_MAX_BYTES):
     return False
 
 
-def run(do_sleep=False, store_dir=None, memory_root=None, form_days=None):
+def run(do_sleep=False, store_dir=None, memory_root=None, form_days=None,
+        sessions=None):
     """Scan sessions + .md memories into the graded store.
 
     store_dir/memory_root are injectable so tests never touch the live store —
@@ -116,11 +117,15 @@ def run(do_sleep=False, store_dir=None, memory_root=None, form_days=None):
     except ImportError as e:
         return _envelope(False, {}, [{"code": "import", "message": str(e)}], store_dir)
 
-    scan = scan_all_projects(cap=20)
-    if not scan["success"]:
-        return _envelope(False, {}, scan["errors"], store_dir)
-
-    sessions = scan["data"]["sessions"]
+    # sessions injectable: the suite called this 11x and each call rescanned
+    # the owner's 126 real transcripts (2.6s each = 26s, the slowest suite and
+    # the bound on the whole parallel doctor run). Tests pass a fixture; they
+    # also stop depending on how many sessions the owner happens to have.
+    if sessions is None:
+        scan = scan_all_projects(cap=20)
+        if not scan["success"]:
+            return _envelope(False, {}, scan["errors"], store_dir)
+        sessions = scan["data"]["sessions"]
     store = Store(store_dir)
     if not store.exists():
         store.init()

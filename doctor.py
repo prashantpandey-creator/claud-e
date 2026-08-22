@@ -64,36 +64,35 @@ def _check_prereqs() -> List[Dict[str, Any]]:
     return checks
 
 
+def _run_one(tf: str) -> Dict[str, Any]:
+    path = os.path.join(SKILL_DIR, tf)
+    if not os.path.exists(path):
+        return {"file": tf, "ok": False, "detail": "file missing"}
+    try:
+        r = subprocess.run([sys.executable, path], capture_output=True,
+                           text=True, timeout=90, cwd=SKILL_DIR)
+        return {"file": tf, "ok": r.returncode == 0,
+                "detail": "green" if r.returncode == 0
+                else (r.stderr.strip()[-200:] or r.stdout.strip()[-200:])}
+    except subprocess.TimeoutExpired:
+        return {"file": tf, "ok": False, "detail": "timed out (90s)"}
+    except Exception as e:
+        return {"file": tf, "ok": False, "detail": str(e)[:200]}
+
+
 def _check_tests() -> Dict[str, Any]:
-    results = []
-    all_pass = True
-    for tf in TEST_FILES:
-        path = os.path.join(SKILL_DIR, tf)
-        if not os.path.exists(path):
-            results.append({"file": tf, "ok": False, "detail": "file missing"})
-            all_pass = False
-            continue
-        try:
-            r = subprocess.run(
-                [sys.executable, path],
-                capture_output=True, text=True, timeout=90,
-                cwd=SKILL_DIR,
-            )
-            ok = r.returncode == 0
-            if not ok:
-                all_pass = False
-            results.append({
-                "file": tf,
-                "ok": ok,
-                "detail": "green" if ok else r.stderr.strip()[-200:] or r.stdout.strip()[-200:],
-            })
-        except subprocess.TimeoutExpired:
-            results.append({"file": tf, "ok": False, "detail": "timed out (90s)"})
-            all_pass = False
-        except Exception as e:
-            results.append({"file": tf, "ok": False, "detail": str(e)[:200]})
-            all_pass = False
-    return {"all_pass": all_pass, "files": results}
+    """Run the suites in PARALLEL — they are independent processes on isolated
+    temp dirs. Sequentially this took 71s across 27 suites and once timed out a
+    commit; wall time is now bounded by the slowest single suite, not the sum.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    workers = min(8, (os.cpu_count() or 4))
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        results = list(ex.map(_run_one, TEST_FILES))
+    # keep declaration order so the report reads the same every time
+    order = {tf: i for i, tf in enumerate(TEST_FILES)}
+    results.sort(key=lambda r: order.get(r["file"], 999))
+    return {"all_pass": all(r["ok"] for r in results), "files": results}
 
 
 def _check_hook() -> Dict[str, Any]:

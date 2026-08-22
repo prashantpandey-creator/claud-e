@@ -18,6 +18,15 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import nidra_bridge
 
 
+# A tiny fixture instead of the owner's real 126 transcripts: the suite is
+# testing the BRIDGE, not how many sessions exist on this machine.
+FIXTURE_SESSIONS = [
+    {"session_id": "fix-1", "file": "fix-1.jsonl", "_project_dir": "/tmp",
+     "_project_slug": "-tmp", "counts": {"user": 3}, "first_user": "hello",
+     "ts_end": "2026-08-22T00:00:00", "size_bytes": 100, "cwd": "/tmp"},
+]
+
+
 def _run(**kw):
     """Run the bridge against a throwaway store.
 
@@ -25,6 +34,7 @@ def _run(**kw):
     store; that cost belongs to test_formation.py, not to every bridge test
     (7 runs blew doctor's 30s limit at 32.8s measured)."""
     kw.setdefault("form_days", 0)
+    kw.setdefault("sessions", FIXTURE_SESSIONS)
     with tempfile.TemporaryDirectory() as td:
         return nidra_bridge.run(store_dir=os.path.join(td, "store"), **kw)
 
@@ -66,10 +76,10 @@ def test_idempotent():
     # Both runs must share ONE temp store, or the second sees an empty store.
     with tempfile.TemporaryDirectory() as td:
         sd = os.path.join(td, "store")
-        e1 = nidra_bridge.run(store_dir=sd, form_days=0)
+        e1 = nidra_bridge.run(store_dir=sd, form_days=0, sessions=FIXTURE_SESSIONS)
         if not e1["success"]:
             return
-        e2 = nidra_bridge.run(store_dir=sd, form_days=0)
+        e2 = nidra_bridge.run(store_dir=sd, form_days=0, sessions=FIXTURE_SESSIONS)
         assert e2["success"]
         assert e2["data"]["imported"] == 0
         assert e2["data"]["already_exists"] == e1["data"]["scanned"]
@@ -112,12 +122,12 @@ def test_concurrent_grade_skips_not_corrupts():
         os.makedirs(sd)
         holder = open(os.path.join(sd, ".grade.lock"), "w")
         fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        env = nidra_bridge.run(store_dir=sd, form_days=0)
+        env = nidra_bridge.run(store_dir=sd, form_days=0, sessions=FIXTURE_SESSIONS)
         holder.close()
         assert env["success"] is True
         assert "skipped" in env["data"], env["data"]
         # and after release, a real pass proceeds
-        env2 = nidra_bridge.run(store_dir=sd, form_days=0)
+        env2 = nidra_bridge.run(store_dir=sd, form_days=0, sessions=FIXTURE_SESSIONS)
         assert "skipped" not in env2["data"]
 
 
@@ -143,7 +153,7 @@ def test_path_index_built():
     """The bridge must emit path_index.json — coordination.py serves facts from it."""
     with tempfile.TemporaryDirectory() as td:
         sd = os.path.join(td, "store")
-        env = nidra_bridge.run(store_dir=sd, form_days=0)
+        env = nidra_bridge.run(store_dir=sd, form_days=0, sessions=FIXTURE_SESSIONS)
         if not env["success"]:
             return
         idx_path = os.path.join(sd, "path_index.json")

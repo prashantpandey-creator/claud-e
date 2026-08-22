@@ -338,17 +338,27 @@ def done_digest(store_dir: str = STORE_DIR, coord_dir: str = COORD_DIR,
                         continue
         except OSError:
             pass
-    served = 0
-    ev = events_path(coord_dir)
+    served = warned = clicks = 0
+    ev = os.path.join(os.path.dirname(coord_dir.rstrip("/")), "events.jsonl")
     if os.path.exists(ev):
         try:
             with open(ev, errors="replace") as f:
                 for line in f:
                     try:
-                        if _utc_epoch(json.loads(line).get("ts", "")) >= cutoff:
-                            served += 1
+                        r = json.loads(line)
                     except Exception:
                         continue
+                    if _utc_epoch(r.get("ts", "")) < cutoff:
+                        continue
+                    t = r.get("type")
+                    # count each KIND — lumping clicks in as "served" reported
+                    # 2,114 fact/warn events when only 8 were real
+                    if t == "fact_served":
+                        served += 1
+                    elif t == "collision_warned":
+                        warned += 1
+                    elif t == "brain_action":
+                        clicks += 1
         except OSError:
             pass
     parts = []
@@ -359,7 +369,11 @@ def done_digest(store_dir: str = STORE_DIR, coord_dir: str = COORD_DIR,
     if archived:
         parts.append("archived %d session%s" % (archived, "s" if archived != 1 else ""))
     if served:
-        parts.append("served %d fact/warn event%s" % (served, "s" if served != 1 else ""))
+        parts.append("served %d fact%s" % (served, "s" if served != 1 else ""))
+    if warned:
+        parts.append("warned %d collision%s" % (warned, "s" if warned != 1 else ""))
+    if clicks:
+        parts.append("%d dashboard action%s" % (clicks, "s" if clicks != 1 else ""))
     if not parts:
         return ""
     return "Done silently (24h): " + ", ".join(parts) + "."
