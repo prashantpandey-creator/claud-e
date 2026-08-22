@@ -274,14 +274,18 @@ PAGE = """<!doctype html><meta charset="utf-8">
 <div style="font-size:22px;margin:6px 0 2px;color:#E3B140">Pulse <span style="font-size:13px;color:#8a8578">· your sessions, goals, memory and fleet — live. One click runs, and shows what ran.</span></div>
 <div id="meta" style="font-size:12px;color:#8a8578"></div>
 <div id="next" style="margin:14px 0;color:#E3B140"></div>
-<div style="display:flex;gap:8px;flex-wrap:wrap">
-  <button onclick="act('go','')" class="b">launch fleet</button>
-  <button onclick="act('fix','')" class="b">repair all</button>
-  <button onclick="act('grade','')" class="b">grade now</button>
+<div style="display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start">
+  <div style="max-width:180px"><button onclick="act('go','')" class="b" title="Opens one Terminal window per goal below, each with an agent working that goal's next milestone. Repair goes first if the queue is open.">launch fleet</button>
+    <div class="cap">opens one Terminal agent per goal below — repair first if open</div></div>
+  <div style="max-width:180px"><button onclick="act('fix','')" class="b" title="Opens one Terminal agent that re-checks and fixes the failed memories listed under REPAIR QUEUE.">repair all</button>
+    <div class="cap">one agent to fix every failed memory in the repair queue</div></div>
+  <div style="max-width:180px"><button onclick="act('grade','')" class="b" title="Re-verifies every memory against reality in the background. Nothing opens; the numbers refresh as it finishes.">grade now</button>
+    <div class="cap">re-check all memories against reality (background, ~1 min)</div></div>
   <span id="toast" style="color:#8a8578;font-size:12px;align-self:center"></span>
 </div>
 <pre id="out" style="display:none;background:#12100c;border:1px solid #2a2620;border-radius:8px;padding:10px 14px;font-size:12px;color:#d8d2c4;white-space:pre-wrap;margin:10px 0 0"></pre>
-<style>.b{cursor:pointer;border:1px solid #2a2620;background:transparent;color:#E3B140;border-radius:7px;padding:6px 13px;font-size:13px}.b:hover{background:#1d1a14}</style>
+<style>.b{cursor:pointer;border:1px solid #2a2620;background:transparent;color:#E3B140;border-radius:7px;padding:6px 13px;font-size:13px}.b:hover{background:#1d1a14}
+.cap{font-size:10.5px;color:#6b6557;margin-top:4px;line-height:1.35}</style>
 <div id="stats" style="display:flex;flex-wrap:wrap;gap:24px;margin:18px 0"></div>
 <div style="letter-spacing:.3em;font-size:11px;color:#6b6557;margin-top:26px">LIVE SESSIONS <span style="letter-spacing:0;color:#4a463c">— each orb beats with its session: fast = working right now, dim ember = gone quiet (prāṇa, the breath)</span></div>
 <div id="live" style="display:flex;flex-wrap:wrap;gap:26px;margin-top:14px"></div>
@@ -355,8 +359,8 @@ async function tick(){
       <div style="font-size:12.5px;color:${G};overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(x.label)}</div>
       <div style="font-size:11px;color:${DIM};overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(x.last_file)}</div>
       <div style="font-size:10px;color:#4a463c">${x.age_s<60?x.age_s+"s":Math.round(x.age_s/60)+"m"} ago
-        · <a href="#" style="color:${DIM}" onclick="rename('${esc(x.sid)}','${esc(x.label)}');return false">name</a>
-        · <a href="#" style="color:${DIM}" onclick="stopSess('${esc(x.sid)}','${esc(x.label)}');return false">stop</a></div>
+        · <a href="#" style="color:${DIM}" title="Rename this session in your own words — the new name sticks everywhere." onclick="rename('${esc(x.sid)}','${esc(x.label)}');return false">name</a>
+        · <a href="#" style="color:${DIM}" title="End this session — same as closing its window. Its unsaved chat context ends." onclick="stopSess('${esc(x.sid)}','${esc(x.label)}');return false">stop</a></div>
     </div>`}).join("") || `<div style="color:${DIM};font-size:13px">no living sessions — the field is still</div>`;
   document.getElementById("goals").innerHTML = s.goals.map(g=>
     `<div style="margin:8px 0"><div style="display:flex;gap:12px;align-items:center">
@@ -364,7 +368,7 @@ async function tick(){
       <span style="color:${G}">${Math.round(g.pct)}%</span>
       <span style="color:${DIM}">${g.done}/${g.total}</span>
       ${g.scope_delta>0?`<span style="color:${G}">scope +${g.scope_delta}</span>`:""}
-      <button class="b" style="padding:2px 9px;font-size:11px" onclick="act('go','${g.name}')">dispatch</button></div>
+      <button class="b" style="padding:2px 9px;font-size:11px" title="Opens ONE Terminal agent working only this goal's next milestone: ${esc(g.next||'')}" onclick="act('go','${g.name}')">dispatch</button></div>
       <div style="margin-left:262px;font-size:12px;color:${DIM}">next: ${esc(g.next||"—")}</div></div>`
   ).join("");
   document.getElementById("fleet").innerHTML = s.fleet.map(f=>
@@ -374,7 +378,7 @@ async function tick(){
   ).join("") || `<div style="color:${DIM}">nothing dispatched — <code style="color:${G}">meditate go</code></div>`;
   document.getElementById("repair").innerHTML = s.repair.map((m,i)=>
     `<div style="margin:4px 0"><span style="color:${G}">${i+1}.</span> ${esc(m.statement)}
-     <button class="b" style="padding:1px 8px;font-size:11px" onclick="act('fix',String(${i+1}))">fix this</button>
+     <button class="b" style="padding:1px 8px;font-size:11px" title="Opens ONE Terminal agent scoped to only this memory: it checks reality, fixes the .md, and re-grades." onclick="act('fix',String(${i+1}))">fix this</button>
      ${m.fails.map(f=>`<div style="margin-left:18px;color:${DIM};font-size:12px">FAILS ${esc(f)}</div>`).join("")}</div>`
   ).join("") || `<div style="color:${DIM}">clean — nothing failed verification</div>`;
   document.getElementById("activity").innerHTML = (s.activity||[]).map(a=>
