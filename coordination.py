@@ -70,6 +70,18 @@ def _envelope(tool, success, data, errors=None):
 
 # ---- presence ---------------------------------------------------------------
 
+def _log_event(coord_dir: str, etype: str, sid: str, path: str) -> None:
+    """Durable one-line record per serve/warn — the efficacy report reads this.
+    Presence files self-prune in 24h; without this log the wins are unmeasurable."""
+    try:
+        root = os.path.dirname(coord_dir.rstrip("/")) or coord_dir
+        with open(os.path.join(root, "events.jsonl"), "a") as f:
+            f.write(json.dumps({"type": etype, "sid": sid[:16], "path": path,
+                                "ts": _iso(time.time())}) + "\n")
+    except OSError:
+        pass                                   # fail-open: never break the hook
+
+
 def _pfile(sid: str, coord_dir: str) -> str:
     safe = re.sub(r"[^A-Za-z0-9_-]", "_", sid)[:64] or "unknown"
     return os.path.join(coord_dir, safe + ".json")
@@ -190,12 +202,14 @@ def hook_edit(payload: Dict[str, Any],
                 "and is still live. Check `git status` for their uncommitted work "
                 "before overwriting — if you are both mid-change, take a worktree."
                 % (other.get("sid", "?")[:8], os.path.basename(path), mins))
+            _log_event(coord_dir, "collision_warned", sid, path)
             break                                          # one warning is enough
 
     # 2. graded facts about this file, once per session per file
     for key, stmt in facts_for(path, me["served"], store_dir):
         lines.append("GRADED FACT (machine-checked) about this file: %s" % stmt)
         me["served"].append(key)
+        _log_event(coord_dir, "fact_served", sid, path)
 
     # 3. guard rules
     if PIPELINE_RE.search(path):

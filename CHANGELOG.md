@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.4.3 — 2026-08-21
+
+`meditate report` — the measurement loop for the drift-correct cycle and the
+stilling practice. Wins are now counted from durable logs, not remembered.
+
+### Added
+- `report.py` + 6 tests: drift caught (downgrade events + `drifted` flags),
+  repaired (downgrade later re-verified, with median time-to-repair), open
+  (real drift vs ungradeable stubs); stilling (sessions archived + bytes,
+  splits -> continuation chats, stillness age); sangama (facts served,
+  collisions warned). Honest zeros — an empty log reports 0.
+- `coordination.py` now logs every fact-serve and collision-warn to
+  `~/.claude/coordination/events.jsonl` (fail-open, one line each). Before
+  this, sangama's efficacy was unmeasurable: presence files self-prune in 24h.
+
+### First live run
+- caught 1 (the resolved-Mumbai memory: its .md was edited, the content
+  anchor stopped matching — flagged `drifted` at first verify), repaired 0,
+  open 1 real + 4 ungradeable session stubs; 7 sessions archived (99.2 KB);
+  9 splits -> 17 continuation chats; facts_served moved 0 -> 1 from a single
+  real hook fire.
+
+
 ## 0.4.1 — 2026-08-21
 
 `meditate archive` — the consolidation step that could never actually remove

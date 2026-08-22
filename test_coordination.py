@@ -143,6 +143,20 @@ def test_facts_capped():
         assert sum(1 for i in range(9) if f"fact {i}" in msg) <= co.FACT_CAP
 
 
+def test_events_logged_durably():
+    """Serves and warns must land in events.jsonl — the report reads it."""
+    with tempfile.TemporaryDirectory() as t:
+        coord, store = _env(t)
+        _write_index(store, "/repo/main.py",
+                     [{"statement": "a graded fact", "status": "machine_checked"}])
+        co.hook_edit(_payload("sid-a", "/repo/main.py"), coord_dir=coord, store_dir=store)
+        co.hook_edit(_payload("sid-b", "/repo/main.py"), coord_dir=coord, store_dir=store)
+        ev_path = os.path.join(os.path.dirname(coord.rstrip("/")), "events.jsonl")
+        assert os.path.exists(ev_path), "events.jsonl not written"
+        types = [json.loads(l)["type"] for l in open(ev_path)]
+        assert "fact_served" in types and "collision_warned" in types, types
+
+
 # ---- guard rules (moved from bash) ------------------------------------------
 
 def test_pipeline_rule_fires():
