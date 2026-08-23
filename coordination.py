@@ -286,7 +286,41 @@ def ceiling_check(payload: Dict[str, Any], me: Dict[str, Any]) -> str:
             % (ctx // 1000, note % max(1, (ceil - ctx) // 1000), sid))
 
 
-def check_edit(path: str) -> str:
+# Trees whose contents nobody hand-writes. Measured: 7 of 7 .py files under
+# fixtures/ or generated/ in this workspace squiggle, 100% of them false — one
+# says in its own docstring that the undefined names are deliberate.
+_NOT_MY_CODE = ("/fixtures/", "/generated/", "/node_modules/", "/__pycache__/",
+                "/site-packages/", "/build/", "/dist/", "/.venv/", "/venv/",
+                "/.git/")
+
+SEEN_CAP = 400                 # paths remembered; bounded, it runs forever
+SEEN_PATH = os.path.join(os.path.dirname(COORD_DIR.rstrip("/")), "squiggle-seen.json")
+
+
+def _load_seen(seen_path: str) -> Dict[str, List[str]]:
+    try:
+        with open(seen_path) as fh:
+            d = json.load(fh)
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}                                  # corrupt or absent: start over
+
+
+def _save_seen(seen_path: str, seen: Dict[str, List[str]]) -> None:
+    try:
+        if len(seen) > SEEN_CAP:                   # drop oldest insertions
+            for k in list(seen)[:len(seen) - SEEN_CAP]:
+                del seen[k]
+        os.makedirs(os.path.dirname(seen_path), exist_ok=True)
+        tmp = seen_path + ".tmp"
+        with open(tmp, "w") as fh:
+            json.dump(seen, fh)
+        os.replace(tmp, seen_path)
+    except OSError:
+        pass                                       # fail-open, always
+
+
+def check_edit(path: str, seen_path: Optional[str] = None) -> str:
     """The red squiggly: what is wrong with this file, right now. '' = fine.
 
     A human editing code gets told about a bad reference while their hand is
@@ -311,6 +345,9 @@ def check_edit(path: str) -> str:
     """
     if not path.endswith(".py") or not os.path.isfile(path):
         return ""                     # only Python; silence about the rest
+    norm = os.path.abspath(path).replace(os.sep, "/")
+    if any(seg in norm for seg in _NOT_MY_CODE):
+        return ""                     # not code anyone here wrote
 
     # ruff first when it is installed: it sees inside function bodies, where
     # the stdlib pass below cannot go and where most real undefined-name bugs
@@ -327,13 +364,9 @@ def check_edit(path: str) -> str:
                 [ruff, "check", "--select", "E9,F821,F822", "--no-cache",
                  "--quiet", "--output-format", "concise", path],
                 capture_output=True, text=True, timeout=5)
-            line = (r.stdout or "").strip().splitlines()
-            if line:
-                first = line[0]
-                # ".../brain.py:4:8: F821 Undefined name `paths`"
-                return os.path.basename(first) if first.startswith("/") else first
-            if r.returncode in (0, 1):
-                return ""              # ruff ran and found nothing
+            found = [os.path.basename(l) if l.startswith("/") else l
+                     for l in (r.stdout or "").strip().splitlines() if l.strip()]
+            return _only_new(path, found, seen_path)
         except (OSError, subprocess.SubprocessError):
             pass                       # fall through to the stdlib pass
     try:
@@ -344,8 +377,9 @@ def check_edit(path: str) -> str:
     try:
         tree = ast.parse(src, filename=path)
     except SyntaxError as e:
-        return "%s:%s %s" % (os.path.basename(path), e.lineno or "?",
-                             (e.msg or "invalid syntax"))
+        return _only_new(path, ["%s:%s %s" % (os.path.basename(path),
+                                              e.lineno or "?",
+                                              (e.msg or "invalid syntax"))], seen_path)
     except (ValueError, RecursionError):
         return ""
 
@@ -370,15 +404,41 @@ def check_edit(path: str) -> str:
 
     # Only module-level reads: inside a function a name may legitimately be
     # defined later, or come from a scope this cheap pass cannot see.
+    found = []
     for stmt in tree.body:
         if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             continue
         for node in ast.walk(stmt):
             if (isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
                     and node.id not in bound):
-                return "%s:%s '%s' is used but never imported or defined" % (
-                    os.path.basename(path), node.lineno, node.id)
-    return ""
+                found.append("%s:%s '%s' is used but never imported or defined"
+                             % (os.path.basename(path), node.lineno, node.id))
+    return _only_new(path, found, seen_path)
+
+
+def _only_new(path: str, found: List[str], seen_path: Optional[str]) -> str:
+    """Report the DELTA, not the file's state.
+
+    A pure function of the path reports whatever the file contains, so a
+    pre-existing problem re-fires on every edit forever AND masks anything the
+    current edit actually broke, because only the first diagnostic is
+    returned. Measured on the real workspace: purangpt/backend/main.py carries
+    an F821 from 2026-06-21, and both CLAUDE.md files point every session at
+    that file.
+
+    An agent shown the same irrelevant line on every edit learns to skip the
+    line — the exact cost this whole design exists to avoid. So each
+    diagnostic is announced once per path; a new one always gets through
+    because it is not in the remembered set.
+    """
+    sp = seen_path or SEEN_PATH
+    seen = _load_seen(sp)
+    key = os.path.abspath(path)
+    before = set(seen.get(key) or [])
+    fresh = [f for f in found if f not in before]
+    seen[key] = found                              # forget what is fixed
+    _save_seen(sp, seen)
+    return fresh[0] if fresh else ""
 
 
 # A test runner that ran nothing. Exit 0, output present, nothing proved.
