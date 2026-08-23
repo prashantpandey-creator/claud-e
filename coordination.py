@@ -30,7 +30,7 @@ import os
 import re
 import sys
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 # Env overrides exist so tests (and the hook's own test suite) can isolate —
 # the live presence dir and graded store are shared state, never a scratchpad.
@@ -201,9 +201,25 @@ def facts_for(path: str, served: List[str], store_dir: str = STORE_DIR) -> List[
 # corrections (3.7%) and one-off tool errors (4.0%) are healthy and get no
 # harness. Baseline lives in memory `session-behavior-baseline`; KPI is the
 # compaction rate, re-measured against that file.
-CEILING_TOKENS = 966_000
-CEILING_WARN_AT = 700_000
-CEILING_RESTEP = 100_000
+# Two warn bands, because windows differ and a fixed line misses most events:
+# re-measured with the falsifying case first — 40 of 56 real compactions (71%)
+# happened at ~160k, on standard 200k-window models, far BELOW a fixed 700k
+# line. Observed ceilings in this corpus: ~166k (200k window) and ~966k (1M).
+# The band is inferred from the LIVE value alone — no model table to go stale:
+# 145k-200k means "if this window is 200k you are about to hit it"; crossing
+# 200k without compacting proves the window is bigger, so silence resumes
+# until the 1M line at 600k (floor set by data: unique compaction events
+# dedupe to 50, and one real wall sat at 645k — a 700k floor missed it; 600k
+# covers 48/50 = 96%). Literature agrees quality rots before the wall
+# (arXiv 2608.01326; production caps below advertised windows), so the early
+# line in a 1M session is information, not noise — and it fires once.
+CEILING_BANDS = (
+    (145_000, 200_000, 20_000,
+     "if this model runs a standard 200k window it will compact within ~%dk "
+     "tokens; on a 1M window ignore until 600k"),
+    (600_000, 966_000, 100_000,
+     "~%dk from the 1M ceiling"),
+)
 _CEILING_TAIL = 262_144        # transcripts reach 25MB — read the tail only
 
 
@@ -239,17 +255,31 @@ def ceiling_check(payload: Dict[str, Any], me: Dict[str, Any]) -> str:
         if c:
             ctx = c
             break
-    if ctx < CEILING_WARN_AT:
-        return ""
     last = int(me.get("ceiling_warned") or 0)
-    if last and ctx < last + CEILING_RESTEP:
+    if last and ctx < last // 2:
+        # Context collapsed to under half the high-water mark: a compaction
+        # happened. Reset, or the stale mark gags the next climb's warning.
+        last = 0
+    # Highest band whose floor is crossed. The 200k band also has a hard lid:
+    # ctx past 200k without a compaction PROVES the window is bigger, so that
+    # band stops applying and silence holds until the 1M floor.
+    band = None
+    for floor, ceil, step, note in CEILING_BANDS:
+        if ctx >= floor and (ctx < ceil or ceil > 200_000):
+            band = (floor, ceil, step, note)
+    if band is None:
+        me["ceiling_warned"] = last
+        return ""
+    floor, ceil, step, note = band
+    if last and ctx < last + step:
+        me["ceiling_warned"] = last
         return ""
     me["ceiling_warned"] = ctx
     sid = str(payload.get("session_id") or "unknown")[:8]
-    return ("Context %dk of ~%dk ceiling (%d%%). This session will COMPACT soon; "
-            "a compaction summary loses threads, a split does not. Split now: "
-            "run /meditate %s — it writes per-thread continuation chats."
-            % (ctx // 1000, CEILING_TOKENS // 1000, 100 * ctx // CEILING_TOKENS, sid))
+    return ("Context %dk — %s. A compaction summary loses threads; a split does "
+            "not. Split now: run /meditate %s — it writes per-thread "
+            "continuation chats."
+            % (ctx // 1000, note % max(1, (ceil - ctx) // 1000), sid))
 
 
 def hook_edit(payload: Dict[str, Any],

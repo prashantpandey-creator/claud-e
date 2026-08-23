@@ -325,17 +325,53 @@ def test_ceiling_silent_under_threshold_and_when_unmeasurable():
     import tempfile
     with tempfile.TemporaryDirectory() as d:
         tp = os.path.join(d, "s.jsonl")
-        open(tp, "w").write(_usage_row(300_000) + "\n")
+        open(tp, "w").write(_usage_row(120_000) + "\n")
         me = {}
         assert co.ceiling_check({"transcript_path": tp, "session_id": "s1"}, me) == ""
         assert co.ceiling_check({"session_id": "s1"}, me) == ""            # no path
         assert co.ceiling_check({"transcript_path": d + "/nope", "session_id": "s1"}, me) == ""
 
 
+def test_ceiling_warns_in_the_200k_band():
+    """THE case the first version missed. Measured: 40 of 56 real compactions
+    (71%) happened at ~160k — standard-window models — far below a fixed 700k
+    line. The warn must fire in the 145k-200k band too."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        tp = os.path.join(d, "s.jsonl")
+        open(tp, "w").write(_usage_row(155_000) + "\n")
+        me = {}
+        w = co.ceiling_check({"transcript_path": tp, "session_id": "abcd1234x"}, me)
+        assert "155k" in w and "200k" in w and "meditate" in w, w
+        # nag control inside the band: +10k is silent, +25k fires again
+        open(tp, "a").write(_usage_row(165_000) + "\n")
+        assert co.ceiling_check({"transcript_path": tp, "session_id": "abcd1234x"}, me) == ""
+        open(tp, "a").write(_usage_row(181_000) + "\n")
+        assert co.ceiling_check({"transcript_path": tp, "session_id": "abcd1234x"}, me) != ""
+
+
+def test_ceiling_silent_between_bands():
+    """ctx=300k PROVES the window is bigger than 200k (it did not compact),
+    and 1M pressure has not started — silence, even with a prior band-A warn
+    on the record (the generic restep must not leak across bands)."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        tp = os.path.join(d, "s.jsonl")
+        me = {"ceiling_warned": 155_000}
+        open(tp, "w").write(_usage_row(300_000) + "\n")
+        assert co.ceiling_check({"transcript_path": tp, "session_id": "s1"}, me) == ""
+
+
 def test_ceiling_warns_once_then_again_each_step():
-    """Measured: 24% of sessions ran to the 965,923 ceiling and compacted
-    (64 events) instead of splitting. The warning must fire at 700k, then
-    NOT nag every edit, then fire again each further 100k."""
+    """1M band: fire at the 600k floor, not on every edit after, +100k steps.
+
+    Floor is 600k not 700k because the deduped data shows a real wall at
+    645k (48/50 events covered at 600k, 42/50 at 700k)."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as d2:
+        tp2 = os.path.join(d2, "s.jsonl")
+        open(tp2, "w").write(_usage_row(645_000) + "\n")
+        assert "645k" in co.ceiling_check({"transcript_path": tp2, "session_id": "s1"}, {})
     import tempfile
     with tempfile.TemporaryDirectory() as d:
         tp = os.path.join(d, "s.jsonl")
@@ -349,6 +385,18 @@ def test_ceiling_warns_once_then_again_each_step():
         open(tp, "a").write(_usage_row(815_000) + "\n")
         w2 = co.ceiling_check({"transcript_path": tp, "session_id": "abcd1234x"}, me)
         assert "815k" in w2, w2
+
+
+def test_ceiling_resets_after_a_compaction():
+    """After a compaction the context collapses. The old high-water mark must
+    not gag the NEXT climb — the second cycle deserves its warning too."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        tp = os.path.join(d, "s.jsonl")
+        me = {"ceiling_warned": 815_000}
+        open(tp, "w").write(_usage_row(160_000) + "\n")       # collapsed + climbing
+        w = co.ceiling_check({"transcript_path": tp, "session_id": "s1"}, me)
+        assert w != "", "post-compaction climb was gagged by the stale mark"
 
 
 def test_ceiling_reads_the_tail_of_a_fat_transcript():
