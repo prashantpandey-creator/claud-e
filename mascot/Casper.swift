@@ -573,7 +573,10 @@ final class GhostView: NSView {
     private let amber   = NSColor(srgbRed: 0.91, green: 0.71, blue: 0.25, alpha: 1)
 
     var onClick: (() -> Void)?
+    var onRightClick: ((NSEvent) -> Void)?
     private var downAt = NSPoint.zero
+
+    override func rightMouseDown(with e: NSEvent) { onRightClick?(e) }
 
     override func mouseDown(with e: NSEvent) { downAt = e.locationInWindow }
     override func mouseUp(with e: NSEvent) {
@@ -908,6 +911,18 @@ final class App: NSObject, NSApplicationDelegate {
     var noBtn: NSButton!
     var askBtn: NSButton!
     var fleetBtn: NSButton!
+    var stopBtn: NSButton!
+
+    /// Quiet mode: he never speaks or offers UNPROMPTED. Click him or say his
+    /// name and he still answers — this disables the intrusion, not the tool.
+    static let quietKey = "casper.quiet"
+    var quiet: Bool {
+        get { UserDefaults.standard.bool(forKey: App.quietKey) }
+        set { UserDefaults.standard.set(newValue, forKey: App.quietKey) }
+    }
+    /// The full spoken introduction happens ONCE, ever. Repeating the whole
+    /// speech at every launch was most of what made him feel intrusive.
+    static let introducedKey = "casper.introduced"
     var fleetRunning = 0
     var lastStep = ""
     var shotMode = false        // rendering the UI for review: no mic, no polling
@@ -1009,6 +1024,15 @@ final class App: NSObject, NSApplicationDelegate {
 
         micBtn = button("Talk", x: ctrlX[0].0, w: ctrlX[0].1)
         micBtn.target = self; micBtn.action = #selector(toggleMic)
+        // Stop: visible only while he is speaking, in the offer slot — the
+        // moment he talks, the most important control is the one that ends it.
+        stopBtn = button("Stop", x: offerX[0].0, w: offerX[0].1)
+        stopBtn.target = self; stopBtn.action = #selector(stopTalking)
+        tinted(stopBtn, title: "Stop", tint: .red)
+        stopBtn.isHidden = true
+        root.addSubview(stopBtn)
+
+        ghost.onRightClick = { [weak self] e in self?.showMenu(e) }
         [yesBtn, noBtn, askBtn, micBtn].forEach { root.addSubview($0!) }
         showOffer(false)
         refreshMicButton()
@@ -1043,6 +1067,7 @@ final class App: NSObject, NSApplicationDelegate {
                 self.ghost.mood = .listening }
             else if !self.yesBtn.isHidden             { self.ghost.mood = .alert }
             else                                      { self.ghost.mood = .idle }
+            self.stopBtn.isHidden = !self.mouth.speaking
             self.ghost.tick(dt: 1.0 / 60)
         }
         // ---- the ear -------------------------------------------------------
@@ -1265,33 +1290,60 @@ final class App: NSObject, NSApplicationDelegate {
     /// because the rule that waits for a pause had him silent all day — anyone
     /// working at a keyboard is never idle long enough for it to fire.
     func greet() {
-        // Say what he is and what he is for BEFORE saying anything about the
-        // work. Someone meeting him for the first time does not need a status
-        // line — they need to know what he can be asked for.
-        var line = "Hi, I'm Casper. I keep track of what you're building "
-                 + "\u{2014} what you told me, what's still true, and what's "
-                 + "waiting on you. Ask me anything about your work, or tell me "
-                 + "to fix something and I'll put someone on it."
-
         agendaItems = Meditate.agenda()
         let real = agendaItems.filter { !$0.action.isEmpty }
-        if real.isEmpty {
-            line += " I've been through everything just now, and nothing's "
-                  + "broken or waiting on you."
+
+        // Quiet mode: presence without a sound. The glow and the bubble carry
+        // everything; nothing is spoken and nothing is offered.
+        if quiet {
+            ghost.glow = real.isEmpty ? 0.25 : 1.0
+            setBubble(real.isEmpty ? ""
+                      : "\(real.count) thing\(real.count == 1 ? "" : "s") "
+                        + "when you want \(real.count == 1 ? "it" : "them") "
+                        + "\u{2014} just ask.")
             showOffer(false)
-        } else {
-            line += " I've just been through everything. There "
-                  + (real.count == 1 ? "is one thing" : "are \(real.count) things")
-                  + " worth your attention. Want to hear "
-                  + (real.count == 1 ? "it" : "them") + "?"
-            pendingKind = "agenda"
-            style(yesBtn, title: "Yes, tell me", accent: true)
-            showOffer(true)
+            return
         }
-        say(line)
-        // The offer covered the same ground as the briefing headline. Mark
-        // that headline delivered, or the 25s check re-says item one in
-        // different words right after the introduction.
+
+        let introduced = UserDefaults.standard.bool(forKey: App.introducedKey)
+        if !introduced {
+            // The full introduction, ONCE. Repeating this monologue at every
+            // launch was most of what made him feel intrusive.
+            var line = "Hi, I'm Casper. I keep track of what you're building "
+                     + "\u{2014} what you told me, what's still true, and what's "
+                     + "waiting on you. Ask me anything about your work, or tell "
+                     + "me to fix something and I'll put someone on it."
+            if real.isEmpty {
+                line += " Right now, nothing's broken or waiting on you."
+                showOffer(false)
+            } else {
+                line += " There "
+                      + (real.count == 1 ? "is one thing" : "are \(real.count) things")
+                      + " worth your attention. Want to hear "
+                      + (real.count == 1 ? "it" : "them") + "?"
+                pendingKind = "agenda"
+                style(yesBtn, title: "Yes, tell me", accent: true)
+                showOffer(true)
+            }
+            say(line)
+            UserDefaults.standard.set(true, forKey: App.introducedKey)
+        } else {
+            // Every launch after the first: a bubble, not a speech.
+            ghost.glow = real.isEmpty ? 0.25 : 1.0
+            if real.isEmpty {
+                setBubble("")
+                showOffer(false)
+            } else {
+                setBubble("\(real.count) thing\(real.count == 1 ? "" : "s") "
+                          + "worth a look \u{2014} want to hear "
+                          + "\(real.count == 1 ? "it" : "them")?")
+                pendingKind = "agenda"
+                style(yesBtn, title: "Yes, tell me", accent: true)
+                showOffer(true)
+            }
+        }
+        // What was offered counts as delivered, or the follow-up check re-says
+        // item one in different words right after.
         if let b = Meditate.brief(), !b.headline.isEmpty {
             markDelivered(b.headline)
         }
@@ -1329,6 +1381,8 @@ final class App: NSObject, NSApplicationDelegate {
                 self.refreshFleetButton(b.fleetRunning)
                 let hasSomething = !b.headline.isEmpty && b.kind != "clear"
                 self.ghost.glow = hasSomething ? 1.0 : 0.25
+                // Quiet mode: he may glow, he may not speak or offer.
+                if self.quiet { return }
                 // An offer on screen is a question already asked — a background
                 // poll must never talk over it or swap what "Yes" means.
                 guard self.pendingKind.isEmpty, self.yesBtn.isHidden else { return }
@@ -1480,6 +1534,8 @@ final class App: NSObject, NSApplicationDelegate {
         parts.append("speaking=" + (mouth.speaking ? "yes" : "no"))
         parts.append(String(format: "mouth=%.3f", Double(mouth.drive)))
         parts.append("armed=" + (armed ? "yes" : "no"))
+        parts.append("quiet=" + (quiet ? "on" : "off"))
+        parts.append("stop=" + (stopBtn.isHidden ? "hidden" : "shown"))
         parts.append("yesMeans=" + (pendingKind.isEmpty ? "-" : pendingKind))
         parts.append("yesLabel=" + yesBtn.title.replacingOccurrences(of: " ", with: "_"))
         parts.append("agenda=" + String(agendaItems.filter { !$0.action.isEmpty }.count))
@@ -1585,6 +1641,57 @@ final class App: NSObject, NSApplicationDelegate {
             tinted(fleetBtn, title: "Start", tint: .green)
         }
     }
+
+    @objc func stopTalking() {
+        mouth.shutUp()
+        ear.muted = false
+        setBubble("")
+    }
+
+    func showMenu(_ e: NSEvent) {
+        let m = NSMenu()
+        m.addItem(withTitle: "About Casper", action: #selector(showAbout),
+                  keyEquivalent: "").target = self
+        let q = NSMenuItem(title: "Stay quiet (only answer when asked)",
+                           action: #selector(toggleQuiet), keyEquivalent: "")
+        q.target = self
+        q.state = quiet ? .on : .off
+        m.addItem(q)
+        m.addItem(NSMenuItem.separator())
+        m.addItem(withTitle: "Quit Casper", action: #selector(quitCasper),
+                  keyEquivalent: "").target = self
+        NSMenu.popUpContextMenu(m, with: e, for: ghost)
+    }
+
+    @objc func showAbout() {
+        let a = NSAlert()
+        a.messageText = "Casper"
+        a.informativeText =
+            "I keep track of what you're building — what you told me, "
+            + "what's still true, and what's waiting on you.\n\n"
+            + "Click me and talk, or say \"Casper, ...\". Everything I hear "
+            + "is recognised on this Mac and never leaves it.\n\n"
+            + "Stop ends whatever I'm saying. Right-click me for this menu, "
+            + "\"Stay quiet\" if you only want me to answer when asked, "
+            + "or Quit to close me entirely."
+        a.addButton(withTitle: "OK")
+        NSApp.activate(ignoringOtherApps: true)
+        a.runModal()
+    }
+
+    @objc func toggleQuiet() {
+        quiet.toggle()
+        if quiet {
+            mouth.shutUp()
+            pendingKind = ""; pendingAction = ""
+            showOffer(false)
+            setBubble("Staying quiet. I'll only answer when you ask.")
+        } else {
+            setBubble("Back to normal — I'll mention things when they matter.")
+        }
+    }
+
+    @objc func quitCasper() { NSApp.terminate(nil) }
 
     @objc func sayNo() {
         pendingKind = ""
