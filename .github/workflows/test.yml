@@ -91,14 +91,6 @@ jobs:
           apt-get update -qq
           apt-get install -y -qq python3 git cron >/dev/null
 
-      - name: DEBUG — write a crontab entry in this step
-        run: |
-          echo "0 * * * * /bin/true # cross-exec-test" | crontab -
-
-      - name: DEBUG — read it back in a SEPARATE step (separate docker exec)
-        run: |
-          echo "crontab -l in a later step: [$(crontab -l 2>&1)]"
-
       - uses: actions/checkout@v4
 
       - name: Show what we are testing on
@@ -110,6 +102,10 @@ jobs:
 
       - name: Install into this runner's HOME
         run: bash install.sh || true
+
+      - name: DEBUG — crontab state right after install, before the test suite runs
+        run: |
+          echo "crontab -l: [$(crontab -l 2>&1)]"
 
       - name: The suite
         run: |

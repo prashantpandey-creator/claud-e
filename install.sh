@@ -276,6 +276,7 @@ elif command -v crontab >/dev/null 2>&1; then
     echo "0 */6 * * * $HEARTBEAT_CMD # meditate-heartbeat" >> "$CRON_TMP"
     if crontab "$CRON_TMP" 2>/dev/null; then
         echo "  [ok]  heartbeat installed via cron — self-check every 6h"
+        echo "  [DEBUG] immediately after: [$(crontab -l 2>&1)]"
     else
         echo "  [warn]  no launchd and cron refused; run the heartbeat yourself: meditate grade"
     fi
