@@ -315,10 +315,16 @@ def launch_claude(cwd: str, kickoff: str, thread_name: str, model: str = "") -> 
         r = subprocess.run(["osascript", "-e", script], check=True,
                            timeout=75, capture_output=True, text=True)
         out = (r.stdout or "").strip()
-        state, _, wid = out.partition(":")
-        launch_claude.last_window_id = wid.strip()
-        if wid.strip().isdigit():
-            _remember_fleet_window(int(wid.strip()))   # next agent joins as a tab
+        # THREE fields now: state:windowid:reuse. A two-way partition left the
+        # id as "44229:false", which matches no real window — so running_agents
+        # found nothing and stop_fleet could not stop anything. The script grew
+        # a field and the parser did not.
+        bits = out.split(":")
+        state = bits[0] if bits else ""
+        wid = bits[1].strip() if len(bits) > 1 else ""
+        launch_claude.last_window_id = wid
+        if wid.isdigit():
+            _remember_fleet_window(int(wid))        # next agent joins as a tab
         if state == "timeout":
             # a window opened but claude never came up, so the kickoff was NOT
             # delivered. Saying "launched" here is how a dead agent gets

@@ -174,6 +174,40 @@ if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--hear" {
     RunLoop.main.run()
 }
 
+// `casper --saytwice` fires two utterances a beat apart and counts how many
+// actually START. Two was the bug the owner heard: the lanes are separate
+// audio paths, so two concurrent says came out as two voices at once.
+if CommandLine.arguments.count > 1, CommandLine.arguments[1] == "--saytwice" {
+    _ = NSApplication.shared
+    let m = Mouth()
+    var starts = 0
+    var finishes = 0
+    m.onStart = { starts += 1 }
+    m.onFinish = { finishes += 1 }
+    m.say("First line, the one you should hear.")
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+        m.say("Second line, which must wait its turn.")
+    }
+    let t0 = Date()
+    Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { tm in
+        // both should eventually play, but never at the same moment
+        if finishes >= 2 || Date().timeIntervalSince(t0) > 30 {
+            tm.invalidate()
+            print("starts=\(starts) finishes=\(finishes)")
+            print(starts == finishes
+                  ? "SERIALISED — never two at once"
+                  : "OVERLAP — \(starts - finishes) started before the last finished")
+            exit(0)
+        }
+        if starts - finishes > 1 {
+            tm.invalidate()
+            print("OVERLAP: \(starts) started, only \(finishes) finished")
+            exit(1)
+        }
+    }
+    RunLoop.main.run()
+}
+
 if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--say" {
     _ = NSApplication.shared
     let m = Mouth()
@@ -225,6 +259,11 @@ if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--shot" {
         d.setBubble(CommandLine.arguments[3])
     }
     if CommandLine.arguments.contains("--offer") { d.showOffer(true) }
+    // real rows, so the review frame shows the real thing
+    d.layoutFleet(Meditate.fleet().map {
+        FleetView.Row(goal: d.pretty($0.goal), ticked: $0.ticked,
+                      mins: $0.mins, window: $0.window)
+    })
     for _ in 0..<120 { d.ghost.tick(dt: 1.0 / 60) }
     guard let root = d.window.contentView,
           let rep = root.bitmapImageRepForCachingDisplay(in: root.bounds) else {

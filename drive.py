@@ -171,6 +171,10 @@ def fleet_status(goals_dir=None, ledger_path=None, history_path=None):
             rows.append({"goal": goal, "milestone": r.get("milestone", "")[:70],
                          "dispatched_min": mins, "milestone_ticked": ticked,
                          "live_session": (agent or {}).get("sid", "")[:12] or None,
+                         # Which Terminal window this agent got, so a click can
+                         # take you TO it. Knowing a thing is running and having
+                         # no way to reach it is half a feature.
+                         "window_id": str(r.get("window_id") or ""),
                          "last_file": _last_file(agent) if agent else None})
     # A row with no milestone is not a job — it can never tick, so it reports
     # "still going, worth a look" for as long as the ledger keeps it.

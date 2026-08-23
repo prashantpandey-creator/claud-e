@@ -348,9 +348,26 @@ final class Mouth: NSObject, AVSpeechSynthesizerDelegate {
     /// second between sentences is the difference between a colleague and a
     /// public-address system. The gap is real silence spliced into the audio,
     /// so the mouth closes during it too.
+    /// Nothing may start speaking while something else is. `speaking` was set
+    /// but never CHECKED, and the two lanes are separate audio paths — the
+    /// Kokoro buffer plays through our own engine, Apple's plays through
+    /// AVSpeechSynthesizer. Two say() calls a second apart therefore came out
+    /// as two voices talking over each other. This is set synchronously, on
+    /// the caller's thread, because the render itself is async and takes about
+    /// 0.8s: a flag set inside the async block leaves the same hole open.
+    private var inFlight = false
+    /// The newest thing he was asked to say while busy. Only one is kept —
+    /// his lines are status, and stale status is worse than silence.
+    private var queued: String?
+
     func say(_ text: String) {
         let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !clean.isEmpty else { return }
+        if inFlight {
+            queued = clean
+            return
+        }
+        inFlight = true
         // Kokoro first: rendered off the main thread, whole utterance in one
         // call (it does its own prosody and pauses — our splicing is for the
         // Apple lane). Falls back to Apple in one timeout when the server is
@@ -413,7 +430,9 @@ final class Mouth: NSObject, AVSpeechSynthesizerDelegate {
     private func renderNext(_ parts: [String], _ i: Int,
                             _ acc: [AVAudioPCMBuffer]) {
         guard i < parts.count else {
-            if !acc.isEmpty { play(acc) }
+            // An empty render is still the end of the turn. Returning without
+            // releasing left inFlight true and he never spoke again.
+            if acc.isEmpty { finished() } else { play(acc) }
             return
         }
         var chunks: [AVAudioPCMBuffer] = []
@@ -460,8 +479,10 @@ final class Mouth: NSObject, AVSpeechSynthesizerDelegate {
     }
 
     private func play(_ chunks: [AVAudioPCMBuffer]) {
-        guard let first = chunks.first else { return }
-        guard let joined = Mouth.concat(chunks, format: first.format) else { return }
+        guard let first = chunks.first else { finished(); return }
+        guard let joined = Mouth.concat(chunks, format: first.format) else {
+            finished(); return
+        }
 
         if !attached {
             engine.attach(player)
@@ -480,7 +501,7 @@ final class Mouth: NSObject, AVSpeechSynthesizerDelegate {
         }
         do {
             if !engine.isRunning { engine.prepare(); try engine.start() }
-        } catch { return }
+        } catch { finished(); return }
 
         speaking = true
         onStart?()
@@ -489,13 +510,25 @@ final class Mouth: NSObject, AVSpeechSynthesizerDelegate {
                 guard let self = self else { return }
                 self.speaking = false
                 self.drive = 0
+                self.finished()
                 self.onFinish?()
             }
         }
         player.play()
     }
 
+    /// One utterance is over. Free the lane, then say the newest thing that
+    /// arrived while it was busy.
+    private func finished() {
+        inFlight = false
+        guard let next = queued else { return }
+        queued = nil
+        say(next)
+    }
+
     func shutUp() {
+        queued = nil
+        inFlight = false
         player.stop()
         synth.stopSpeaking(at: .immediate)
         speaking = false

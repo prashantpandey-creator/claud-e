@@ -114,12 +114,12 @@ final class Meditate {
     }
 
     /// What the agents you started are doing. Same server, same trail.
-    static func fleet() -> [(goal: String, ticked: Bool, mins: Int)] {
+    static func fleet() -> [(goal: String, ticked: Bool, mins: Int, window: String)] {
         guard let url = URL(string: "http://127.0.0.1:7711/api/state") else { return [] }
         var req = URLRequest(url: url)
         req.setValue("1", forHTTPHeaderField: "X-Meditate")
         req.timeoutInterval = 6
-        var out: [(String, Bool, Int)] = []
+        var out: [(String, Bool, Int, String)] = []
         let sem = DispatchSemaphore(value: 0)
         URLSession.shared.dataTask(with: req) { data, _, _ in
             defer { sem.signal() }
@@ -129,7 +129,8 @@ final class Meditate {
             out = rows.map { r in
                 ((r["goal"] as? String) ?? "?",
                  (r["milestone_ticked"] as? Bool) ?? false,
-                 (r["dispatched_min"] as? Int) ?? 0)
+                 (r["dispatched_min"] as? Int) ?? 0,
+                 (r["window_id"] as? String) ?? "")
             }
         }.resume()
         _ = sem.wait(timeout: .now() + 8)
@@ -1105,6 +1106,87 @@ final class Hotkey {
     }
 }
 
+
+/// The fleet, on his face.
+///
+/// The owner's words: "the fleet is very important that user knows what he has
+/// launched — apart from the dashboard, even in the mascot we should see those
+/// sessions visually." Knowing something is running and having to open a
+/// browser to find out WHAT is half a feature.
+///
+/// One row per agent: a dot for its state, the goal, how long it has been out.
+/// Clicking a row brings that agent's Terminal window to the front, because
+/// the next thing you want after "what did I launch" is "show me".
+final class FleetView: NSView {
+    struct Row { let goal: String; let ticked: Bool; let mins: Int; let window: String }
+    var rows: [Row] = [] { didSet { needsDisplay = true } }
+    var onPick: ((Row) -> Void)?
+    static let rowH: CGFloat = 17
+
+    override var isFlipped: Bool { true }
+    static func height(for n: Int) -> CGFloat { n == 0 ? 0 : CGFloat(n) * rowH + 6 }
+
+    override func mouseUp(with e: NSEvent) {
+        let p = convert(e.locationInWindow, from: nil)
+        let i = Int((p.y - 3) / FleetView.rowH)
+        guard i >= 0, i < rows.count else { return }
+        onPick?(rows[i])
+    }
+
+    override func draw(_ dirty: NSRect) {
+        guard !rows.isEmpty else { return }
+        let w = bounds.width
+        // Its own card. Without it the row text sat directly on the wallpaper,
+        // and light-on-light is unreadable on half the desktops in the world.
+        let card = NSBezierPath(roundedRect: bounds.insetBy(dx: 0, dy: 1),
+                                xRadius: 10, yRadius: 10)
+        NSColor(srgbRed: 0.10, green: 0.10, blue: 0.115, alpha: 0.92).setFill()
+        card.fill()
+        NSColor(white: 1, alpha: 0.06).setStroke()
+        card.lineWidth = 1
+        card.stroke()
+        for (i, r) in rows.enumerated() {
+            let y = 3 + CGFloat(i) * FleetView.rowH
+
+            // the dot IS the state, so the row reads before it is read
+            let colour: NSColor = r.ticked
+                ? NSColor(srgbRed: 0.29, green: 0.70, blue: 0.38, alpha: 1)   // done
+                : r.window.isEmpty
+                    ? NSColor(srgbRed: 0.55, green: 0.55, blue: 0.58, alpha: 1) // untracked
+                    : NSColor(srgbRed: 0.93, green: 0.72, blue: 0.24, alpha: 1) // working
+            colour.setFill()
+            NSBezierPath(ovalIn: NSRect(x: 2, y: y + 5, width: 6, height: 6)).fill()
+
+            let mins = r.mins >= 60
+                ? String(format: "%dh", r.mins / 60) : "\(r.mins)m"
+            let right = NSAttributedString(string: mins, attributes: [
+                .font: App.rounded(9.5, .medium),
+                .foregroundColor: NSColor(calibratedWhite: 0.62, alpha: 1)])
+            let rw = right.size().width
+            right.draw(at: NSPoint(x: w - rw - 2, y: y + 2))
+
+            let name = NSMutableAttributedString(string: r.goal, attributes: [
+                .font: App.rounded(10.5, .medium),
+                .foregroundColor: NSColor(calibratedWhite: r.ticked ? 0.58 : 0.90,
+                                          alpha: 1)])
+            if r.ticked {          // struck through: it is finished, not pending
+                name.addAttribute(.strikethroughStyle,
+                                  value: NSUnderlineStyle.single.rawValue,
+                                  range: NSRange(location: 0, length: name.length))
+            }
+            let avail = w - rw - 18
+            var shown = name
+            if name.size().width > avail {
+                let cut = max(4, Int(Double(r.goal.count) * Double(avail / name.size().width)) - 1)
+                shown = NSMutableAttributedString(
+                    string: String(r.goal.prefix(cut)) + "\u{2026}",
+                    attributes: name.attributes(at: 0, effectiveRange: nil))
+            }
+            shown.draw(at: NSPoint(x: 13, y: y + 1))
+        }
+    }
+}
+
 // MARK: - the window
 
 final class CasperWindow: NSWindow {
@@ -1154,6 +1236,8 @@ final class App: NSObject, NSApplicationDelegate {
     var micBtn: NSButton!
     var closeBtn: NSButton!
     var statusItem: NSStatusItem!
+    var fleetView: FleetView!
+    var fleetH: CGFloat = 0
     let mouth = Mouth()
     let ear = Ear()
     var armed = false          // click him = one turn without his name
@@ -1184,6 +1268,10 @@ final class App: NSObject, NSApplicationDelegate {
 
         let root = NSView(frame: NSRect(origin: .zero, size: frame.size))
         window.contentView = root
+
+        fleetView = FleetView(frame: NSRect(x: 10, y: 110, width: W - 20, height: 0))
+        fleetView.onPick = { [weak self] r in self?.showAgent(r) }
+        root.addSubview(fleetView)
 
         ghost = GhostView(frame: NSRect(x: 68, y: 100, width: 132, height: 132))
         // Layer-backed, or he flickers. A borderless transparent window that
@@ -2165,6 +2253,47 @@ final class App: NSObject, NSApplicationDelegate {
         Date().timeIntervalSince(lastBubbleAt) > 25
     }
 
+    /// Grow upward for the fleet, so the buttons never move under your cursor.
+    /// The window is anchored bottom-right; adding height at the top is the
+    /// only change that does not shift what you were about to click.
+    func layoutFleet(_ rows: [FleetView.Row]) {
+        fleetView.rows = rows
+        let h = FleetView.height(for: rows.count)
+        guard h != fleetH else { return }
+        fleetH = h
+        let W = window.frame.width
+        var f = window.frame
+        let baseH: CGFloat = 248
+        f.size.height = baseH + h
+        window.setFrame(f, display: true, animate: false)
+        let rootH = f.size.height
+        window.contentView?.frame = NSRect(x: 0, y: 0, width: W, height: rootH)
+        fleetView.frame = NSRect(x: 10, y: 110, width: W - 20, height: h)
+        ghost.frame = NSRect(x: (W - 132) / 2, y: 110 + h, width: 132, height: 132)
+        // The X is pinned to the top-right corner, and the corner moved.
+        closeBtn.frame = NSRect(x: W - 24, y: rootH - 24, width: 18, height: 18)
+    }
+
+    /// Take me to it. The next thing you want after "what did I launch" is
+    /// "show me the one that is stuck".
+    func showAgent(_ r: FleetView.Row) {
+        guard !r.window.isEmpty else {
+            setBubble("I don't have a window for \(pretty(r.goal)) — it was "
+                      + "started before I began recording them.")
+            return
+        }
+        let script = "tell application \"Terminal\"\n"
+            + "  set index of window id \(r.window) to 1\n"
+            + "  activate\n"
+            + "end tell"
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        p.arguments = ["-e", script]
+        p.standardError = FileHandle.nullDevice
+        try? p.run()
+        setBubble(pretty(r.goal) + " — brought its window to the front.")
+    }
+
     @objc func toggleVisible() {
         guard window != nil else { return }
         if window.isVisible {
@@ -2190,6 +2319,14 @@ final class App: NSObject, NSApplicationDelegate {
     func watchFleet() {
         DispatchQueue.global().async {
             let rows = Meditate.fleet()
+            DispatchQueue.main.async {
+                // Show what is out there, always — even when nothing has
+                // changed, and even when there is nothing else to say.
+                self.layoutFleet(rows.map {
+                    FleetView.Row(goal: self.pretty($0.goal), ticked: $0.ticked,
+                                  mins: $0.mins, window: $0.window)
+                })
+            }
             guard !rows.isEmpty else { return }
             DispatchQueue.main.async {
                 // LANDED first — good news interrupts, bad news waits.
