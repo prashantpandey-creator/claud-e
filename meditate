@@ -234,7 +234,14 @@ else:
     ;;
   fleet|agents)
     shift
-    python3 "$DIR/drive.py" fleet "$@"
+    # `fleet` shows; `fleet clear` acts. Watching a stuck row for 96 minutes
+    # with no way to dismiss it is what made this necessary.
+    if [ "${1:-}" = "clear" ]; then
+      shift
+      python3 "$DIR/fleet.py" clear "$@"
+    else
+      python3 "$DIR/drive.py" fleet "$@"
+    fi
     ;;
   state|status)
     shift

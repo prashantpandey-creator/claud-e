@@ -226,6 +226,13 @@ def run(n: Optional[int] = None, repair_only: bool = False,
             k = gl.kickoff(g["name"], **kw)
             if not k:
                 continue
+            if not (g.get("next") or "").strip():
+                # A goal with no open milestone cannot ever be finished, so an
+                # agent sent at it reports "88 minutes, worth a look" forever.
+                # Three of these were sitting in the live ledger.
+                result.setdefault("skipped", []).append(
+                    {"goal": g["name"], "why": "nothing open to work on"})
+                continue
             here = os.path.realpath(k["cwd"])
             if here in taken:
                 result.setdefault("deferred", []).append(

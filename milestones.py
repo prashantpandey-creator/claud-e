@@ -127,7 +127,13 @@ def _check_tags(text: str, goal: Dict[str, Any], f: Dict[str, Any]):
 
 
 def _check_pushed(text: str, goal: Dict[str, Any], f: Dict[str, Any]):
-    if not re.search(r"\b(pushed|push)\b", text, re.I):
+    # "push" as a NOUN is usually somebody else's subject: "full suite green
+    # on push (macOS runner)" is about CI, and matching it reported an unbuilt
+    # pipeline as done because the repo happened to have nothing unpushed.
+    # Only the past participle describes a state this checker can verify.
+    if not re.search(r"\bpushed\b", text, re.I):
+        return None, ""
+    if re.search(r"\b(CI|workflow|runner|github action|on push)\b", text, re.I):
         return None, ""
     cwd = goal.get("cwd") or ""
     if not cwd or not os.path.isdir(cwd):

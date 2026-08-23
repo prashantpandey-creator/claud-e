@@ -70,12 +70,15 @@ def _parse(path: str) -> Optional[Dict[str, Any]]:
             body = parts[2]
     done = total = 0
     nxt = None
+    milestones = []          # kept, so a goal can be opened and read
     for line in body.splitlines():
         m = _BOX.match(line)
         if not m:
             continue
         total += 1
-        if m.group(1).lower() == "x":
+        is_done = m.group(1).lower() == "x"
+        milestones.append({"text": m.group(2), "done": is_done})
+        if is_done:
             done += 1
         elif nxt is None:
             nxt = m.group(2)
@@ -87,7 +90,11 @@ def _parse(path: str) -> Optional[Dict[str, Any]]:
             "status": meta.get("status", "active"),
             "model": meta.get("model", ""),
             "done": done, "total": total,
-            "pct": round(100.0 * done / total, 1), "next": nxt, "file": path}
+            "pct": round(100.0 * done / total, 1), "next": nxt, "file": path,
+            "milestones": milestones,
+            "note": "\n".join(l for l in body.splitlines()
+                               if l.strip() and not _BOX.match(l)
+                               and not l.startswith("#"))[:400]}
 
 
 def _last_snapshot(history_path: str) -> Dict[str, Dict[str, int]]:
@@ -230,6 +237,46 @@ def goal_for_cwd(cwd: str, goals_dir: str = GOALS_DIR,
     return ("Goal: %s — %.0f%% (%d/%d)%s. Next milestone: %s."
             % (best["title"], best["pct"], best["done"], best["total"],
                widen, best["next"]))
+
+
+def detail(name: str, goals_dir: str = GOALS_DIR,
+           history_path: str = HISTORY_PATH) -> Optional[Dict[str, Any]]:
+    """Everything about ONE goal, for opening it up.
+
+    The bar could only ever say "37%, next: X". Every other question — which
+    milestones are done, what the world says about the open ones, who is
+    working on it, when it last moved — meant opening a markdown file by hand.
+    """
+    rows = scan(goals_dir=goals_dir, history_path=history_path)
+    g = next((r for r in rows if r.get("name") == name), None)
+    if not g:
+        return None
+    g = dict(g)
+
+    # what the world says about each open milestone
+    try:
+        from milestones import check_milestone, stale_wording, _facts
+        f = _facts()
+        for m in g.get("milestones", []):
+            if m["done"]:
+                continue
+            res = check_milestone(m["text"], g, f)
+            m["verdict"] = res["verdict"]
+            m["evidence"] = res["evidence"]
+            m["stale_wording"] = stale_wording(m["text"])
+    except Exception:
+        pass
+
+    # who is on it right now
+    try:
+        from beacon import latest as _beacons
+        b = (_beacons() or {}).get(name)
+        if b:
+            g["agent"] = {"message": b.get("message", "")[:400],
+                          "ts": b.get("ts", ""), "done": bool(b.get("done"))}
+    except Exception:
+        pass
+    return g
 
 
 def kickoff(name: str, goals_dir: str = GOALS_DIR,

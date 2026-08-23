@@ -38,6 +38,12 @@ ACTIONS = {
     # Reach a live session by id: `tell <sid> <message>`. The console listed
     # sessions but could not touch one, which is what "not connected enough"
     # meant — a roster is not a console.
+    # Drop finished / un-finishable rows from the dispatch ledger. The fleet
+    # listed work you could not act on: six done rows with no way to dismiss
+    # them, and three with no milestone at all reporting "88 minutes, worth a
+    # look" forever, because a milestone that does not exist can never tick.
+    "clear": lambda arg: ["python3", os.path.join(SKILL_DIR, "fleet.py"), "clear"]
+                         + ([arg] if arg else []),
     "tell":  lambda arg: ["python3", os.path.join(SKILL_DIR, "inbox.py"), "send"]
                          + (arg.split(" ", 1) if " " in (arg or "") else [arg or "", ""]),
 }
@@ -642,22 +648,34 @@ async function tick(){
       ? `<span style="color:${G}" title="agent live on this goal${f.last_file?` — last touched ${esc(f.last_file)}`:""}">⟳ agent on it · ${Math.round(f.dispatched_min)}m${f.milestone_ticked?` · milestone ✓`:""}</span>`
       : `<button class="b j-go" data-goal="${esc(g.name)}" style="padding:2px 9px;font-size:11px" title="Opens ONE Terminal agent working only this goal's next milestone: ${esc(g.next||'')}">dispatch</button>`;
     return `<div style="margin:8px 0"><div style="display:flex;gap:12px;align-items:center">
-      <span style="width:250px">${esc(g.title.slice(0,42))}</span>${bar(g.pct)}
+      <span class="j-open" data-goal="${esc(g.name)}" title="open this goal"
+            style="width:250px;cursor:pointer;text-decoration:underline;text-decoration-color:#2a2620;text-underline-offset:3px">${esc(g.title.slice(0,42))}</span>${bar(g.pct)}
       <span style="color:${G}">${Math.round(g.pct)}%</span>
       <span style="color:${DIM}">${g.done}/${g.total}</span>
       ${g.stalled?`<span style="color:${G}" title="${esc(g.idle_basis||'')}">stuck ${g.idle_days}d</span>`:""}
       ${g.scope_delta>0?`<span style="color:${G}">scope +${g.scope_delta}</span>`:""}
       ${working}</div>
-      <div style="margin-left:262px;font-size:12px;color:${DIM}">next: ${esc(g.next||"—")}</div></div>`;
+      <div style="margin-left:262px;font-size:12px;color:${DIM}">next: ${esc(g.next||"—")}</div>
+      <div data-goalbox="${esc(g.name)}" style="margin-left:262px"></div></div>`;
   }).join("");
+  restoreOpenGoals();
   document.getElementById("fleet").innerHTML = s.fleet.map(f=>{
     const status = f.says
       ? `<span style="color:${f.says_done?G:'#d8d2c4'}">${f.says_done?'✓ ':'▸ '}${esc(f.says)}</span> <span style="color:#4a463c">(${esc(f.says_ts||'')})</span>`
       : (f.milestone_ticked?`<span style="color:${G}">milestone done ✓</span>`
          : (f.live_session?`working — ${esc(f.last_file||'')}`:`<span style="color:${DIM}">launched, no report yet</span>`));
+    const stale = f.milestone_ticked || f.dispatched_min >= 15;
+    const btn = stale
+      ? `<button class="b j-clear" data-goal="${esc(f.goal)}" style="padding:1px 8px;font-size:11px"
+          title="Removes this row from the dispatch ledger. It does NOT stop a running agent — that window is yours to close.">clear</button>`
+      : "";
     return `<div style="margin:5px 0"><span style="color:${G}">${esc(f.goal)}</span>
-      <span style="color:#4a463c">· sent ${f.dispatched_min}m ago ·</span> ${status}</div>`;
+      <span style="color:#4a463c">· sent ${f.dispatched_min}m ago ·</span> ${status} ${btn}</div>`;
   }).join("") || `<div style="color:${DIM}">nothing dispatched — press a goal's <b>dispatch</b>, or <code style="color:${G}">meditate go</code></div>`;
+  if ((s.fleet||[]).some(f=>f.milestone_ticked))
+    document.getElementById("fleet").insertAdjacentHTML("beforeend",
+      `<div style="margin-top:6px"><button class="b j-clearall" style="padding:1px 8px;font-size:11px"
+        title="Drops every finished row at once.">clear finished</button></div>`);
   document.getElementById("repair").innerHTML = s.repair.map((m,i)=>
     `<div style="margin:4px 0"><span style="color:${G}">${i+1}.</span> ${esc(m.statement)}
      <button class="b j-fix" data-n="${i+1}" style="padding:1px 8px;font-size:11px" title="Opens ONE Terminal agent scoped to only this memory: it checks reality, fixes the .md, and re-grades.">fix this</button>
@@ -690,6 +708,74 @@ async function tick(){
     "<div>no recorded activity yet</div>";
   document.getElementById("digest").textContent = s.digest || "";
 }
+// Clicking a goal opens it. The bar could only say "37%, next: X"; every
+// other question meant opening a markdown file by hand.
+//
+// The opened panel is redrawn after every poll. The goals list is rebuilt
+// wholesale every 4 seconds, which silently threw the panel away one tick
+// after you opened it — the click looked broken when it had worked.
+const OPEN = {};      // name -> last fetched detail
+
+function renderGoal(name){
+  const box = document.querySelector('[data-goalbox="' + name + '"]');
+  const g = OPEN[name];
+  if(!box || !g) return;
+  if(g === true){
+    box.innerHTML = `<div class="faint" style="font-size:12px;margin:6px 0">opening…</div>`;
+    return;
+  }
+  if(g.error){ box.innerHTML = `<div class="faint">${esc(g.error)}</div>`; return; }
+
+  const rows = (g.milestones||[]).map(m=>{
+    const mark = m.done ? `<span style="color:${G}">\u2713</span>`
+                        : `<span class="faint">\u25cb</span>`;
+    let note = "";
+    if(!m.done && m.verdict === true)
+      note = `<div style="color:${G};font-size:11.5px;margin-left:18px">looks already done \u2014 ${esc(m.evidence||"")}</div>`;
+    else if(!m.done && m.verdict === false)
+      note = `<div class="faint" style="font-size:11.5px;margin-left:18px">checked, still open \u2014 ${esc(m.evidence||"")}</div>`;
+    if(m.stale_wording)
+      note += `<div class="faint" style="font-size:11.5px;margin-left:18px">status frozen in the text: ${esc(m.stale_wording)}</div>`;
+    return `<div style="margin:3px 0">${mark} <span style="${m.done?'color:#6b6557':''}">${esc(m.text)}</span>${note}</div>`;
+  }).join("");
+
+  const agent = g.agent
+    ? `<div style="margin-top:10px;font-size:12px"><span class="eyebrow">Agent</span><br><span style="color:#d8d2c4">${esc(g.agent.message)}</span> <span class="faint">${esc(g.agent.ts||"")}</span></div>`
+    : "";
+  const moved = (g.idle_days === null || g.idle_days === undefined)
+    ? `<span class="faint">no movement recorded yet</span>`
+    : `<span class="faint">last moved ${g.idle_days}d ago${g.stalled?" \u2014 stuck":""}</span>`;
+
+  box.innerHTML = `<div class="card" style="margin:8px 0 12px">
+      <div class="row" style="justify-content:space-between">
+        <span class="eyebrow">${esc(g.project||"")} \u00b7 ${g.done}/${g.total} done</span>${moved}
+      </div>
+      <div style="margin-top:8px;font-size:12.5px">${rows}</div>
+      ${g.note?`<div class="faint" style="font-size:11.5px;margin-top:8px;white-space:pre-wrap">${esc(g.note)}</div>`:""}
+      ${agent}
+      <div class="faint" style="font-size:11px;margin-top:8px">${esc(g.file||"")}</div>
+    </div>`;
+}
+
+function restoreOpenGoals(){ Object.keys(OPEN).forEach(renderGoal); }
+
+async function openGoal(name){
+  if(OPEN[name]){                       // second click closes it
+    delete OPEN[name];
+    const box = document.querySelector('[data-goalbox="' + name + '"]');
+    if(box) box.innerHTML = "";
+    return;
+  }
+  OPEN[name] = true;
+  renderGoal(name);
+  try {
+    OPEN[name] = await (await fetch("/api/goal?name=" + encodeURIComponent(name))).json();
+  } catch(e) {
+    OPEN[name] = {error: "could not read that goal"};
+  }
+  renderGoal(name);
+}
+
 document.addEventListener("click", e=>{
   const t = e.target.closest("a,button"); if(!t) return;
   if(t.classList.contains("j-name")){e.preventDefault();
@@ -698,7 +784,10 @@ document.addEventListener("click", e=>{
   else if(t.classList.contains("j-stop")){e.preventDefault();
     if(confirm(`Stop session "${t.dataset.label}"? Same as closing its window.`)) act("stop", t.dataset.sid);}
   else if(t.classList.contains("j-go")){act("go", t.dataset.goal);}
+  else if(t.classList.contains("j-open")){openGoal(t.dataset.goal);}
   else if(t.classList.contains("j-fix")){act("fix", t.dataset.n);}
+  else if(t.classList.contains("j-clear")){act("clear", t.dataset.goal);}
+  else if(t.classList.contains("j-clearall")){act("clear", "");}
 });
 tick(); setInterval(tick, 4000);
 </script></body>"""
@@ -792,6 +881,19 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             if self.path == "/api/state":
                 body = json.dumps(state()).encode()
+                ctype = "application/json"
+            elif self.path.startswith("/api/goal"):
+                from urllib.parse import urlparse, parse_qs
+                q = parse_qs(urlparse(self.path).query)
+                name = (q.get("name") or [""])[0]
+                try:
+                    from goals import detail
+                    d = detail(name)
+                except Exception as e:
+                    d = {"error": str(e)[:200]}
+                if d is None:
+                    d = {"error": "no such goal: %s" % name}
+                body = json.dumps(d).encode()
                 ctype = "application/json"
             elif self.path == "/casper":
                 body = CASPER_PAGE.encode()

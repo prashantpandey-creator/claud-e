@@ -145,6 +145,11 @@ final class Meditate {
     /// buttons use, one record of everything that happened. Falls back to
     /// running it directly if the server isn't up, and says so.
     static func perform(_ action: String) -> String {
+        if action.hasPrefix("clear") {
+            let goal = action.dropFirst("clear".count)
+                .trimmingCharacters(in: .whitespaces)
+            return postAct("clear", goal) ?? "Couldn't reach the console."
+        }
         let verb = action.contains("fix") ? "fix"
                  : action.contains("grade") ? "grade" : "go"
         if let viaServer = postAct(verb) { return viaServer }
@@ -158,7 +163,7 @@ final class Meditate {
     }
 
     /// POST to the local Pulse server. nil when it isn't running.
-    static func postAct(_ verb: String) -> String? {
+    static func postAct(_ verb: String, _ arg: String = "") -> String? {
         guard let url = URL(string: "http://127.0.0.1:7711/api/act") else { return nil }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
@@ -166,7 +171,7 @@ final class Meditate {
         req.setValue("1", forHTTPHeaderField: "X-Meditate")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try? JSONSerialization.data(
-            withJSONObject: ["action": verb, "arg": ""])
+            withJSONObject: ["action": verb, "arg": arg])
         var result: String? = nil
         let sem = DispatchSemaphore(value: 0)
         URLSession.shared.dataTask(with: req) { data, _, _ in
@@ -1757,9 +1762,16 @@ final class App: NSObject, NSApplicationDelegate {
                     if !r.ticked, r.mins >= App.stallMinutes,
                        !self.fleetToldStalled.contains(r.goal) {
                         self.fleetToldStalled.insert(r.goal)
+                        // Telling you something is stuck and leaving you no
+                        // button is the worst of both: it takes your attention
+                        // and gives you nothing to do with it.
+                        self.pendingAction = "clear " + r.goal
+                        self.pendingKind = "stall"
+                        self.style(self.yesBtn, title: "Clear it", accent: true)
+                        self.showOffer(true)
                         self.say(self.pretty(r.goal) + " has been going "
                                  + "\(r.mins) minutes without finishing its step. "
-                                 + "Worth a look.")
+                                 + "Want me to drop it from the list?")
                         return
                     }
                 }
@@ -1774,6 +1786,10 @@ final class App: NSObject, NSApplicationDelegate {
         s = s.replacingOccurrences(of: "-", with: " ")
              .replacingOccurrences(of: "_", with: " ")
         return s.prefix(1).uppercased() + s.dropFirst()
+    }
+
+    func resetOfferButton() {
+        style(yesBtn, title: "Yes, fix it", accent: true)
     }
 
     @objc func sayNo() {

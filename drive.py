@@ -172,6 +172,9 @@ def fleet_status(goals_dir=None, ledger_path=None, history_path=None):
                          "dispatched_min": mins, "milestone_ticked": ticked,
                          "live_session": (agent or {}).get("sid", "")[:12] or None,
                          "last_file": _last_file(agent) if agent else None})
+    # A row with no milestone is not a job — it can never tick, so it reports
+    # "still going, worth a look" for as long as the ledger keeps it.
+    rows = [r for r in rows if (r.get("milestone") or "").strip()]
     others = [{"sid": s.get("sid", "")[:12], "cwd": s.get("cwd", ""),
                "age_s": s.get("_age_s"), "last_file": _last_file(s)}
               for s in live if s.get("sid") not in seen_sids]
@@ -241,38 +244,6 @@ def _open_window_ids() -> set:
     except Exception:
         return set()
     return {w.strip() for w in (r.stdout or "").split(",") if w.strip()}
-
-
-def running_agents(ledger_path: str = None, max_age_h: float = 12.0):
-    """Agents THIS tool dispatched whose Terminal window is still open.
-
-    Keyed on the window id recorded at dispatch. Without that, "stop the
-    fleet" could only mean killing every claude on the machine — including
-    the session you are typing in.
-    """
-    lp = ledger_path or LEDGER_PATH
-    now = time.time()
-    latest = {}
-    try:
-        with open(lp) as f:
-            for line in f:
-                try:
-                    r = json.loads(line)
-                except Exception:
-                    continue
-                wid = str(r.get("window_id") or "").strip()
-                if not wid:
-                    continue
-                if now - r.get("ts_epoch", 0) > max_age_h * 3600:
-                    continue
-                latest[wid] = r
-    except OSError:
-        return []
-    alive = _open_window_ids()
-    return [{"window_id": w, "goal": r.get("goal", ""),
-             "milestone": r.get("milestone", ""),
-             "age_min": int((now - r.get("ts_epoch", now)) / 60)}
-            for w, r in latest.items() if w in alive]
 
 
 def _alive(pid: int) -> bool:

@@ -82,6 +82,22 @@ def test_audit_never_reports_a_verdict_without_its_evidence():
         assert r["checker"], r
 
 
+def test_push_as_a_noun_belongs_to_someone_else():
+    """'full suite green on push (macOS runner)' is a milestone about CI. It
+    matched the push checker and was reported done because the repo happened
+    to have nothing unpushed — an unbuilt pipeline, marked complete."""
+    v, _ = ms._check_pushed("CI on GitHub: full suite green on push (macOS runner)",
+                            {"cwd": SKILL}, {})
+    assert v is None, "a CI milestone is not a push milestone"
+
+
+def test_a_real_push_milestone_still_checks():
+    v, ev = ms._check_pushed("backend branch pushed and deployed",
+                             {"cwd": SKILL}, {})
+    assert v in (True, False), ev
+    assert ev, "a verdict must carry its evidence"
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]
