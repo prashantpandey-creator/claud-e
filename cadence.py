@@ -165,8 +165,19 @@ def apply(seconds: int) -> Dict[str, Any]:
                                  text=True, timeout=10).stdout
             kept = [l for l in cur.splitlines() if CRONTAB_TAG not in l]
             kept.append(new_line)
-            r = subprocess.run(["crontab", "-"], input="\n".join(kept) + "\n",
-                               capture_output=True, text=True, timeout=10)
+            # `crontab -` (stdin) was observed, live on a fresh Linux CI
+            # runner, to report success while installing an empty table.
+            # `crontab <file>` reads from a plain file instead — no pipe.
+            import tempfile
+            with tempfile.NamedTemporaryFile("w", suffix=".cron",
+                                             delete=False) as f:
+                f.write("\n".join(kept) + "\n")
+                tmp_path = f.name
+            try:
+                r = subprocess.run(["crontab", tmp_path], capture_output=True,
+                                   text=True, timeout=10)
+            finally:
+                os.unlink(tmp_path)
             return {"applied": r.returncode == 0, "seconds": hours * 3600,
                      "mechanism": "cron"}
         except Exception as e:

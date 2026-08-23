@@ -54,14 +54,14 @@ fi
 if command -v crontab >/dev/null 2>&1 && crontab -l 2>/dev/null | grep -q "meditate-heartbeat"; then
     say "stop and remove the cron heartbeat (meditate-heartbeat)"
     if [ "$DRY" != 1 ]; then
-        # `crontab -l | grep -v ... | crontab -` as ONE pipeline runs the read
-        # and the write concurrently — real vixie-cron sometimes loses the
-        # race and installs an empty crontab (caught live on a fresh Linux CI
-        # runner). Capture the filtered list to a variable FIRST (command
-        # substitution blocks until crontab -l fully completes), then write
-        # it in a wholly separate, later crontab - call.
-        REMAINING="$(crontab -l 2>/dev/null | grep -v "meditate-heartbeat" || true)"
-        printf '%s\n' "$REMAINING" | crontab - 2>/dev/null || true
+        # `crontab -` reads from STDIN — piping into it was observed, live on
+        # a fresh Linux CI runner, to report success while writing an empty
+        # table. `crontab <file>` reads from a plain file instead, sidestepping
+        # whatever about pipe-into-a-setgid-binary is unreliable here.
+        CRON_TMP="$(mktemp)"
+        crontab -l 2>/dev/null | grep -v "meditate-heartbeat" > "$CRON_TMP" || true
+        crontab "$CRON_TMP" 2>/dev/null || true
+        rm -f "$CRON_TMP"
     fi
 else
     echo "  [skip] no cron heartbeat installed"

@@ -191,12 +191,10 @@ def test_uninstall_removes_cron_heartbeat_but_spares_other_cron_lines():
         f.write("0 */6 * * * true # meditate-heartbeat\n"
                 "*/5 * * * * /usr/bin/some-other-job\n")
     crontab_path = os.path.join(fake_bin, "crontab")
-    # uninstall.sh's removal is a real bash PIPELINE (crontab -l | grep -v
-    # ... | crontab -) — all stages start concurrently. A write branch that
-    # truncates $STORE directly can race ahead of the read branch's own
-    # `cat "$STORE"` and empty the file before it's read. Real crontab
-    # doesn't have this race (its own spool file has its own locking); this
-    # fake needs an atomic write (temp file + rename) to behave the same way.
+    # uninstall.sh writes via `crontab <file>`, not `crontab -` (stdin) — a
+    # real Linux CI run showed piping into crontab's stdin can report success
+    # while installing an empty table. The fake mirrors both invocation forms
+    # uninstall.sh actually uses: `-l` to read, a file argument to write.
     with open(crontab_path, "w") as f:
         f.write("#!/bin/bash\n"
                 "STORE=\"%s\"\n"
@@ -204,9 +202,7 @@ def test_uninstall_removes_cron_heartbeat_but_spares_other_cron_lines():
                 "  cat \"$STORE\" 2>/dev/null\n"
                 "  exit 0\n"
                 "fi\n"
-                "tmp=\"$STORE.tmp.$$\"\n"
-                "cat > \"$tmp\"\n"
-                "mv \"$tmp\" \"$STORE\"\n" % store)
+                "cp \"$1\" \"$STORE\"\n" % store)
     os.chmod(crontab_path, 0o755)
     home = tempfile.mkdtemp()
 

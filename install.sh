@@ -264,26 +264,22 @@ elif command -v crontab >/dev/null 2>&1; then
     # Existing meditate lines are filtered out first so re-installing does not
     # stack duplicate heartbeats.
     HEARTBEAT_CMD="{ python3 \"$SKILL_DIR/nidra_bridge.py\" --sleep; python3 \"$SKILL_DIR/archive.py\" --apply; python3 \"$SKILL_DIR/dashboard.py\"; python3 \"$SKILL_DIR/voice.py\" --notify --quiet; } >> \"$MEDITATION_DIR/heartbeat.log\" 2>&1"
-    # `crontab -l | ... | crontab -` as ONE pipeline runs the read and the
-    # write concurrently — real vixie-cron sometimes loses that race and
-    # installs an empty crontab (caught live on a fresh Linux CI runner: the
-    # install step reported [ok], but the entry was never actually there).
-    # Command substitution blocks until crontab -l fully completes, so
-    # capture it first and write in a wholly separate, later crontab - call.
-    EXISTING="$(crontab -l 2>/dev/null | grep -v "meditate-heartbeat" || true)"
-    echo "  [DEBUG] whoami=$(whoami) id=$(id)"
-    echo "  [DEBUG] crontab binary: $(ls -la "$(command -v crontab)" 2>&1)"
-    echo "  [DEBUG] EXISTING=[$EXISTING]"
-    if { printf '%s\n' "$EXISTING"; echo "0 */6 * * * $HEARTBEAT_CMD # meditate-heartbeat"; } | crontab - 2>/tmp/crontab_stderr.log; then
+    # `crontab -` reads its new table from STDIN — piping into it (directly,
+    # or via `crontab -l | ... | crontab -`) was observed, live on a fresh
+    # Linux CI runner, to report success while installing an EMPTY table
+    # (spool file held only the standard header, zero entries). crontab is a
+    # setgid binary; something about stdin specifically being a pipe into it
+    # is unreliable here. `crontab <file>` (a real, documented alternative to
+    # `-`) reads from a plain file instead — no pipe involved at all.
+    CRON_TMP="$(mktemp)"
+    crontab -l 2>/dev/null | grep -v "meditate-heartbeat" > "$CRON_TMP" || true
+    echo "0 */6 * * * $HEARTBEAT_CMD # meditate-heartbeat" >> "$CRON_TMP"
+    if crontab "$CRON_TMP" 2>/dev/null; then
         echo "  [ok]  heartbeat installed via cron — self-check every 6h"
-        echo "  [DEBUG] crontab stderr: [$(cat /tmp/crontab_stderr.log)]"
-        echo "  [DEBUG] crontab -l immediately after: [$(crontab -l 2>&1)]"
-        echo "  [DEBUG] spool file directly: [$(sudo cat /var/spool/cron/crontabs/runner 2>&1)]"
-        echo "  [DEBUG] spool file stat: $(stat /var/spool/cron/crontabs/runner 2>&1)"
     else
         echo "  [warn]  no launchd and cron refused; run the heartbeat yourself: meditate grade"
-        echo "  [DEBUG] crontab stderr: [$(cat /tmp/crontab_stderr.log)]"
     fi
+    rm -f "$CRON_TMP"
 else
     echo "  [warn]  no launchd and no cron on this machine — the heartbeat will"
     echo "          not run by itself. Run 'meditate grade' when you want a pass."

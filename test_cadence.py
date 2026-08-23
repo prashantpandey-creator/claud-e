@@ -70,6 +70,10 @@ def test_cron_fallback_current_interval_and_apply():
     with open(store, "w") as f:
         f.write("0 */6 * * * true # meditate-heartbeat\n")
     crontab_path = os.path.join(fake_bin, "crontab")
+    # Supports both invocation forms cadence.py uses: `-l` to read, and a
+    # file argument to write (crontab.apply avoids `-`/stdin — see its
+    # docstring for why: piping into it was observed live to silently
+    # install an empty table on a real Linux CI runner).
     with open(crontab_path, "w") as f:
         f.write("#!/bin/bash\n"
                 "STORE=\"%s\"\n"
@@ -77,7 +81,7 @@ def test_cron_fallback_current_interval_and_apply():
                 "  [ -f \"$STORE\" ] && cat \"$STORE\"\n"
                 "  exit 0\n"
                 "fi\n"
-                "cat > \"$STORE\"\n" % store)
+                "cp \"$1\" \"$STORE\"\n" % store)
     os.chmod(crontab_path, 0o755)
 
     old_home, old_path = os.environ.get("HOME"), os.environ.get("PATH", "")
