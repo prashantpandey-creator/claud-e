@@ -535,6 +535,48 @@ def test_squiggle_never_raises_on_a_pathological_file():
         assert isinstance(co.check_edit(f), str)
 
 
+def test_command_squiggle_catches_a_suite_that_ran_NOTHING():
+    """The invisible failure: exit 0, output present, nothing proved.
+
+    A failing test is already visible to the model -- it reads the traceback.
+    A suite that ran ZERO tests is not: it exits 0, prints something
+    reassuring, and the run gets counted as green. Both happened today. Six
+    of seven nidra test files reported "NO TESTS RAN" under unittest and were
+    read as fine, and a mutation check reported OK because the replacement
+    string never matched, so the mutation was never applied. Green that
+    proves nothing is worse than red."""
+    for out in ("Ran 0 tests in 0.000s\n\nNO TESTS RAN",
+                "collected 0 items\n\nno tests ran in 0.01s",
+                "Ran 0 tests in 0.000s\n\nOK"):
+        msg = co.check_command("python3 -m pytest tests/", out)
+        assert msg, "silent no-op not caught: %r" % out
+        assert "0" in msg or "no test" in msg.lower(), msg
+
+
+def test_command_squiggle_is_silent_when_tests_actually_RAN():
+    for out in ("Ran 37 tests in 1.2s\n\nOK", "37 passed in 0.55s",
+                "35/35 passed", "collected 12 items\n12 passed"):
+        assert co.check_command("pytest -q", out) == "", out
+
+
+def test_command_squiggle_is_silent_on_honest_failures():
+    """A real failure is already legible. Do not double-report it."""
+    out = "Ran 12 tests in 0.3s\n\nFAILED (failures=2)"
+    assert co.check_command("python3 -m unittest x", out) == "", out
+
+
+def test_command_squiggle_only_judges_test_commands():
+    """Claim scope = check scope. 'Ran 0 tests' inside unrelated output of a
+    non-test command is not this tool's business."""
+    assert co.check_command("cat notes.txt", "Ran 0 tests in 0.000s") == ""
+    assert co.check_command("echo hi", "") == ""
+
+
+def test_command_squiggle_never_raises():
+    for cmd, out in (("", ""), (None, None), ("pytest", None), ("pytest", 12345)):
+        assert isinstance(co.check_command(cmd, out), str)
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

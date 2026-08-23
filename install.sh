@@ -136,6 +136,10 @@ WANTED = [
     # the transcript, so a bad reference is corrected in the same turn instead
     # of surfacing as a traceback several turns later.
     ("PostToolUse", "Write|Edit|MultiEdit", 5),
+    # Same squiggly for commands, but a DIFFERENT signal: not "the test
+    # failed" (the model reads that fine) — "the test ran nothing", which
+    # exits 0 and gets counted as green.
+    ("PostToolUse", "Bash", 5),
 ]
 
 def is_ours(entry):

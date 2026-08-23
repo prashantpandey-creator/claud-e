@@ -381,6 +381,48 @@ def check_edit(path: str) -> str:
     return ""
 
 
+# A test runner that ran nothing. Exit 0, output present, nothing proved.
+_RAN_NOTHING = re.compile(
+    r"\bRan 0 tests\b|\bNO TESTS RAN\b|\bno tests ran\b|\bcollected 0 items\b",
+    re.I)
+_TEST_CMD = re.compile(r"\b(pytest|unittest|test_[\w-]*\.py|npm test|go test|"
+                       r"cargo test|jest|vitest)\b", re.I)
+_REAL_FAILURE = re.compile(r"\bFAILED\b|\bfailures=\d|\berror(s)?=\d", re.I)
+
+
+def check_command(command: Any, result: Any) -> str:
+    """The squiggly for a command that SUCCEEDED while doing nothing. '' = fine.
+
+    A failing test needs no help: the model reads the traceback. The invisible
+    case is a suite that ran ZERO tests — it exits 0, prints something
+    reassuring, and gets counted as green.
+
+    Both happened here today. Six of seven nidra test files reported "NO TESTS
+    RAN" under unittest and were read as fine. A mutation check reported OK
+    because its replacement string never matched, so the mutation was never
+    applied and a guard that does nothing looked verified. Green that proves
+    nothing is worse than red, because red gets fixed.
+
+    Scoped hard: only test commands, only the ran-nothing signal, and silent
+    when a real failure is already in the output. A squiggly that repeats what
+    the model can already read is noise, and noise is how the line gets ignored.
+    """
+    try:
+        cmd = str(command or "")
+        out = str(result or "")
+    except Exception:
+        return ""
+    if not cmd or not out or not _TEST_CMD.search(cmd):
+        return ""
+    if _REAL_FAILURE.search(out):
+        return ""                      # already legible; do not double-report
+    if _RAN_NOTHING.search(out):
+        return ("this run executed 0 tests — it exited clean but proved "
+                "nothing. Check the runner matches how the file defines its "
+                "tests before counting this as green.")
+    return ""
+
+
 def hook_edit(payload: Dict[str, Any],
               coord_dir: str = COORD_DIR, store_dir: str = STORE_DIR) -> str:
     """Record presence; return additionalContext text ('' = stay silent)."""
@@ -752,12 +794,15 @@ def main(argv: List[str]) -> int:
         msg = ""
         try:
             ti = payload.get("tool_input") or {}
-            for k in ("file_path", "notebook_path", "path"):
-                if isinstance(ti, dict) and ti.get(k):
-                    problem = check_edit(str(ti[k]))
-                    if problem:
-                        msg = problem
-                    break
+            if isinstance(ti, dict) and ti.get("command"):
+                msg = check_command(ti.get("command"), payload.get("tool_result"))
+            else:
+                for k in ("file_path", "notebook_path", "path"):
+                    if isinstance(ti, dict) and ti.get(k):
+                        problem = check_edit(str(ti[k]))
+                        if problem:
+                            msg = problem
+                        break
         except Exception:
             msg = ""                       # never break the loop over a check
         _emit_hook_json("PostToolUse", msg)
