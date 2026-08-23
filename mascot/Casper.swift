@@ -94,13 +94,6 @@ final class Meditate {
         }
     }
 
-    /// The first line he ever says. Comes from the tool, not from Swift, so
-    /// it can name something true about THIS machine.
-    static func hello() -> String {
-        return run([skillDir + "/voice.py", "--hello"], timeout: 30)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
     /// Ask Casper's reasoning brain a real question (headless claude).
     static func advise(_ question: String) -> String {
         let out = run([skillDir + "/advisor.py", question], timeout: 90)
@@ -833,22 +826,17 @@ final class App: NSObject, NSApplicationDelegate {
         setBubble("")
 
         // The very first run: he gathers himself out of nothing in front of
-        // you and introduces himself. Once only — a trick you have seen twice
-        // is furniture, and every launch after this he is simply already there.
-        if !UserDefaults.standard.bool(forKey: App.arrivedKey) {
+        // you, and greet() lands as he finishes forming. Once only — a trick
+        // you have seen twice is furniture, and every launch after this he is
+        // simply already there.
+        let firstEver = !UserDefaults.standard.bool(forKey: App.arrivedKey)
+        if firstEver {
             UserDefaults.standard.set(true, forKey: App.arrivedKey)
+            // Flush NOW. UserDefaults writes lazily, and an accessory app that
+            // gets killed rather than quit never reaches the flush — so he
+            // made his entrance again on every single launch.
+            UserDefaults.standard.synchronize()
             ghost.materialize()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.7) { [weak self] in
-                guard let self = self else { return }
-                DispatchQueue.global().async {
-                    let line = Meditate.hello()
-                    DispatchQueue.main.async {
-                        self.say(line.isEmpty
-                                 ? "Oh — hello. I'm Casper. Click me any time."
-                                 : line)
-                    }
-                }
-            }
         }
 
         window.makeKeyAndOrderFront(nil)
@@ -909,7 +897,9 @@ final class App: NSObject, NSApplicationDelegate {
         Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in self.writeStatus() }
 
         Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { _ in self.check() }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { self.greet() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + (firstEver ? 2.1 : 1.2)) {
+            self.greet()
+        }
     }
 
     /// A button that draws itself.

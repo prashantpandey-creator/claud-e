@@ -265,13 +265,32 @@ if python3 "$SKILL_DIR/dashboard.py" > /dev/null 2>&1; then
     fi
 fi
 
+# ---- 6b. Casper appears
+# The install should END with someone standing there, not with a list of
+# commands to memorise. He builds once, gathers himself out of nothing on
+# screen, and introduces himself — so the first thing a new user meets is the
+# companion, not the CLI.
+if [ -t 1 ] && [ "$(uname)" = "Darwin" ] && command -v swiftc >/dev/null 2>&1; then
+    echo
+    echo "  Waking Casper..."
+    if bash "$SKILL_DIR/mascot/build.sh" >/dev/null 2>&1; then
+        # first run only: clear the flag so he actually makes an entrance
+        defaults delete com.meditate.casper hasArrived >/dev/null 2>&1 || true
+        open "$SKILL_DIR/mascot/Casper.app" 2>/dev/null \
+            && echo "  [ok]  Casper is on your screen, bottom-right. He'll say hello."
+    else
+        echo "  [--]  Casper needs Xcode command line tools; skipped."
+        echo "        Run 'meditate casper' once you have them."
+    fi
+fi
+
 # ---- 7. Report
 echo
 echo "  ================================"
 if [ "$TEST_PASS" = true ]; then
     echo "  meditate v${VERSION} installed. All tests green."
     echo
-    echo "  The dashboard just opened — that is the product. From here:"
+    echo "  Casper is the product — talk to him. From here:"
     echo "         meditate            where am I + the one next action"
     echo "         meditate go         move everything forward"
     echo "  Use:   /meditate            (inside Claude Code)"

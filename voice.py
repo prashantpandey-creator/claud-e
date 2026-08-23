@@ -270,38 +270,6 @@ def _greeting(meditation_dir: str = MEDITATION_DIR) -> str:
     return "Late one. "
 
 
-def hello(meditation_dir: str = MEDITATION_DIR, store_dir: str = STORE_DIR) -> str:
-    """The first thing he ever says, on the run right after install.
-
-    It has to do two jobs in three sentences: say what he is, and prove it by
-    naming something true about THIS machine. A companion whose opening line
-    could have been written before it met you is a brochure.
-    """
-    known = 0
-    try:
-        from ask import _load
-        known = len([m for m in _load(store_dir) if m.get("active")])
-    except Exception:
-        pass
-
-    if known >= 25:
-        try:
-            import projects as pj
-            rows = [r for r in pj.rollup() if r.get("messages")]
-            top = rows[0]["project"] if rows else ""
-        except Exception:
-            top = ""
-        where = (" Most of it is %s." % top) if top else ""
-        return ("Oh — hello. I'm Casper. I've been reading along while you "
-                "worked, and I already know %d things about it.%s "
-                "Click me any time and ask what's worth doing next."
-                % (known, where))
-    return ("Oh — hello. I'm Casper. I live down here and keep track of what "
-            "you're building, so you don't have to hold all of it. I don't "
-            "know much yet, but I learn every time you work. Click me and ask "
-            "me anything.")
-
-
 def briefing(meditation_dir: str = MEDITATION_DIR, store_dir: str = STORE_DIR,
              goals_dir: Optional[str] = None,
              history_path: Optional[str] = None) -> Dict[str, Any]:
@@ -519,12 +487,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--agenda", action="store_true",
                     help="the short list of things worth attention, one a line")
     ap.add_argument("--json", action="store_true")
-    ap.add_argument("--hello", action="store_true",
-                    help="the first line he ever says")
     args = ap.parse_args(argv)
-    if getattr(args, 'hello', False):
-        print(hello())
-        return 0
 
     if args.agenda:
         rows = agenda()

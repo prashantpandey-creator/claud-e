@@ -249,6 +249,7 @@ def state() -> Dict[str, Any]:
                                     or (os.path.basename(s.get("cwd", "").rstrip("/")) or "~"),
                            "last_file": _last_file(s)}
                           for s in live_sessions()],
+        "triage": _triage_cached(),
         "fleet": fleet["dispatched"],
         "repair": [{"id": m["id"], "statement": m["statement"][:140],
                     "fails": [f["claim"] for f in m.get("failing", [])]}
@@ -292,6 +293,27 @@ def _casper_timing() -> Dict[str, Any]:
 
 _ROLLUP_CACHE: Dict[str, Any] = {"at": 0.0, "rows": []}
 ROLLUP_TTL_S = 120.0
+
+
+_TRIAGE_CACHE: Dict[str, Any] = {"at": 0.0, "data": {}}
+TRIAGE_TTL_S = 90.0
+
+
+def _triage_cached(ttl_s: float = TRIAGE_TTL_S) -> Dict[str, Any]:
+    """Which chats are owed a reply. Cached: it reads 150+ transcript tails,
+    and the answer does not change between two polls four seconds apart."""
+    if time.time() - _TRIAGE_CACHE["at"] < ttl_s and _TRIAGE_CACHE["data"]:
+        return _TRIAGE_CACHE["data"]
+    try:
+        from triage import triage as _t
+        d = _t()
+        out = {"counts": d.get("counts", {}),
+               "action_items": d.get("action_items", [])[:6],
+               "skipped": d.get("programmatic_skipped", 0)}
+    except Exception:
+        out = {"counts": {}, "action_items": [], "skipped": 0}
+    _TRIAGE_CACHE.update({"at": time.time(), "data": out})
+    return out
 
 
 def _projects_rollup(ttl_s: float = ROLLUP_TTL_S) -> List[Dict[str, Any]]:
@@ -354,6 +376,7 @@ PAGE = """<!doctype html><meta charset="utf-8">
 <div id="next" style="margin:4px 0 14px;color:#E3B140"></div>
 <div style="display:flex;gap:36px;flex-wrap:wrap;margin:4px 0 8px">
   <div style="min-width:280px"><div style="letter-spacing:.3em;font-size:11px;color:#c96442">NEEDS YOU</div><div id="needs" style="font-size:12.5px;margin-top:6px"></div></div>
+  <div style="min-width:320px"><div style="letter-spacing:.3em;font-size:11px;color:#c96442">CHATS WAITING ON YOU</div><div id="owed" style="font-size:12.5px;margin-top:6px"></div><div id="owedrest" style="font-size:11px;color:#6f6a5f;margin-top:4px"></div></div>
   <div style="min-width:280px"><div style="letter-spacing:.3em;font-size:11px;color:#6b6557">MOVING BY ITSELF</div><div id="moving" style="font-size:12.5px;margin-top:6px"></div></div>
 </div>
 <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start">
@@ -419,6 +442,21 @@ async function tick(){
   document.getElementById("headline").textContent = ins.headline||"";
   document.getElementById("needs").innerHTML = (ins.needs_you||[]).map(x=>
     `<div style="margin:2px 0">• ${esc(x)}</div>`).join("") || `<div style="color:${DIM}">nothing — all clear</div>`;
+  const tri = s.triage||{counts:{},action_items:[],skipped:0};
+  const owed = tri.action_items||[];
+  document.getElementById("owed").innerHTML = owed.length ? owed.map(x=>{
+    const verb = x.action === "reply" ? "reply" : "resume";
+    const age = x.age_h < 48 ? Math.round(x.age_h)+"h" : Math.round(x.age_h/24)+"d";
+    return `<div style="margin:4px 0">`
+      + `<a href="#" data-open="${esc(x.id)}" style="color:#c96442;text-decoration:none">${verb}</a>`
+      + ` <span style="color:#6f6a5f">${age}</span> `
+      + `<span style="color:#d8d2c4">${esc(x.last_said||"")}</span></div>`;
+  }).join("") : `<div style="color:${DIM}">nothing is waiting on you</div>`;
+  const c = tri.counts||{};
+  document.getElementById("owedrest").textContent =
+    `${(c.resumable||0)} could be picked up · ${(c.finished||0)} finished · `
+    + `${(c.stale||0)} gone quiet · ${tri.skipped||0} tool calls ignored`;
+
   document.getElementById("moving").innerHTML = (ins.moving||[]).map(x=>
     `<div style="margin:2px 0;color:#d8d2c4">▸ ${esc(x)}</div>`).join("") || `<div style="color:${DIM}">no agents reporting</div>`;
   const v = s.store.active? (100*s.store.verified/s.store.active).toFixed(1):"0";
