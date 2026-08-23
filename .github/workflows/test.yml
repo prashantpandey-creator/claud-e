@@ -94,6 +94,14 @@ jobs:
       - name: Install into this runner's HOME
         run: bash install.sh || true
 
+      - name: DEBUG — crontab immediately after install
+        run: |
+          echo "exit code of crontab -l:"
+          crontab -l; echo "rc=$?"
+          echo "spool file, if any:"
+          sudo cat /var/spool/cron/crontabs/runner 2>&1 || true
+          ls -la /var/spool/cron/crontabs/ 2>&1 || true
+
       - name: The suite
         run: |
           set -e
