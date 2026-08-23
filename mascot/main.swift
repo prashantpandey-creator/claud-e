@@ -183,6 +183,41 @@ if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--hear" {
 // `casper --bored` shows what he says as boredom climbs, and how long he
 // waits between grumbles. Verifying this by sitting still for twenty minutes
 // is not verification, it is waiting.
+// `casper --whoop` plays each noise and MEASURES its pitch sweep, because a
+// whoop that does not glide is just a beep.
+if CommandLine.arguments.count > 1, CommandLine.arguments[1] == "--whoop" {
+    _ = NSApplication.shared
+    let play = CommandLine.arguments.contains("--play")
+    let mouth = Mouth()
+    for (name, w) in [("woo", Whoop.woo), ("boing", .boing),
+                      ("hum", .hum), ("yay", .yay)] {
+        guard let b = w.buffer(), let ch = b.floatChannelData?[0] else { continue }
+        let n = Int(b.frameLength)
+        // zero crossings per window -> rough pitch, start vs middle vs end
+        func pitch(_ from: Int, _ to: Int) -> Double {
+            var crossings = 0
+            for i in (from + 1)..<to where (ch[i - 1] < 0) != (ch[i] < 0) { crossings += 1 }
+            return Double(crossings) / 2 / (Double(to - from) / b.format.sampleRate)
+        }
+        let a = pitch(0, n / 4), m = pitch(n * 2 / 5, n * 3 / 5), z = pitch(n * 3 / 4, n - 1)
+        var peak: Float = 0
+        for i in 0..<n { peak = max(peak, abs(ch[i])) }
+        // %s takes a C string; handing it a Swift String is undefined and
+        // segfaults. Numbers through String(format:), words plain.
+        let nums = String(format: "%.2fs  pitch %4.0f -> %4.0f -> %4.0f Hz  peak %.2f",
+                          Double(n) / b.format.sampleRate, a, m, z, peak)
+        let verdict = (abs(a - z) > 60 || abs(a - m) > 60) ? "GLIDES" : "flat — a beep"
+        print("  " + name.padding(toLength: 6, withPad: " ", startingAt: 0)
+              + " " + nums + "  " + verdict)
+        if play {
+            mouth.makeNoise(w)
+            // let it finish before the next one, so they do not stack
+            RunLoop.main.run(until: Date().addingTimeInterval(1.4))
+        }
+    }
+    exit(0)
+}
+
 if CommandLine.arguments.count > 1, CommandLine.arguments[1] == "--bored" {
     _ = NSApplication.shared
     let d = App()

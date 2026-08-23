@@ -2383,6 +2383,12 @@ final class App: NSObject, NSApplicationDelegate {
         // stopped changing and he said the same sentence forever, which is
         // the one thing a bored companion must not do.
         let line = vary(lines[tier], "\(tier)-\(boredomLevel)-\(Int(idle) / 60)")
+
+        // Every other grumble is a NOISE rather than a sentence. "Wooo" typed
+        // into a speech synthesiser comes out as the WORD "woo", said flatly;
+        // these are generated pitch glides. A ghost that only ever forms
+        // complete sentences is a chatbot with a face.
+        let noisy = boredomLevel % 2 == 1
         boredomLevel += 1
 
         // Longer each time, so he never becomes a metronome. 4-7 min, then
@@ -2390,6 +2396,22 @@ final class App: NSObject, NSApplicationDelegate {
         let base = [240.0, 420.0, 720.0][min(boredomLevel, 2)]
         nextGrumbleAt = Date().addingTimeInterval(base + Double.random(in: 0...base * 0.6))
 
+        if noisy {
+            // Rotate through all four. Choosing by TIER meant .hum could
+            // never fire — it was tier-0 only, and noises only happen on odd
+            // grumble counts, so tier 0 never got one. Dead branch, caught by
+            // running the escalation rather than reading it.
+            let all: [Whoop] = [.hum, .woo, .boing, .yay]
+            let w = all[(boredomLevel / 2) % all.count]
+            ghost.bounce()
+            if w == .woo { ghost.feel(.surprised, for: 0.9) }
+            let label: String = w == .hum ? "hum" : w == .woo ? "woo"
+                              : w == .boing ? "boing" : "yay"
+            setBubble(w == .hum ? "\u{266A}\u{266A}" : "Wooo\u{2026}")
+            if let t = onSpeakForTest { t("<" + label + ">") }
+            else { mouth.makeNoise(w) }
+            return
+        }
         ghost.bounce()
         if boredomLevel > 2 { ghost.feel(.happy, for: 1.2) }
         say(line)

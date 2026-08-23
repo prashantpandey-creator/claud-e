@@ -242,6 +242,72 @@ final class Ear: NSObject {
     }
 }
 
+/// Noises, not words.
+///
+/// "Wooo" read by a text-to-speech engine comes out as the WORD "woo", flat.
+/// A real whoop is a pitch GLIDE, so these are generated: a sine that slides,
+/// with a little vibrato and a soft envelope. For a ghost, a theremin is not
+/// a compromise — it is the right instrument.
+enum Whoop {
+    case woo          // the classic: up, hang, down
+    case boing        // a descending wobble, for a hop
+    case hum          // two bored descending notes
+    case yay          // a quick rising trill
+
+    /// Rendered at the rate the caller is already wired for, so playing one
+    /// never forces the player node to reconnect mid-conversation.
+    func buffer(rate: Double = 24000) -> AVAudioPCMBuffer? {
+        let dur: Double
+        switch self {
+        case .woo:   dur = 0.85
+        case .boing: dur = 0.45
+        case .hum:   dur = 0.90
+        case .yay:   dur = 0.55
+        }
+        guard let fmt = AVAudioFormat(commonFormat: .pcmFormatFloat32,
+                                      sampleRate: rate, channels: 1,
+                                      interleaved: false),
+              let buf = AVAudioPCMBuffer(pcmFormat: fmt,
+                                         frameCapacity: AVAudioFrameCount(dur * rate)),
+              let ch = buf.floatChannelData?[0]
+        else { return nil }
+        let n = Int(dur * rate)
+        buf.frameLength = AVAudioFrameCount(n)
+
+        var phase = 0.0
+        for i in 0..<n {
+            let t = Double(i) / rate
+            let u = t / dur                     // 0..1 through the sound
+            var f: Double
+            var amp: Double
+            switch self {
+            case .woo:
+                // up fast, hang, slide down — the shape of a shout
+                f = u < 0.25 ? 280 + 520 * (u / 0.25)
+                  : u < 0.55 ? 800
+                  : 800 - 430 * ((u - 0.55) / 0.45)
+                amp = sin(.pi * min(1, u * 1.25))          // soft in, soft out
+            case .boing:
+                f = 620 * pow(0.35, u) + 90 * sin(u * 38)  // descending wobble
+                amp = pow(1 - u, 1.6)
+            case .hum:
+                f = u < 0.5 ? 320 : 250                    // mm-mm, resigned
+                amp = (u < 0.5 ? sin(.pi * (u / 0.5))
+                               : sin(.pi * ((u - 0.5) / 0.5))) * 0.8
+            case .yay:
+                f = 420 + 380 * u + 55 * sin(u * 46)       // rising trill
+                amp = sin(.pi * u)
+            }
+            f *= 1 + 0.012 * sin(t * 33)                   // a little life
+            phase += 2 * .pi * f / rate
+            // a touch of second harmonic: a pure sine is a test tone
+            let v = sin(phase) * 0.82 + sin(phase * 2) * 0.18
+            ch[i] = Float(v * amp * 0.42)
+        }
+        return buf
+    }
+}
+
 // MARK: - the mouth
 
 /// Speaks, and reports the amplitude of what is audible RIGHT NOW.
@@ -550,6 +616,18 @@ final class Mouth: NSObject, AVSpeechSynthesizerDelegate {
         guard let next = queued else { return }
         queued = nil
         say(next)
+    }
+
+    /// Make a noise. Goes through the same lane as speech, so it queues
+    /// behind a sentence rather than talking over it.
+    func makeNoise(_ w: Whoop) {
+        if inFlight { return }              // never over a real sentence
+        inFlight = true
+        generation &+= 1
+        let rate = nodeFormat?.sampleRate ?? 24000
+        guard let buf = w.buffer(rate: rate) else { inFlight = false; return }
+        lane = "whoop"
+        play([buf])
     }
 
     func shutUp() {
