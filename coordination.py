@@ -795,7 +795,23 @@ def main(argv: List[str]) -> int:
         try:
             ti = payload.get("tool_input") or {}
             if isinstance(ti, dict) and ti.get("command"):
-                msg = check_command(ti.get("command"), payload.get("tool_result"))
+                # The key is `tool_response`. Verified against the installed
+                # CLI (2.1.201): it is the only key the binary ever puts in a
+                # PostToolUse payload. Anthropic's own plugin-dev docs say
+                # `tool_result`, which is what this read at first -- so the
+                # whole command lane never executed one line of its matching
+                # logic, from the commit that introduced it. `tool_result` is
+                # kept as a fallback in case another CLI build sends it.
+                resp = payload.get("tool_response")
+                if resp is None:
+                    resp = payload.get("tool_result")
+                if isinstance(resp, dict):
+                    # BOTH streams: `python -m unittest` prints "Ran 0 tests"
+                    # to stderr, so reading stdout alone would still have
+                    # missed the exact case this was built for.
+                    resp = "\n".join(str(resp.get(k) or "")
+                                     for k in ("stdout", "stderr"))
+                msg = check_command(ti.get("command"), resp)
             else:
                 for k in ("file_path", "notebook_path", "path"):
                     if isinstance(ti, dict) and ti.get(k):

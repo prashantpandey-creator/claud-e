@@ -180,10 +180,19 @@ def _check_hook() -> Dict[str, Any]:
 
 
 def _check_heartbeat() -> Dict[str, Any]:
-    """The metabolism: grade must run WITHOUT a human. launchd every 6h."""
+    """The metabolism: grade must run WITHOUT a human.
+
+    LOADED IS NOT RUNNING. This used to report only whether launchd knew about
+    the job, so a job that was loaded and failing on every single fire looked
+    healthy — which is how a malformed plist once killed the pass for 13.7
+    hours in silence. The age of the last beat is the thing that says it is
+    alive, and the interval is read from the plist rather than assumed (this
+    docstring said 6h while the plist said 1h).
+    """
     plist = os.path.expanduser("~/Library/LaunchAgents/com.meditate.grade.plist")
     exists = os.path.isfile(plist)
     loaded = False
+    interval = None
     if exists:
         try:
             r = subprocess.run(["launchctl", "list"], capture_output=True,
@@ -191,12 +200,26 @@ def _check_heartbeat() -> Dict[str, Any]:
             loaded = "com.meditate.grade" in r.stdout
         except Exception:
             pass
+        try:
+            r = subprocess.run(["plutil", "-extract", "StartInterval", "raw",
+                                plist], capture_output=True, text=True, timeout=10)
+            if r.returncode == 0:
+                interval = int(r.stdout.strip())
+        except Exception:
+            pass
     log = os.path.expanduser("~/.claude/meditation/heartbeat.log")
-    last_beat = None
+    last_beat, age_s = None, None
     if os.path.exists(log):
-        last_beat = time.strftime("%Y-%m-%d %H:%M",
-                                  time.localtime(os.path.getmtime(log)))
-    return {"plist_exists": exists, "loaded": loaded, "last_beat": last_beat}
+        mt = os.path.getmtime(log)
+        last_beat = time.strftime("%Y-%m-%d %H:%M", time.localtime(mt))
+        age_s = time.time() - mt
+    # two and a half intervals: one missed fire is a busy machine, three is a
+    # job that is not coming back
+    limit = (interval or 3600) * 2.5
+    stale = bool(age_s is not None and age_s > limit)
+    return {"plist_exists": exists, "loaded": loaded, "last_beat": last_beat,
+            "interval_s": interval, "age_s": None if age_s is None else int(age_s),
+            "stale": stale, "never_beat": exists and loaded and age_s is None}
 
 
 def _check_stillness() -> Dict[str, Any]:
@@ -290,6 +313,10 @@ def run(run_tests: bool = True) -> Dict[str, Any]:
         issues.append("hook_registration")
     if not heartbeat["loaded"]:
         issues.append("heartbeat_not_loaded")
+    elif heartbeat.get("never_beat"):
+        issues.append("heartbeat_never_ran")
+    elif heartbeat.get("stale"):
+        issues.append("heartbeat_stale")
     if stillness["overdue"]:
         issues.append("stillness_overdue")
     elif stillness.get("never_run"):

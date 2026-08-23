@@ -262,7 +262,13 @@ skill, plist, log = sys.argv[1], sys.argv[2], sys.argv[3]
 # itself kept running fine. That silently turned test_edge_heartbeat_fresh —
 # the alarm for a dead heartbeat — into a permanent false alarm.
 cmd = "{ " + "; ".join('python3 "%s/%s" %s' % (skill, s, a) for s, a in
-                       [("nidra_bridge.py", "--sleep"), ("archive.py", "--apply"),
+                       # repair BEFORE grade: a memory whose file merely moved
+                       # is repointed and then re-graded in the same pass, so
+                       # the queue clears itself instead of waiting for someone
+                       # to notice it. Only moves and renames — anything
+                       # needing judgement is left alone and reported.
+                       [("repair.py", "--apply"),
+                        ("nidra_bridge.py", "--sleep"), ("archive.py", "--apply"),
                         ("dashboard.py", ""), ("voice.py", "--notify --quiet")]
                        ) + '; } >> "%s" 2>&1' % log
 # Keep any interval cadence.py already tuned. Hardcoding the default here

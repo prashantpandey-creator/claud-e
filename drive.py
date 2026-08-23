@@ -157,25 +157,62 @@ def fleet_status(goals_dir=None, ledger_path=None, history_path=None):
             except Exception:
                 continue
         now = time.time()
+        # Who is ACTUALLY working, keyed by the window we recorded at dispatch.
+        # Matching by cwd prefix was the bug: two goals share the meditate
+        # directory and two share purangpt, so a goal was routinely credited to
+        # whichever session happened to sit under that path — including chats
+        # started a day before the dispatch.
+        alive_by_window = {}
+        try:
+            for a in running_agents(lp):
+                alive_by_window[str(a.get("window_id") or "")] = a
+        except Exception:
+            pass
+
         for goal, r in sorted(last.items(), key=lambda kv: -kv[1].get("ts_epoch", 0)):
             g = gmap.get(goal)
             mins = int((now - r.get("ts_epoch", now)) / 60)
-            ticked = bool(g) and g.get("next") != r.get("milestone")
-            agent = None
-            for s in live:
-                gc = (g or {}).get("cwd", "")
-                if gc and (s.get("cwd") == gc or s.get("cwd", "").startswith(gc.rstrip("/") + "/")):
-                    agent = s
-                    seen_sids.add(s.get("sid"))
-                    break
+            wid = str(r.get("window_id") or "")
+
+            # Done means the CHECKBOX is ticked, not that the text changed.
+            # Comparing g["next"] to the dispatched string meant rewording a
+            # milestone — "- [ ] alpha step" to "- [ ] alpha step (blocked)" —
+            # reported a running agent as finished, which then got announced,
+            # painted green, and offered for clearing.
+            sent = (r.get("milestone") or "").strip()
+            ticked = False
+            if g and sent:
+                for m in g.get("milestones") or []:
+                    if (m.get("text") or "").strip() == sent:
+                        ticked = bool(m.get("done"))
+                        break
+                else:
+                    # the milestone text is gone from the file entirely; the
+                    # only honest reading is "we cannot tell", not "done"
+                    ticked = False
+
+            agent = alive_by_window.get(wid)
+            if agent:
+                for s in live:
+                    if s.get("sid") and s.get("sid") not in seen_sids:
+                        pass
+            # presence row for the label, matched only when we are sure
+            sess = None
+            if agent:
+                seen_sids.add(agent.get("sid"))
             rows.append({"goal": goal, "milestone": r.get("milestone", "")[:70],
                          "dispatched_min": mins, "milestone_ticked": ticked,
-                         "live_session": (agent or {}).get("sid", "")[:12] or None,
+                         # alive is the thing every surface needs and none had:
+                         # the dot, the counter and the buttons all guessed
+                         # differently. One answer, from the process itself.
+                         "alive": bool(agent),
+                         "pids": (agent or {}).get("pids", []),
+                         "live_session": ((sess or {}).get("sid", "")[:12] or None),
                          # Which Terminal window this agent got, so a click can
                          # take you TO it. Knowing a thing is running and having
                          # no way to reach it is half a feature.
-                         "window_id": str(r.get("window_id") or ""),
-                         "last_file": _last_file(agent) if agent else None})
+                         "window_id": wid,
+                         "last_file": _last_file(sess) if sess else None})
     # A row with no milestone is not a job — it can never tick, so it reports
     # "still going, worth a look" for as long as the ledger keeps it.
     rows = [r for r in rows if (r.get("milestone") or "").strip()]

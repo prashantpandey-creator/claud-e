@@ -177,6 +177,26 @@ if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--hear" {
 // `casper --saytwice` fires two utterances a beat apart and counts how many
 // actually START. Two was the bug the owner heard: the lanes are separate
 // audio paths, so two concurrent says came out as two voices at once.
+// `casper --saycancel` starts an utterance and stops it MID-RENDER. Nothing
+// may reach the speakers: pressing Mute while a render is running used to
+// leave the render to land and speak anyway.
+if CommandLine.arguments.count > 1, CommandLine.arguments[1] == "--saycancel" {
+    _ = NSApplication.shared
+    let m = Mouth()
+    var starts = 0
+    m.onStart = { starts += 1 }
+    m.say("This line was cancelled and must never be heard.")
+    // the render takes ~0.9s; stop well inside it
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { m.shutUp() }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 6) {
+        print("starts after cancel = \(starts)")
+        print(starts == 0 ? "CANCELLED — the stale render never played"
+                          : "LEAKED — it spoke after being stopped")
+        exit(starts == 0 ? 0 : 1)
+    }
+    RunLoop.main.run()
+}
+
 if CommandLine.arguments.count > 1, CommandLine.arguments[1] == "--saytwice" {
     _ = NSApplication.shared
     let m = Mouth()

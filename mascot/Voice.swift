@@ -262,6 +262,8 @@ final class Mouth: NSObject, AVSpeechSynthesizerDelegate {
     var onFinish: (() -> Void)?
 
     private var attached = false
+    /// The format the player node is currently wired for.
+    private var nodeFormat: AVAudioFormat?
 
     override init() {
         super.init()
@@ -359,6 +361,9 @@ final class Mouth: NSObject, AVSpeechSynthesizerDelegate {
     /// The newest thing he was asked to say while busy. Only one is kept —
     /// his lines are status, and stale status is worse than silence.
     private var queued: String?
+    /// Bumped on every say() and every shutUp(). A render whose generation is
+    /// stale must never reach the speakers.
+    private var generation: UInt64 = 0
 
     func say(_ text: String) {
         let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -368,6 +373,8 @@ final class Mouth: NSObject, AVSpeechSynthesizerDelegate {
             return
         }
         inFlight = true
+        generation &+= 1
+        let mine = generation
         // Kokoro first: rendered off the main thread, whole utterance in one
         // call (it does its own prosody and pauses — our splicing is for the
         // Apple lane). Falls back to Apple in one timeout when the server is
@@ -377,11 +384,17 @@ final class Mouth: NSObject, AVSpeechSynthesizerDelegate {
             Mouth.ensureVoiceServer()
             if let buf = self.kokoroRender(clean) {
                 DispatchQueue.main.async {
+                    // The render takes ~0.9s and CANNOT be interrupted. If you
+                    // pressed Mute, Quiet or the X while it ran, shutUp() froze
+                    // the player but this block still landed and spoke — audio
+                    // out of a Casper whose bubble read "Muted."
+                    guard mine == self.generation else { return }
                     self.lane = "kokoro"
                     self.play([buf])
                 }
             } else {
                 DispatchQueue.main.async {
+                    guard mine == self.generation else { return }
                     self.lane = "apple"
                     self.renderNext(Mouth.sentences(clean), 0, [])
                 }
@@ -484,9 +497,22 @@ final class Mouth: NSObject, AVSpeechSynthesizerDelegate {
             finished(); return
         }
 
+        // Reconnect when the sample rate changes. The node was attached once,
+        // with the format of whichever lane happened to speak FIRST, and never
+        // reconnected — Kokoro is 24000 Hz and Apple is 22050 Hz, so after any
+        // fallback af_heart played through a 22050-pinned node: 9% slow and
+        // about 1.5 semitones flat. That is why the voice that "was good"
+        // stopped sounding like itself.
+        if attached, nodeFormat?.sampleRate != joined.format.sampleRate {
+            player.stop()
+            engine.disconnectNodeOutput(player)
+            engine.connect(player, to: engine.mainMixerNode, format: joined.format)
+            nodeFormat = joined.format
+        }
         if !attached {
             engine.attach(player)
             engine.connect(player, to: engine.mainMixerNode, format: joined.format)
+            nodeFormat = joined.format
             engine.mainMixerNode.removeTap(onBus: 0)
             engine.mainMixerNode.installTap(onBus: 0, bufferSize: 1024,
                                             format: nil) { [weak self] buf, _ in
@@ -529,6 +555,7 @@ final class Mouth: NSObject, AVSpeechSynthesizerDelegate {
     func shutUp() {
         queued = nil
         inFlight = false
+        generation &+= 1          // anything still rendering is now stale
         player.stop()
         synth.stopSpeaking(at: .immediate)
         speaking = false

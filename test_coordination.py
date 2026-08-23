@@ -577,6 +577,130 @@ def test_command_squiggle_never_raises():
         assert isinstance(co.check_command(cmd, out), str)
 
 
+def test_squiggle_reports_the_DELTA_not_the_file_state():
+    """The largest gap the review found, and the one no rule tuning fixes.
+
+    check_edit was a pure function of the path with no memory, so it reported
+    whatever the file contains. Measured consequence on the real workspace:
+    purangpt/backend/main.py carries a latent F821 from 2026-06-21, and both
+    CLAUDE.md files point every session at that file — so it would emit the
+    same stale line on EVERY edit forever, and because only the first
+    diagnostic is returned, a genuinely NEW undefined name introduced by the
+    current edit would be masked by the two-month-old one.
+
+    An agent that sees the same irrelevant line on every edit learns to skip
+    the line. That is the exact cost the design exists to avoid."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        seen = os.path.join(d, "seen.json")
+        f = os.path.join(d, "legacy.py")
+        with open(f, "w") as fh:
+            fh.write("import os\ndef old():\n    return ancient_bug(os.sep)\n")
+        first = co.check_edit(f, seen_path=seen)
+        assert "ancient_bug" in first, first
+        # same file, unchanged: already reported once, stay quiet
+        assert co.check_edit(f, seen_path=seen) == "", "stale error repeated"
+        # a NEW error must NOT be masked by the old one
+        with open(f, "a") as fh:
+            fh.write("def fresh():\n    return brand_new_typo(1)\n")
+        got = co.check_edit(f, seen_path=seen)
+        assert "brand_new_typo" in got, "new error masked by the stale one: %r" % got
+
+
+def test_squiggle_is_silent_in_generated_and_fixture_trees():
+    """Measured: 7 of 7 .py files under fixtures/ or generated/ in this
+    workspace squiggle, 100% false — one documents in its own docstring that
+    the undefined names are deliberate."""
+    import tempfile
+    for sub in ("fixtures", "generated", "node_modules", "__pycache__",
+                "site-packages", "build"):
+        with tempfile.TemporaryDirectory() as d:
+            sd = os.path.join(d, sub)
+            os.makedirs(sd)
+            f = os.path.join(sd, "x.py")
+            with open(f, "w") as fh:
+                fh.write("X = deliberately_undefined\n")
+            assert co.check_edit(f, seen_path=os.path.join(d, "s.json")) == "", sub
+
+
+def test_seen_cache_is_bounded_and_survives_corruption():
+    """It runs on every edit forever; it must not grow without limit or die
+    on a truncated write."""
+    import tempfile, json as _j
+    with tempfile.TemporaryDirectory() as d:
+        seen = os.path.join(d, "seen.json")
+        with open(seen, "w") as fh:
+            fh.write("{not json at all")
+        f = os.path.join(d, "a.py")
+        with open(f, "w") as fh:
+            fh.write("X = nope\n")
+        assert "nope" in co.check_edit(f, seen_path=seen)   # recovered
+        big = {("/p/%d.py" % i): ["x"] for i in range(co.SEEN_CAP * 3)}
+        with open(seen, "w") as fh:
+            _j.dump(big, fh)
+        co.check_edit(f, seen_path=seen)
+        with open(seen) as fh:
+            assert len(_j.load(fh)) <= co.SEEN_CAP + 1
+
+
+def _post(payload):
+    """Drive the REAL CLI entry point, crossing the hook boundary."""
+    import subprocess, json as _j
+    r = subprocess.run(
+        [sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                      "coordination.py"), "post-edit"],
+        input=_j.dumps(payload), capture_output=True, text=True)
+    try:
+        return _j.loads(r.stdout or "{}").get(
+            "hookSpecificOutput", {}).get("additionalContext", "")
+    except Exception:
+        return "UNPARSEABLE: %r" % r.stdout[:120]
+
+
+def test_wire_command_squiggle_reads_the_REAL_payload_key():
+    """The bug that shipped: check_command was tested only as a pure function.
+
+    Every assertion called co.check_command(cmd, out) with a bare string, so
+    the function was correct and the WIRE was never exercised. The hook reads
+    the result from `tool_response` (verified against CLI 2.1.201, which is
+    the only key it emits); the code read `tool_result`, a key Anthropic's own
+    plugin-dev docs name but the binary never sends. The command lane
+    therefore never executed one line of its matching logic.
+
+    unittest also writes "Ran 0 tests" to STDERR, so reading stdout alone
+    would still have missed the exact case the feature was built for."""
+    got = _post({"hook_event_name": "PostToolUse", "tool_name": "Bash",
+                 "tool_input": {"command": "python3 -m unittest discover"},
+                 "tool_response": {"stdout": "", "interrupted": False,
+                                   "stderr": "Ran 0 tests in 0.000s\n\nNO TESTS RAN"}})
+    assert "0 tests" in got, "command squiggly dead over the wire: %r" % got
+
+
+def test_wire_accepts_a_plain_string_response_too():
+    got = _post({"hook_event_name": "PostToolUse", "tool_name": "Bash",
+                 "tool_input": {"command": "pytest -q"},
+                 "tool_response": "collected 0 items\n\nno tests ran in 0.01s"})
+    assert "0 tests" in got, got
+
+
+def test_wire_stays_silent_on_a_real_run():
+    got = _post({"hook_event_name": "PostToolUse", "tool_name": "Bash",
+                 "tool_input": {"command": "pytest -q"},
+                 "tool_response": {"stdout": "42 passed in 0.5s", "stderr": ""}})
+    assert got == "", got
+
+
+def test_wire_file_squiggle_still_works():
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        f = os.path.join(d, "w.py")
+        with open(f, "w") as fh:
+            fh.write("import os\nX = nope(os.sep)\n")
+        got = _post({"hook_event_name": "PostToolUse", "tool_name": "Write",
+                     "tool_input": {"file_path": f}})
+        assert "nope" in got, got
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0
