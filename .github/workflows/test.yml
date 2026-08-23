@@ -100,7 +100,14 @@ jobs:
           crontab -l; echo "rc=$?"
           echo "spool file, if any:"
           sudo cat /var/spool/cron/crontabs/runner 2>&1 || true
-          ls -la /var/spool/cron/crontabs/ 2>&1 || true
+          echo "--- reproducing install.sh's exact pipe, writing to a file instead of crontab -"
+          SKILL_DIR="$PWD"
+          MEDITATION_DIR="$HOME/.claude/meditation"
+          HEARTBEAT_CMD="{ python3 \"$SKILL_DIR/nidra_bridge.py\" --sleep; python3 \"$SKILL_DIR/archive.py\" --apply; python3 \"$SKILL_DIR/dashboard.py\"; python3 \"$SKILL_DIR/voice.py\" --notify --quiet; } >> \"$MEDITATION_DIR/heartbeat.log\" 2>&1"
+          ( crontab -l 2>/dev/null | grep -v "meditate-heartbeat" || true
+            echo "0 */6 * * * $HEARTBEAT_CMD # meditate-heartbeat" ) > /tmp/piped.txt
+          echo "bytes piped: $(wc -c < /tmp/piped.txt)"
+          cat -A /tmp/piped.txt
 
       - name: The suite
         run: |
