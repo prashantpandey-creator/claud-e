@@ -137,7 +137,7 @@ margin:0;padding:48px 56px;max-width:960px">
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    ap = argparse.ArgumentParser(description="One-page organism dashboard")
+    ap = argparse.ArgumentParser(prog="meditate dashboard", description="One-page organism dashboard")
     ap.add_argument("--open", action="store_true")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)

@@ -113,7 +113,7 @@ def apply(seconds: int) -> Dict[str, Any]:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    ap = argparse.ArgumentParser(description="Derive the self-check interval")
+    ap = argparse.ArgumentParser(prog="meditate cadence", description="Derive the self-check interval")
     ap.add_argument("--apply", action="store_true")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)

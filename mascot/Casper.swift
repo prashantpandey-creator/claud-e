@@ -967,6 +967,7 @@ final class App: NSObject, NSApplicationDelegate {
     var agendaItems: [(say: String, action: String)] = []
     var lastSpoken = ""
     var busy = false
+    var muteGraceFrames = 0
 
     func applicationDidFinishLaunching(_ n: Notification) {
         let W: CGFloat = 200, H: CGFloat = 248
@@ -1096,6 +1097,22 @@ final class App: NSObject, NSApplicationDelegate {
             else if !self.yesBtn.isHidden             { self.ghost.mood = .alert }
             else                                      { self.ghost.mood = .idle }
             self.stopBtn.isHidden = !self.mouth.speaking
+            // Mute watchdog. say() mutes the ear and trusts onFinish to
+            // unmute — but a render that produces NO audio never fires
+            // onFinish, and that left him deaf forever with muted=yes and no
+            // way home. Muted with nothing playing for 6s straight = the
+            // promise was broken; unmute. (6s > the warm render gap; and if
+            // speech does start later, onStart re-mutes.)
+            if self.ear.muted && !self.mouth.speaking {
+                self.muteGraceFrames += 1
+                if self.muteGraceFrames > 360 {
+                    self.ear.muted = false
+                    self.ear.freshTurn()
+                    self.muteGraceFrames = 0
+                }
+            } else {
+                self.muteGraceFrames = 0
+            }
             self.ghost.tick(dt: 1.0 / 60)
         }
         // ---- the ear -------------------------------------------------------
@@ -1104,6 +1121,16 @@ final class App: NSObject, NSApplicationDelegate {
         mouth.onFinish = { [weak self] in
             guard let self = self else { return }
             self.ear.muted = false            // safe to hear you again
+            self.ear.freshTurn()              // drop fragments heard pre-mute
+        }
+        // The mute must track ACTUAL speech, not the promise of it: say()
+        // mutes early (so the render gap is covered), the watchdog below
+        // unmutes if that promise is never kept, and this re-mutes the moment
+        // sound really starts.
+        let prevOnStart = mouth.onStart
+        mouth.onStart = { [weak self] in
+            prevOnStart?()
+            self?.ear.muted = true
         }
         ear.onPartial = { [weak self] text in
             guard let self = self, !text.isEmpty else { return }
@@ -1449,7 +1476,8 @@ final class App: NSObject, NSApplicationDelegate {
         setBubble("On it…")
         DispatchQueue.global().async {
             let out = Meditate.perform(action)
-            let first = out.split(separator: "\n").first.map(String.init) ?? "Done."
+            let lines = out.split(separator: "\n").map(String.init)
+            let first = lines.first ?? "Done."
             DispatchQueue.main.async {
                 // The one unprompted celebration he gets: a job you asked for,
                 // finished. Tying it to anything cheaper makes it worthless.
@@ -1457,6 +1485,13 @@ final class App: NSObject, NSApplicationDelegate {
                     || first.lowercased().contains("nothing to run")
                 if !failed { self.ghost.celebrate() }
                 self.say(first)
+                // The voice gets the summary; the bubble keeps the detail —
+                // which agent, doing what, in which repo. "Launched 2
+                // agent(s):" with everything else thrown away was the whole
+                // complaint.
+                if lines.count > 1 {
+                    self.setBubble(lines.prefix(5).joined(separator: "\n"))
+                }
                 // and now keep an eye on it, rather than starting something
                 // and never mentioning it again
                 if !failed {
@@ -1531,6 +1566,13 @@ final class App: NSObject, NSApplicationDelegate {
     /// description instead of an offer. Same sentence, two behaviours,
     /// depending on which mouth heard it.
     func route(_ question: String) {
+        // One thought at a time. The advisor can take tens of seconds, and a
+        // second utterance meanwhile started a SECOND advisor — two answers
+        // racing for one mouth, the later overwriting the earlier.
+        guard !busy else {
+            setBubble("One sec \u{2014} still thinking about the last one.")
+            return
+        }
         switch routeDecision(question) {
         case .refuse(let line):
             say(line)

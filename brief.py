@@ -171,7 +171,7 @@ def gather_and_compose() -> List[str]:
 
 def main(argv: Optional[List[str]] = None) -> int:
     import argparse
-    ap = argparse.ArgumentParser(description="Say the state, don't list it")
+    ap = argparse.ArgumentParser(prog="meditate brief", description="Say the state, don't list it")
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
     lines = gather_and_compose()

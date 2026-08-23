@@ -118,7 +118,7 @@ def clear(goal: Optional[str] = None, dead_only: bool = False,
 
 def main(argv: Optional[List[str]] = None) -> int:
     import argparse
-    ap = argparse.ArgumentParser(description="Act on dispatched agents")
+    ap = argparse.ArgumentParser(prog="meditate fleet", description="Act on dispatched agents")
     sub = ap.add_subparsers(dest="cmd")
     c = sub.add_parser("clear")
     c.add_argument("goal", nargs="?")

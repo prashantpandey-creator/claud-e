@@ -182,7 +182,7 @@ def _default_runner(action: str) -> Dict[str, Any]:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    ap = argparse.ArgumentParser(description="One voice turn over the graded data")
+    ap = argparse.ArgumentParser(prog="meditate say", description="One voice turn over the graded data")
     ap.add_argument("words", nargs="*", help="what was said")
     ap.add_argument("--speak", action="store_true", help="say the answer aloud")
     ap.add_argument("--allow-actions", action="store_true",

@@ -155,7 +155,7 @@ def compute(store_dir: str = STORE_DIR, archive_root: str = ARCHIVE_ROOT,
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    ap = argparse.ArgumentParser(description="Wins + efficacy report")
+    ap = argparse.ArgumentParser(prog="meditate report", description="Wins + efficacy report")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
     data = compute()

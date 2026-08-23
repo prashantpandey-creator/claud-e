@@ -177,7 +177,7 @@ def make_receiver(port: int, ingest_token: str, view_secret: str,
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(description="Read-only remote view")
+    ap = argparse.ArgumentParser(prog="meditate remote", description="Read-only remote view")
     sub = ap.add_subparsers(dest="cmd")
     pp = sub.add_parser("push"); pp.add_argument("--url", required=True)
     pp.add_argument("--token", required=True); pp.add_argument("--json", action="store_true")

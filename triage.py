@@ -277,7 +277,7 @@ def triage(root: str = PROJECTS_ROOT, max_files: int = 400) -> Dict[str, Any]:
 
 def main(argv: Optional[List[str]] = None) -> int:
     import argparse
-    ap = argparse.ArgumentParser(description="Which chats want something from you")
+    ap = argparse.ArgumentParser(prog="meditate chats", description="Which chats want something from you")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--all", action="store_true", help="list every chat, not just the ones owed")
     a = ap.parse_args(argv)

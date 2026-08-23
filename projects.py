@@ -428,7 +428,7 @@ def rollup(sessions: Optional[List[Dict]] = None,
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    ap = argparse.ArgumentParser(description="Per-project attention and tasks")
+    ap = argparse.ArgumentParser(prog="meditate projects", description="Per-project attention and tasks")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
     rows = rollup()

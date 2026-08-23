@@ -209,7 +209,7 @@ def restore(sid: str, archive_root: str = ARCHIVE_ROOT) -> Dict[str, Any]:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    ap = argparse.ArgumentParser(description="Archive finished sessions, reversibly")
+    ap = argparse.ArgumentParser(prog="meditate archive", description="Archive finished sessions, reversibly")
     ap.add_argument("--apply", action="store_true", help="actually move (default: dry-run)")
     ap.add_argument("--older-than", type=int, default=None, metavar="DAYS",
                     help="also archive non-empty sessions older than DAYS")

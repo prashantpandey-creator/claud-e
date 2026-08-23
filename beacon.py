@@ -62,7 +62,7 @@ def latest(beacon_path: str = BEACON_PATH) -> Dict[str, Dict[str, Any]]:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    ap = argparse.ArgumentParser(description="Report fleet-agent progress")
+    ap = argparse.ArgumentParser(prog="meditate progress", description="Report fleet-agent progress")
     ap.add_argument("goal", help="goal name this agent is working")
     ap.add_argument("message", nargs="*", help="what the agent is doing now")
     ap.add_argument("--done", action="store_true", help="final report for this goal")

@@ -248,7 +248,7 @@ def _open_milestones(goal: Dict[str, Any]) -> List[str]:
 
 def main(argv: Optional[List[str]] = None) -> int:
     import argparse
-    ap = argparse.ArgumentParser(description="Which milestones are already true")
+    ap = argparse.ArgumentParser(prog="meditate milestones", description="Which milestones are already true")
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
     d = audit()

@@ -178,7 +178,7 @@ def advise(question: str, timeout_s: int = TIMEOUT_S,
 
 def main(argv: Optional[List[str]] = None) -> int:
     import argparse
-    ap = argparse.ArgumentParser(description="Casper reasons over your work")
+    ap = argparse.ArgumentParser(prog="meditate advise", description="Casper reasons over your work")
     ap.add_argument("question", nargs="*")
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)

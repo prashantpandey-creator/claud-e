@@ -299,7 +299,7 @@ def print_human(data: Dict):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="meditate metrics — how well is the memory running")
+    ap = argparse.ArgumentParser(prog="meditate metrics", description="meditate metrics — how well is the memory running")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
 

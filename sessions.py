@@ -328,7 +328,7 @@ def scan_all_projects(cap=DEFAULT_CAP):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="Parse Claude Code sessions into a compact map")
+    ap = argparse.ArgumentParser(prog="meditate sessions", description="Parse Claude Code sessions into a compact map")
     ap.add_argument("--project-dir", default=None,
                     help="Scan one project dir (default: all projects)")
     ap.add_argument("--session", default=None,

@@ -132,7 +132,7 @@ def status_text(**kw) -> str:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    ap = argparse.ArgumentParser(description="Status + the one next action")
+    ap = argparse.ArgumentParser(prog="meditate", description="Status + the one next action")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
     if args.json:

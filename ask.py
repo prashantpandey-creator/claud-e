@@ -112,7 +112,7 @@ def write_repair_queue(drift: Dict[str, Any],
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    ap = argparse.ArgumentParser(description="Query the graded store")
+    ap = argparse.ArgumentParser(prog="meditate ask", description="Query the graded store")
     ap.add_argument("query", nargs="+", help="what to look up")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("-k", type=int, default=6)

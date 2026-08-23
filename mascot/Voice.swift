@@ -167,11 +167,24 @@ final class Ear: NSObject {
             }
             if let e = error as NSError?, e.code != 301 {   // 301 = we cancelled
                 self.lastError = "\(e.localizedDescription)"
+                // Words already recognised are not the task's to take with it:
+                // if it dies mid-monologue, deliver what it heard instead of
+                // discarding it with the corpse.
+                let salvaged = self.partial
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                self.partial = ""
+                if salvaged.count >= 12, !self.muted {
+                    DispatchQueue.main.async { self.onUtterance?(salvaged) }
+                }
                 // A dead task is not deafness-forever: give the recogniser a
                 // beat and start a fresh one. Without this, any error left him
                 // silently deaf until relaunch.
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                     guard self.running, let r2 = self.recognizer else { return }
+                    // ...unless someone (the 45s recycler, an end-of-turn)
+                    // already started a fresh task — restarting again here
+                    // would kill it and eat the first words spoken into it.
+                    guard self.taskAge > 1.5 else { return }
                     self.beginTurn(r2)
                 }
             }
@@ -197,6 +210,13 @@ final class Ear: NSObject {
         partial = ""
         if let rec = recognizer { beginTurn(rec) }      // fresh transcript next turn
         onUtterance?(text)
+    }
+
+    /// A fresh transcript, safe to call any time. Used after he finishes
+    /// speaking: the old partial may hold fragments heard before the mute.
+    func freshTurn() {
+        guard running, let rec = recognizer else { return }
+        beginTurn(rec)
     }
 
     func stop() {

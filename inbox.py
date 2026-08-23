@@ -139,7 +139,7 @@ def render(msgs: List[Dict[str, Any]]) -> str:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    ap = argparse.ArgumentParser(description="Agent-to-agent messages")
+    ap = argparse.ArgumentParser(prog="meditate tell", description="Agent-to-agent messages")
     sub = ap.add_subparsers(dest="cmd")
     s = sub.add_parser("send"); s.add_argument("to"); s.add_argument("body", nargs="+")
     s.add_argument("--from", dest="frm", default="")

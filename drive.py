@@ -202,7 +202,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 print("  %s  %s  (%ss ago)  %s" % (s["sid"], s["cwd"], s["age_s"], s["last_file"]))
         return 0
 
-    ap = argparse.ArgumentParser(description="Dispatch goal agents")
+    ap = argparse.ArgumentParser(prog="meditate drive", description="Dispatch goal agents")
     ap.add_argument("--go", type=int, default=0, metavar="N",
                     help="launch up to N agents (default: dry-run)")
     ap.add_argument("--json", action="store_true")

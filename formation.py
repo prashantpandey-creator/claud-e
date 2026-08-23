@@ -212,7 +212,7 @@ def distill_kickoff(sid: str, sessions: List[Dict[str, Any]],
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    ap = argparse.ArgumentParser(description="Knowledge formation")
+    ap = argparse.ArgumentParser(prog="meditate distill", description="Knowledge formation")
     ap.add_argument("sid", nargs="?", help="session to distill")
     ap.add_argument("--done", metavar="SID", help="mark a session distilled")
     ap.add_argument("--open", action="store_true")

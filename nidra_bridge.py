@@ -231,7 +231,7 @@ def run(do_sleep=False, store_dir=None, memory_root=None, form_days=None,
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="Bridge meditate sessions into nidra")
+    ap = argparse.ArgumentParser(prog="meditate grade", description="Bridge meditate sessions into nidra")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--sleep", action="store_true", help="Also run nidra sleep pass")
     args = ap.parse_args(argv)

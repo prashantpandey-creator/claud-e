@@ -292,6 +292,23 @@ def test_only_one_agent_per_repo_and_the_rest_are_named():
             assert d["waiting_on"] and d["why"], d
 
 
+def test_launch_report_carries_title_milestone_and_place():
+    """"Launched 2 agent(s):" followed by slugs was the whole report — nothing
+    a person could use. The detail must survive from the launch site."""
+    import go as go2
+    with tempfile.TemporaryDirectory() as t:
+        gdir = os.path.join(t, "goals"); os.makedirs(gdir)
+        with open(os.path.join(gdir, "ship-widget.md"), "w") as f:
+            f.write("---\nname: ship-widget\ntitle: Ship the widget — checkout"
+                    " live\ncwd: %s\n---\n- [ ] wire the payment key\n" % t)
+        res = go2.run(launcher=lambda c, p, n, m="": True, goals_dir=gdir,
+                      ledger_path=os.path.join(t, "l.jsonl"))
+        d = (res.get("launched") or [{}])[0]
+        assert d.get("title") == "Ship the widget", d
+        assert d.get("doing") == "wire the payment key", d
+        assert d.get("cwd"), "where it runs is part of the report"
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

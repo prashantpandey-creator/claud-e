@@ -443,7 +443,11 @@ def _refresh_rollup_async() -> None:
 
 
 def _recent_events(n: int = 10) -> List[Dict[str, str]]:
-    ev = os.path.expanduser("~/.claude/coordination/events.jsonl")
+    # Through the shared resolver, like the writer above. Reader and writer
+    # disagreeing meant a test wrote to its sandbox and read the owner's real
+    # activity trail — the same split that leaked test POSTs into it before.
+    from coordination import events_path
+    ev = events_path()
     rows: List[Dict[str, str]] = []
     if os.path.exists(ev):
         try:
@@ -495,6 +499,11 @@ PAGE = """<!doctype html><meta charset="utf-8">
      color:var(--gold);border-radius:9px;padding:7px 14px;font-size:13px;
      transition:background .15s,border-color .15s}
   .b:hover{background:#1b1710;border-color:var(--gold-soft)}
+  .goaltitle{width:250px;text-align:left;background:none;border:0;padding:0;
+             color:var(--ink);font:inherit;cursor:pointer;
+             text-decoration:underline;text-decoration-color:#2a2620;
+             text-underline-offset:3px}
+  .goaltitle:hover{color:var(--gold);text-decoration-color:var(--gold-soft)}
   .cap{font-size:10.5px;color:var(--ink-faint);margin-top:5px;line-height:1.4}
   details>summary{list-style:none;cursor:pointer;padding:10px 0}
   details>summary::-webkit-details-marker{display:none}
@@ -648,8 +657,8 @@ async function tick(){
       ? `<span style="color:${G}" title="agent live on this goal${f.last_file?` — last touched ${esc(f.last_file)}`:""}">⟳ agent on it · ${Math.round(f.dispatched_min)}m${f.milestone_ticked?` · milestone ✓`:""}</span>`
       : `<button class="b j-go" data-goal="${esc(g.name)}" style="padding:2px 9px;font-size:11px" title="Opens ONE Terminal agent working only this goal's next milestone: ${esc(g.next||'')}">dispatch</button>`;
     return `<div style="margin:8px 0"><div style="display:flex;gap:12px;align-items:center">
-      <span class="j-open" data-goal="${esc(g.name)}" title="open this goal"
-            style="width:250px;cursor:pointer;text-decoration:underline;text-decoration-color:#2a2620;text-underline-offset:3px">${esc(g.title.slice(0,42))}</span>${bar(g.pct)}
+      <button class="j-open goaltitle" data-goal="${esc(g.name)}"
+              title="open this goal">${esc(g.title.slice(0,42))}</button>${bar(g.pct)}
       <span style="color:${G}">${Math.round(g.pct)}%</span>
       <span style="color:${DIM}">${g.done}/${g.total}</span>
       ${g.stalled?`<span style="color:${G}" title="${esc(g.idle_basis||'')}">stuck ${g.idle_days}d</span>`:""}
@@ -942,7 +951,7 @@ def _warm() -> None:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    ap = argparse.ArgumentParser(description="Live brain server (localhost only)")
+    ap = argparse.ArgumentParser(prog="meditate pulse", description="Live brain server (localhost only)")
     ap.add_argument("--port", type=int, default=DEFAULT_PORT)
     ap.add_argument("--no-open", action="store_true")
     ap.add_argument("--casper", action="store_true",

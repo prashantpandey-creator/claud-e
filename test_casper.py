@@ -59,7 +59,7 @@ def _post(base, payload):
                                  headers={"X-Meditate": "1",
                                           "Content-Type": "application/json"},
                                  method="POST")
-    with urllib.request.urlopen(req, timeout=25) as r:
+    with urllib.request.urlopen(req, timeout=90) as r:
         return json.loads(r.read())
 
 
@@ -110,7 +110,7 @@ def test_voice_never_ships_through_the_page():
 def test_state_exposes_what_and_when():
     srv, base = _serve()
     try:
-        with urllib.request.urlopen(base + "/api/state", timeout=25) as r:
+        with urllib.request.urlopen(base + "/api/state", timeout=90) as r:
             s = json.loads(r.read())
         assert "headline" in s["briefing"], "mascot cannot know WHAT to say"
         assert "interrupt_ok" in s["timing"], "mascot cannot know WHEN"

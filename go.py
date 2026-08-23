@@ -195,6 +195,10 @@ def run(n: Optional[int] = None, repair_only: bool = False,
             if launcher(repair["cwd"], repair["prompt"], "repair-queue"):
                 result["repair_launched"] = True
                 result["sent"].append("repair-queue")
+                result.setdefault("launched", []).append(
+                    {"kind": "repair", "title": "the repair queue",
+                     "doing": "re-checking the facts that failed verification",
+                     "cwd": repair["cwd"]})
                 budget -= 1
         except Exception as e:
             # NOT silent: a launcher that raises (signature drift, missing
@@ -222,6 +226,15 @@ def run(n: Optional[int] = None, repair_only: bool = False,
         # Different repos still run in parallel; the same repo queues. The
         # deferred ones are named, never silently dropped.
         taken: Dict[str, str] = {}
+        # dispatchable rows carry the slug, not the human title — without this
+        # join the launch report reads "goal-production-stable" instead of
+        # "Production stable", which is exactly the report nobody can use.
+        titles: Dict[str, str] = {}
+        try:
+            for row in gl.scan(**kw):
+                titles[row.get("name", "")] = (row.get("title") or "")
+        except Exception:
+            pass
         for g in cands[:budget]:
             k = gl.kickoff(g["name"], **kw)
             if not k:
@@ -251,6 +264,12 @@ def run(n: Optional[int] = None, repair_only: bool = False,
                 continue
             result["goals_launched"] += 1
             result["sent"].append("goal-" + g["name"])
+            result.setdefault("launched", []).append(
+                {"kind": "goal",
+                 "title": (g.get("title") or titles.get(g["name"]) or
+                           g["name"]).split("\u2014")[0].strip(),
+                 "doing": (g.get("next") or "the open milestone").strip(),
+                 "cwd": k["cwd"]})
             try:
                 os.makedirs(os.path.dirname(lp), exist_ok=True)
                 with open(lp, "a") as f:
@@ -264,7 +283,7 @@ def run(n: Optional[int] = None, repair_only: bool = False,
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    ap = argparse.ArgumentParser(description="Move everything forward")
+    ap = argparse.ArgumentParser(prog="meditate go", description="Move everything forward")
     ap.add_argument("sel", nargs="?", default=None,
                     help="cap (int), goal name, or repair item # / mem_id")
     ap.add_argument("--repair-only", action="store_true",
@@ -318,9 +337,24 @@ def main(argv: Optional[List[str]] = None) -> int:
         print("Nothing to move: no repair queue, no dispatchable goal"
               + (" (%d cooling)" % data["cooling"] if data["cooling"] else ""))
         return 0
-    print("Launched %d agent(s):" % len(data["sent"]))
-    for s in data["sent"]:
-        print("  " + s)
+    detail = data.get("launched") or []
+    if detail:
+        heads = " and ".join(d["title"] for d in detail[:3])
+        print("Started %d agent%s \u2014 %s. Each is in its own Terminal "
+              "window." % (len(detail), "" if len(detail) == 1 else "s", heads))
+        for d in detail:
+            print("  \u2022 %s \u2014 %s  (in %s)"
+                  % (d["title"], d["doing"][:90],
+                     d["cwd"].replace(os.path.expanduser("~"), "~")))
+    else:
+        print("Launched %d agent(s):" % len(data["sent"]))
+        for s in data["sent"]:
+            print("  " + s)
+    for d in data.get("deferred") or []:
+        print("  \u23f8 %s waits \u2014 %s is already working in that repo"
+              % (d["goal"], d["waiting_on"]))
+    for e in data.get("errors") or []:
+        print("  \u26a0 %s" % (e if isinstance(e, str) else e.get("message", e)))
     return 0
 
 

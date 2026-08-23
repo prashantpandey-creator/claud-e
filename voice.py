@@ -475,7 +475,7 @@ def _notify(headline: str, action: str) -> bool:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    ap = argparse.ArgumentParser(description="Casper — what to say, and when")
+    ap = argparse.ArgumentParser(prog="meditate voice", description="Casper — what to say, and when")
     ap.add_argument("--speak", action="store_true",
                     help="say the headline aloud IF the moment is right")
     ap.add_argument("--notify", action="store_true",

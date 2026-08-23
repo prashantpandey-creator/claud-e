@@ -321,7 +321,7 @@ def kickoff(name: str, goals_dir: str = GOALS_DIR,
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    ap = argparse.ArgumentParser(description="Long-term goals, measured")
+    ap = argparse.ArgumentParser(prog="meditate goals", description="Long-term goals, measured")
     ap.add_argument("cmd", nargs="?", default="list",
                     help="list | show <name> | launch <name>")
     ap.add_argument("name", nargs="?")
