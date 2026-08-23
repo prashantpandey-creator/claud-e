@@ -226,30 +226,99 @@ final class Mouth: NSObject, AVSpeechSynthesizerDelegate {
         synth.delegate = self
     }
 
+    /// Speak, one sentence at a time, with a real beat between them.
+    ///
+    /// Pacing is most of what "soothing" is. Said as one unbroken run, even a
+    /// good voice sounds like it is reading a warning label; a fifth of a
+    /// second between sentences is the difference between a colleague and a
+    /// public-address system. The gap is real silence spliced into the audio,
+    /// so the mouth closes during it too.
     func say(_ text: String) {
         let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !clean.isEmpty else { return }
-        let u = AVSpeechUtterance(string: clean)
-        u.rate = 0.52
-        u.pitchMultiplier = 1.06          // a shade brighter than default
-        u.voice = Mouth.bestVoice()
+        renderNext(Mouth.sentences(clean), 0, [])
+    }
 
+    /// Split on sentence ends, keeping the punctuation — the synthesiser uses
+    /// it for intonation, and a sentence stripped of its full stop is read
+    /// flat.
+    static func sentences(_ text: String) -> [String] {
+        var out: [String] = []
+        var cur = ""
+        for ch in text {
+            cur.append(ch)
+            if ch == "." || ch == "!" || ch == "?" {
+                let t = cur.trimmingCharacters(in: .whitespaces)
+                if t.count > 1 { out.append(t); cur = "" }
+            }
+        }
+        let tail = cur.trimmingCharacters(in: .whitespaces)
+        if !tail.isEmpty { out.append(tail) }
+        return out.isEmpty ? [text] : out
+    }
+
+    private func utterance(_ s: String) -> AVSpeechUtterance {
+        let u = AVSpeechUtterance(string: s)
+        // Unhurried, and a touch BELOW default pitch. The old settings ran at
+        // 0.52 with pitch 1.06 — faster and brighter, which is the register of
+        // a hold message, not of someone thinking about your work.
+        u.rate = 0.46
+        u.pitchMultiplier = 0.97
+        // volume stays at 1.0: how loud he is, is the system volume's job,
+        // and turning it down here quietly halved the mouth animation too
+        u.voice = Mouth.bestVoice()
+        return u
+    }
+
+    /// Render sentences in order, splicing silence between them, then play the
+    /// whole thing as one buffer so nothing can drift.
+    private func renderNext(_ parts: [String], _ i: Int,
+                            _ acc: [AVAudioPCMBuffer]) {
+        guard i < parts.count else {
+            if !acc.isEmpty { play(acc) }
+            return
+        }
         var chunks: [AVAudioPCMBuffer] = []
-        synth.write(u) { [weak self] buffer in
-            guard let self = self else { return }
+        var advanced = false
+        let step = { [weak self] in
+            guard let self = self, !advanced else { return }
+            advanced = true
+            var next = acc + chunks
+            if i < parts.count - 1, let first = chunks.first,
+               let gap = Mouth.silence(seconds: 0.20, like: first) {
+                next.append(gap)
+            }
+            self.renderNext(parts, i + 1, next)
+        }
+        synth.write(utterance(parts[i])) { buffer in
             guard let pcm = buffer as? AVAudioPCMBuffer, pcm.frameLength > 0 else {
-                // zero-length buffer marks the end of the render
-                if !chunks.isEmpty { self.play(chunks) ; chunks = [] }
-                return
+                step(); return              // zero-length buffer ends the render
             }
             chunks.append(pcm)
         }
-        // Some macOS builds finish the render synchronously and never send a
-        // terminating empty buffer; flush whatever arrived.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
-            guard let self = self, !chunks.isEmpty, !self.speaking else { return }
-            self.play(chunks); chunks = []
+        // Some macOS builds finish synchronously and never send the terminator.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { step() }
+    }
+
+    /// A buffer of nothing, in the same format as the speech around it.
+    static func silence(seconds: Double, like ref: AVAudioPCMBuffer)
+        -> AVAudioPCMBuffer? {
+        let frames = AVAudioFrameCount(ref.format.sampleRate * seconds)
+        guard frames > 0,
+              let b = AVAudioPCMBuffer(pcmFormat: ref.format, frameCapacity: frames)
+        else { return nil }
+        b.frameLength = frames
+        let channels = Int(ref.format.channelCount)
+        if let d = b.floatChannelData {
+            for c in 0..<channels {
+                memset(d[c], 0, Int(frames) * MemoryLayout<Float>.size)
+            }
+        } else if let d = b.int16ChannelData {
+            for c in 0..<channels {
+                memset(d[c], 0, Int(frames) * MemoryLayout<Int16>.size)
+            }
         }
+        return b
     }
 
     private func play(_ chunks: [AVAudioPCMBuffer]) {
@@ -340,17 +409,55 @@ final class Mouth: NSObject, AVSpeechSynthesizerDelegate {
         return CGFloat(pow(norm, 2.6))
     }
 
-    /// Prefer a natural voice if the machine has one downloaded — the compact
-    /// voices are the ones that make a companion sound like a phone menu.
+    /// Voices ranked for a calm, professional read.
+    ///
+    /// The old ranking sorted by quality and then searched that list BY NAME,
+    /// which threw the sort away: a compact "Ava" beat a premium anything.
+    /// Quality has to win first, because it is the only thing here that
+    /// actually changes how synthetic he sounds. Measured on this Mac: all
+    /// 180 installed voices are quality tier 1 (compact). That is the ceiling
+    /// until enhanced or premium voices are downloaded.
+    static let preferenceKey = "casper.voice"
+
+    /// Calm and measured first, bright and chirpy last. Order is the taste
+    /// call; quality tier still outranks all of it.
+    static let shortlist = ["Serena", "Daniel", "Samantha", "Ava", "Moira",
+                            "Karen", "Tessa", "Fiona", "Allison", "Susan"]
+
+    static func rank(_ v: AVSpeechSynthesisVoice) -> (Int, Int) {
+        let idx = shortlist.firstIndex(where: { v.name.contains($0) }) ?? shortlist.count
+        return (-v.quality.rawValue, idx)      // lower sorts first
+    }
+
+    static func candidates() -> [AVSpeechSynthesisVoice] {
+        AVSpeechSynthesisVoice.speechVoices()
+            .filter { $0.language.hasPrefix("en") }
+            .sorted { rank($0) < rank($1) }
+    }
+
     static func bestVoice() -> AVSpeechSynthesisVoice? {
-        let all = AVSpeechSynthesisVoice.speechVoices().filter {
-            $0.language.hasPrefix("en")
+        if let saved = UserDefaults.standard.string(forKey: preferenceKey),
+           let v = AVSpeechSynthesisVoice(identifier: saved) {
+            return v
         }
-        let byQuality = all.sorted { a, b in a.quality.rawValue > b.quality.rawValue }
-        let wanted = ["Ava", "Zoe", "Evan", "Samantha", "Serena"]
-        for name in wanted {
-            if let v = byQuality.first(where: { $0.name.contains(name) }) { return v }
+        return candidates().first ?? AVSpeechSynthesisVoice(language: "en-US")
+    }
+
+    static func setVoice(_ nameOrId: String) -> AVSpeechSynthesisVoice? {
+        let hit = candidates().first {
+            $0.identifier == nameOrId
+                || $0.name.lowercased() == nameOrId.lowercased()
+                || $0.name.lowercased().contains(nameOrId.lowercased())
         }
-        return byQuality.first ?? AVSpeechSynthesisVoice(language: "en-US")
+        if let v = hit {
+            UserDefaults.standard.set(v.identifier, forKey: preferenceKey)
+        }
+        return hit
+    }
+
+    /// True when this Mac has nothing better than compact voices installed —
+    /// the single biggest thing standing between him and sounding human.
+    static var stuckOnCompactVoices: Bool {
+        !AVSpeechSynthesisVoice.speechVoices().contains { $0.quality.rawValue > 1 }
     }
 }

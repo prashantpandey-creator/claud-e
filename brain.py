@@ -35,6 +35,11 @@ ACTIONS = {
     "go":    lambda arg: ["python3", os.path.join(SKILL_DIR, "go.py")] + ([arg] if arg else []),
     "fix":   lambda arg: ["python3", os.path.join(SKILL_DIR, "go.py"), "--repair-only"] + ([arg] if arg else []),
     "grade": lambda arg: ["python3", os.path.join(SKILL_DIR, "nidra_bridge.py"), "--sleep"],
+    # Reach a live session by id: `tell <sid> <message>`. The console listed
+    # sessions but could not touch one, which is what "not connected enough"
+    # meant — a roster is not a console.
+    "tell":  lambda arg: ["python3", os.path.join(SKILL_DIR, "inbox.py"), "send"]
+                         + (arg.split(" ", 1) if " " in (arg or "") else [arg or "", ""]),
 }
 
 
@@ -403,7 +408,7 @@ async function act(action, arg, value){
   }catch(e){ t.textContent="failed: "+e }
   setTimeout(tick, 1200);
 }
-function esc(s){return String(s||"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]))}
+function esc(s){return String(s||"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
 function bar(p){return `<span style="display:inline-block;width:180px;height:8px;background:#1d1a14;border-radius:4px;vertical-align:middle"><span style="display:block;width:${Math.min(100,p)}%;height:8px;background:${G};border-radius:4px"></span></span>`}
 async function tick(){
   let s; try{ s = await (await fetch("/api/state")).json() }catch(e){ return }

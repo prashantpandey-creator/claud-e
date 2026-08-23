@@ -39,7 +39,8 @@ COORD_DIR = os.environ.get("MEDITATE_COORD_DIR") or os.path.expanduser(
 STORE_DIR = os.environ.get("MEDITATE_STORE_DIR") or os.path.expanduser(
     "~/.claude/meditation/nidra_store")
 
-LIVE_WINDOW = 3600        # s — heartbeat younger than this = session is live
+LIVE_WINDOW = 1800        # s — a session still open; longer and it is history
+WORKING_S = 180           # s — moved this recently = someone is at it RIGHT NOW
 TOUCH_WINDOW = 7200       # s — file touch younger than this = collision-relevant
 DRIFT_WINDOW = 48 * 3600  # s — journal downgrades this recent are "new drift"
 PRUNE_AGE = 24 * 3600     # s — presence files older than this get deleted
@@ -154,6 +155,10 @@ def live_sessions(coord_dir: str = COORD_DIR, exclude: str = "") -> List[Dict[st
             if p.get("sid") == exclude:
                 continue
             p["_age_s"] = int(age)
+            # "live" was anything inside an hour, which counted 74 sessions
+            # while 10 claude processes existed and 6 transcripts had moved in
+            # five minutes. A list that is 7x wrong is a wall, not a console.
+            p["_state"] = "working" if age <= WORKING_S else "idle"
             out.append(p)
         except Exception:
             continue

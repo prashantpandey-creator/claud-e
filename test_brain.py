@@ -219,6 +219,26 @@ def test_state_survives_a_session_that_has_touched_no_files():
     assert last_file({"files": {"/a/late.py": 9, "/a/early.py": 1}}) == "late.py"
 
 
+def test_console_can_reach_a_named_session():
+    """A roster you cannot touch is not a console. `tell <sid> <message>` must
+    build a real inbox send, and must not fall apart on a missing message."""
+    cmd = br.ACTIONS["tell"]("abc123 the payment key is missing")
+    assert cmd[-3:] == ["send", "abc123", "the payment key is missing"], cmd
+    # sid with no message: still well-formed, never an IndexError
+    bare = br.ACTIONS["tell"]("abc123")
+    assert bare[-2] == "abc123" and len(bare) == len(cmd), bare
+
+
+def test_live_sessions_separate_working_from_merely_recent():
+    """Liveness was 'anything inside an hour', which called 74 sessions live
+    while 10 claude processes existed. The working tier is the honest one."""
+    from coordination import live_sessions, WORKING_S
+    for s in live_sessions():
+        assert s["_state"] in ("working", "idle"), s
+        if s["_state"] == "working":
+            assert s["_age_s"] <= WORKING_S, s
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

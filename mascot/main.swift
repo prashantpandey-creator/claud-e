@@ -15,6 +15,73 @@ import Speech
 // `casper --transcribe <audiofile>` proves on-device recognition works on THIS
 // machine, without needing anyone to talk. It runs inside the bundle because a
 // bare binary cannot request speech authorisation at all — it aborts.
+// `casper --voices`            list what this Mac can speak with, best first
+// `casper --audition`          say the same line in the top candidates
+// `casper --voice Serena`      remember one
+//
+// "Soothing" is a taste call, not a measurement, so the only honest way to
+// choose is to hear them side by side.
+if CommandLine.arguments.count > 1,
+   ["--voices", "--audition", "--voice"].contains(CommandLine.arguments[1]) {
+    _ = NSApplication.shared
+    let mode = CommandLine.arguments[1]
+
+    if Mouth.stuckOnCompactVoices {
+        print("NOTE: every voice installed here is the compact tier. That is the")
+        print("      ceiling on how human he can sound — no rate or pitch setting")
+        print("      fixes it. System Settings > Accessibility > Spoken Content >")
+        print("      System Voice > Manage Voices, then pick any (Enhanced) or")
+        print("      (Premium) English voice. Roughly 100-500 MB each, one time.")
+        print("")
+    }
+
+    if mode == "--voice", CommandLine.arguments.count > 2 {
+        if let v = Mouth.setVoice(CommandLine.arguments[2]) {
+            print("voice set: \(v.name) (\(v.language))")
+        } else {
+            print("no voice matching \(CommandLine.arguments[2])")
+            exit(1)
+        }
+        exit(0)
+    }
+
+    let top = Array(Mouth.candidates().prefix(mode == "--voices" ? 40 : 6))
+    if mode == "--voices" {
+        let tier = ["", "compact", "enhanced", "premium"]
+        for v in top {
+            print(String(format: "  %-10s %-6s %@", (v.name as NSString).utf8String!,
+                         (v.language as NSString).utf8String!,
+                         tier[min(3, v.quality.rawValue)]))
+        }
+        exit(0)
+    }
+
+    // audition: one line, each voice, in order of preference
+    let line = "Payments are the one thing actually bleeding. "
+             + "Want me to go find where that key dropped?"
+    var i = 0
+    let m = Mouth()
+    func next() {
+        guard i < top.count else { exit(0) }
+        let v = top[i]; i += 1
+        print("  \(i). \(v.name) (\(v.language)) — \(v.identifier)")
+        UserDefaults.standard.set(v.identifier, forKey: Mouth.preferenceKey)
+        m.say(line)
+        var spoke = false
+        let t0 = Date()
+        Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { tm in
+            if m.speaking { spoke = true }
+            if (spoke && !m.speaking) || Date().timeIntervalSince(t0) > 20 {
+                tm.invalidate()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { next() }
+            }
+        }
+    }
+    print("auditioning \(top.count) voices — say `casper --voice <name>` to keep one\n")
+    next()
+    RunLoop.main.run()
+}
+
 if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--transcribe" {
     _ = NSApplication.shared
     guard let rec = SFSpeechRecognizer(locale: Locale(identifier: "en-US")) else {
@@ -79,6 +146,15 @@ if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--say" {
         let done = (started && !m.speaking && samples.count > 4)
         if done || Date().timeIntervalSince(t0) > 12 {
             tm.invalidate()
+            // longest run of near-silence: the proof that the pauses between
+            // sentences actually reached the audio, rather than just the code
+            var run = 0, longest = 0
+            for s in samples {
+                if s < 0.03 { run += 1; longest = max(longest, run) } else { run = 0 }
+            }
+            print(String(format: "longest quiet run: %.2fs  %@",
+                         Double(longest) * 0.05,
+                         longest >= 3 ? "(sentence pauses present)" : "(NO pauses)"))
             let nz = samples.filter { $0 > 0.02 }
             let mx = samples.max() ?? 0
             let mean = samples.isEmpty ? 0 : samples.reduce(0,+) / Double(samples.count)

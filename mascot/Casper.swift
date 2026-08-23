@@ -879,6 +879,7 @@ final class App: NSObject, NSApplicationDelegate {
                       !self.mouth.speaking else { return }
                 self.lastSpoken = b.headline
                 self.pendingAction = b.action
+                self.ghost.startle()      // notice it before saying it
                 let offer = b.action.isEmpty ? "" :
                     "  Want me to \(b.action.contains("fix") ? "fix it" : "get someone on it")?"
                 self.say(b.headline + offer)
@@ -894,7 +895,14 @@ final class App: NSObject, NSApplicationDelegate {
         DispatchQueue.global().async {
             let out = Meditate.perform(action)
             let first = out.split(separator: "\n").first.map(String.init) ?? "Done."
-            DispatchQueue.main.async { self.say(first) }
+            DispatchQueue.main.async {
+                // The one unprompted celebration he gets: a job you asked for,
+                // finished. Tying it to anything cheaper makes it worthless.
+                let failed = first.lowercased().contains("error")
+                    || first.lowercased().contains("nothing to run")
+                if !failed { self.ghost.celebrate() }
+                self.say(first)
+            }
         }
     }
 
