@@ -16,11 +16,12 @@ import sys
 from typing import Dict, List
 
 SKILL_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import paths
 NIDRA_ROOT = paths.nidra_root() or ""
 STORE_DIR = os.path.expanduser("~/.claude/meditation/nidra_store")
 
 sys.path.insert(0, SKILL_DIR)
-import paths
 if NIDRA_ROOT:
     sys.path.insert(0, NIDRA_ROOT)
 
@@ -39,7 +40,10 @@ def _envelope(success, data, errors=None, store_dir=None):
 # directory under claude-sync/memory is real knowledge; grading only the first
 # one made coverage read 100% while other stores went ungraded.
 MEMORY_ROOT = paths.memory_root()
-MEMORY_DIR = os.path.join(MEMORY_ROOT, paths.project_slug())
+# (MEMORY_DIR was here: MEMORY_ROOT + a hardcoded "-Users-badenath-projects-
+# vedic-puran". It had no readers — every grading path walks _all_memory_dirs()
+# instead — so it was the author's home directory sitting in the package for
+# nothing. Removed rather than made cwd-dependent.)
 
 
 def _memory_dirs(root=None):
@@ -112,12 +116,14 @@ def run(do_sleep=False, store_dir=None, memory_root=None, form_days=None,
         from nidra.store import Store
         from nidra.adapters.meditate import import_sessions
     except ImportError as e:
-        return _envelope(False, {}, [{"code": "import", "message": str(e)}], store_dir)
+        return _envelope(False, {}, [{"code": "import", "message": str(e),
+             "fix": "run: bash %s/install.sh  (fetches the grading engine), or set MEDITATE_NIDRA_ROOT to a nidra checkout" % SKILL_DIR}], store_dir)
 
     try:
         from sessions import scan_all_projects
     except ImportError as e:
-        return _envelope(False, {}, [{"code": "import", "message": str(e)}], store_dir)
+        return _envelope(False, {}, [{"code": "import", "message": str(e),
+             "fix": "run: bash %s/install.sh  (fetches the grading engine), or set MEDITATE_NIDRA_ROOT to a nidra checkout" % SKILL_DIR}], store_dir)
 
     # sessions injectable: the suite called this 11x and each call rescanned
     # the owner's 126 real transcripts (2.6s each = 26s, the slowest suite and

@@ -181,15 +181,26 @@ echo "  [ok]  $MEDITATION_DIR"
 # ---- 5. Nidra grading engine
 echo
 echo "  Checking nidra grading engine..."
-NIDRA_ROOT="$HOME/projects/nidra"
+# The engine lives in the tool's OWN directory, not scattered into the user's
+# home. An existing checkout wins, so nobody's current setup moves.
+if [ -d "$HOME/projects/nidra/nidra" ]; then
+    NIDRA_ROOT="$HOME/projects/nidra"
+else
+    NIDRA_ROOT="$MEDITATION_DIR/nidra"
+fi
 if [ ! -d "$NIDRA_ROOT/nidra" ]; then
     echo "  Fetching the grading engine (one-time)..."
-    mkdir -p "$HOME/projects"
     if git clone --depth 1 https://github.com/prashantpandey-creator/nidra "$NIDRA_ROOT" >/dev/null 2>&1; then
         echo "  [ok]  grading engine installed"
     else
         echo "  [warn]  could not fetch the grading engine — check your network"
+        echo "          meditate works without it; grading stays off until it is present."
     fi
+fi
+# Record where it landed, so every module resolves the same answer without
+# guessing. paths.py reads this file first, after an explicit env override.
+if [ -d "$NIDRA_ROOT/nidra" ]; then
+    printf '%s\n' "$NIDRA_ROOT" > "$MEDITATION_DIR/nidra-path"
 fi
 if [ -d "$NIDRA_ROOT/nidra" ]; then
     echo "  [ok]  grading engine ready"

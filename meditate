@@ -27,6 +27,14 @@ case "${1:-}" in
   install)
     bash "$DIR/install.sh"
     ;;
+  uninstall|remove)
+    shift
+    bash "$DIR/uninstall.sh" "$@"
+    ;;
+  where|paths)
+    shift
+    python3 "$DIR/paths.py" "$@"
+    ;;
   metrics)
     shift
     python3 "$DIR/metrics.py" "$@"
@@ -236,9 +244,8 @@ else:
     shift
     # `fleet` shows; `fleet clear` acts. Watching a stuck row for 96 minutes
     # with no way to dismiss it is what made this necessary.
-    if [ "${1:-}" = "clear" ]; then
-      shift
-      python3 "$DIR/fleet.py" clear "$@"
+    if [ "${1:-}" = "clear" ] || [ "${1:-}" = "close" ]; then
+      python3 "$DIR/fleet.py" "$@"
     else
       python3 "$DIR/drive.py" fleet "$@"
     fi

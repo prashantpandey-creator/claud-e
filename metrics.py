@@ -18,6 +18,9 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import paths
+
 STORE_DIR = os.path.expanduser("~/.claude/meditation/nidra_store")
 JOURNAL_PATH = os.path.join(STORE_DIR, "memories.jsonl")
 EVENTS_PATH = os.path.join(STORE_DIR, "journal.jsonl")
@@ -153,7 +156,6 @@ def compute_metrics() -> Dict[str, Any]:
     # --- Coverage ---
     try:
         sys.path.insert(0, SKILL_DIR)
-import paths
         from sessions import scan_all_projects
         scan = scan_all_projects(cap=20)
         total_sessions = scan["data"]["total_sessions"] if scan["success"] else 0

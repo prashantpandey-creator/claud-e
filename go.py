@@ -277,7 +277,14 @@ def run(n: Optional[int] = None, repair_only: bool = False,
                     f.write(json.dumps({"goal": g["name"], "milestone": g["next"],
                                         "ts_epoch": time.time(),
                                         "ts": time.strftime("%Y-%m-%dT%H:%M:%S+00:00",
-                                                            time.gmtime())}) + "\n")
+                                                            time.gmtime()),
+                                        # Which Terminal window this agent got.
+                                        # drive.py recorded it; this writer did
+                                        # not, so nothing could ever close the
+                                        # right window for a goal launched here.
+                                        "window_id": getattr(launcher,
+                                                             "last_window_id", ""),
+                                        }) + "\n")
             except OSError:
                 pass
     return result
