@@ -50,7 +50,19 @@ jobs:
           exit $fail
 
       - name: Doctor
-        run: python3 doctor.py
+        # A runner has no Claude Code binary and has never run a stilling
+        # pass; neither says anything about this code. Fail on everything
+        # else — tests, hook wiring, heartbeat registration.
+        run: |
+          python3 doctor.py --json > /tmp/doc.json || true
+          python3 - <<'PY'
+          import json
+          d = json.load(open("/tmp/doc.json"))["data"]
+          allowed = {"prerequisites", "stillness_overdue"}
+          real = [i for i in d["issues"] if i not in allowed]
+          print("issues:", d["issues"], "-> failing on:", real or "none")
+          raise SystemExit(1 if real else 0)
+          PY
 
       - name: The page's JavaScript must parse
         # A syntax error here serves HTTP 200 with every section blank; it

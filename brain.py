@@ -296,7 +296,23 @@ def state() -> Dict[str, Any]:
     return d
 
 
-def _casper_briefing() -> Dict[str, Any]:
+_BRIEFING_CACHE: Dict[str, Any] = {"at": 0.0, "data": None}
+BRIEFING_TTL_S = 30.0
+
+
+def _casper_briefing(ttl_s: float = BRIEFING_TTL_S) -> Dict[str, Any]:
+    """What to say. Cached — measured at 6.76s uncached, which WAS the entire
+    cost of /api/state: warm polls took 7.18s against a 4-second poll, so
+    requests piled up and the console felt dead while every number in it was
+    current. Thirty seconds is still live for a sentence about your week."""
+    if time.time() - _BRIEFING_CACHE["at"] < ttl_s and _BRIEFING_CACHE["data"]:
+        return _BRIEFING_CACHE["data"]
+    d = _casper_briefing_uncached()
+    _BRIEFING_CACHE.update({"at": time.time(), "data": d})
+    return d
+
+
+def _casper_briefing_uncached() -> Dict[str, Any]:
     try:
         import voice as vc
         return vc.briefing()
@@ -441,17 +457,59 @@ def _recent_events(n: int = 10) -> List[Dict[str, str]]:
 
 PAGE = """<!doctype html><meta charset="utf-8">
 <title>Pulse — your Claude, live</title>
-<body style="background:#0b0a08;color:#d8d2c4;font:14px/1.5 -apple-system,Helvetica,sans-serif;margin:0;padding:40px 52px;max-width:1000px">
-<div style="letter-spacing:.35em;font-size:11px;color:#6b6557">MEDITATE · PULSE</div>
+<style>
+  :root{
+    --bg:#0b0a08; --panel:#100e0b; --line:#231f19; --line-soft:#191611;
+    --ink:#e6e0d2; --ink-dim:#8a8578; --ink-faint:#6b6557;
+    --gold:#E3B140; --gold-soft:#c9973a; --alert:#c96442;
+    --r:12px; --s2:12px; --s3:20px; --s4:32px;
+  }
+  *{box-sizing:border-box}
+  body{background:var(--bg);color:var(--ink);margin:0;
+       font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,sans-serif;
+       padding:var(--s4) 44px 64px;max-width:1120px;
+       -webkit-font-smoothing:antialiased}
+  a{color:var(--gold)}
+  .eyebrow{letter-spacing:.32em;font-size:10.5px;color:var(--ink-faint);
+           text-transform:uppercase}
+  .lede{font-size:17px;line-height:1.6;color:var(--ink);max-width:74ch;
+        margin:var(--s3) 0 var(--s2)}
+  .card{background:var(--panel);border:1px solid var(--line);
+        border-radius:var(--r);padding:16px 18px}
+  .grid{display:grid;gap:14px}
+  .cols-3{grid-template-columns:repeat(auto-fit,minmax(290px,1fr))}
+  .stats{display:grid;gap:10px;
+         grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
+  .stat{background:var(--panel);border:1px solid var(--line-soft);
+        border-radius:10px;padding:12px 14px}
+  .muted{color:var(--ink-dim)}
+  .faint{color:var(--ink-faint)}
+  .sec{margin-top:var(--s4);display:block}
+  .b{cursor:pointer;border:1px solid var(--line);background:transparent;
+     color:var(--gold);border-radius:9px;padding:7px 14px;font-size:13px;
+     transition:background .15s,border-color .15s}
+  .b:hover{background:#1b1710;border-color:var(--gold-soft)}
+  .cap{font-size:10.5px;color:var(--ink-faint);margin-top:5px;line-height:1.4}
+  details>summary{list-style:none;cursor:pointer;padding:10px 0}
+  details>summary::-webkit-details-marker{display:none}
+  details>summary::before{content:"\25b8  ";color:var(--ink-faint)}
+  details[open]>summary::before{content:"\25be  "}
+</style>
+<body>
+<div class="eyebrow">Meditate \u00b7 Pulse</div>
 <div style="font-size:22px;margin:6px 0 2px;color:#E3B140">Pulse <span style="font-size:13px;color:#8a8578">· your sessions, goals, memory and fleet — live. One click runs, and shows what ran.</span></div>
 <div id="meta" style="font-size:12px;color:#8a8578"></div>
-<div id="brief" style="margin:16px 0 6px;font-size:16.5px;line-height:1.55;color:#e6e0d2;max-width:820px"></div>
-<div id="headline" style="margin:6px 0 4px;font-size:13px;color:#8a8578"></div>
+<div id="brief" class="lede"></div>
+<div id="headline" class="muted" style="font-size:13px"></div>
 <div id="next" style="margin:4px 0 14px;color:#E3B140"></div>
-<div style="display:flex;gap:36px;flex-wrap:wrap;margin:4px 0 8px">
-  <div style="min-width:280px"><div style="letter-spacing:.3em;font-size:11px;color:#c96442">NEEDS YOU</div><div id="needs" style="font-size:12.5px;margin-top:6px"></div></div>
-  <div style="min-width:320px"><div style="letter-spacing:.3em;font-size:11px;color:#c96442">CHATS WAITING ON YOU</div><div id="owed" style="font-size:12.5px;margin-top:6px"></div><div id="owedrest" style="font-size:11px;color:#6f6a5f;margin-top:4px"></div></div>
-  <div style="min-width:280px"><div style="letter-spacing:.3em;font-size:11px;color:#6b6557">MOVING BY ITSELF</div><div id="moving" style="font-size:12.5px;margin-top:6px"></div></div>
+<div class="grid cols-3" style="margin-top:18px">
+  <div class="card"><span class="eyebrow" style="color:var(--alert)">Needs you</span>
+    <div id="needs" style="font-size:12.5px;margin-top:8px"></div></div>
+  <div class="card"><span class="eyebrow" style="color:var(--alert)">Chats waiting on you</span>
+    <div id="owed" style="font-size:12.5px;margin-top:8px"></div>
+    <div id="owedrest" class="faint" style="font-size:11px;margin-top:8px"></div></div>
+  <div class="card"><span class="eyebrow">Moving by itself</span>
+    <div id="moving" style="font-size:12.5px;margin-top:8px"></div></div>
 </div>
 <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start">
   <div style="max-width:180px"><button onclick="act('go','')" class="b" title="Opens one Terminal window per goal below, each with an agent working that goal's next milestone. Repair goes first if the queue is open.">launch fleet</button>
@@ -466,9 +524,9 @@ PAGE = """<!doctype html><meta charset="utf-8">
 <style>.b{cursor:pointer;border:1px solid #2a2620;background:transparent;color:#E3B140;border-radius:7px;padding:6px 13px;font-size:13px}.b:hover{background:#1d1a14}
 .cap{font-size:10.5px;color:#6b6557;margin-top:4px;line-height:1.35}</style>
 <details style="margin-top:18px"><summary style="cursor:pointer;letter-spacing:.3em;font-size:11px;color:#6b6557">THE NUMBERS <span style="letter-spacing:0;color:#4a463c">— every table the sentences above were computed from</span></summary>
-<div id="stats" style="display:flex;flex-wrap:wrap;gap:24px;margin:18px 0"></div>
+<div id="stats" class="stats" style="margin:18px 0"></div>
 <div style="font-size:11.5px;color:#6b6557;max-width:760px;margin:-4px 0 4px">what "a memory" means here: one fact about your work, saved with a receipt — the exact file and line it came from. Facts are re-checked against reality; a fact that stops matching goes to the repair queue instead of being trusted. Hover any number for its meaning.</div>
-<div style="letter-spacing:.3em;font-size:11px;color:#6b6557;margin-top:26px">LIVE SESSIONS <span style="letter-spacing:0;color:#4a463c">— each orb beats with its session: fast = working right now, dim ember = gone quiet (prāṇa, the breath)</span></div>
+<div class="sec"><span class="eyebrow">Live Sessions</span> <span style="letter-spacing:0;color:#4a463c">— each orb beats with its session: fast = working right now, dim ember = gone quiet (prāṇa, the breath)</span></div>
 <div id="live" style="display:flex;flex-wrap:wrap;gap:26px;margin-top:14px"></div>
 <style>
 @keyframes prana {
@@ -479,17 +537,17 @@ PAGE = """<!doctype html><meta charset="utf-8">
        background:radial-gradient(circle at 35% 35%, #f5d68a, #E3B140 55%, #6b4e12);
        animation:prana 2s ease-in-out infinite; margin:0 auto 8px; }
 </style>
-<div style="letter-spacing:.3em;font-size:11px;color:#6b6557;margin-top:26px">PROJECTS <span style="letter-spacing:0;color:#4a463c" id="projlabel">— recent attention vs the repo's whole history</span></div>
+<div class="sec"><span class="eyebrow">Projects</span> <span style="letter-spacing:0;color:#4a463c" id="projlabel">— recent attention vs the repo's whole history</span></div>
 <div id="projects" style="font-size:13px;margin-top:8px"></div>
 </details>
-<div style="letter-spacing:.3em;font-size:11px;color:#6b6557;margin-top:22px">GOALS <span style="letter-spacing:0;color:#4a463c">— stuck first, then closest to done</span></div>
+<div class="sec"><span class="eyebrow">Goals</span> <span style="letter-spacing:0;color:#4a463c">— stuck first, then closest to done</span></div>
 <div id="mile" style="font-size:12px;margin:6px 0"></div>
 <div id="goals"></div>
-<div style="letter-spacing:.3em;font-size:11px;color:#6b6557;margin-top:22px">FLEET</div>
+<div class="sec"><span class="eyebrow">Fleet</span> </div>
 <div id="fleet" style="font-size:13px"></div>
-<div style="letter-spacing:.3em;font-size:11px;color:#6b6557;margin-top:22px">REPAIR QUEUE <span style="letter-spacing:0;color:#4a463c">— facts whose receipts stopped matching reality; not trusted until fixed</span></div>
+<div class="sec"><span class="eyebrow">Repair Queue</span> <span style="letter-spacing:0;color:#4a463c">— facts whose receipts stopped matching reality; not trusted until fixed</span></div>
 <div id="repair" style="font-size:13px"></div>
-<div style="letter-spacing:.3em;font-size:11px;color:#6b6557;margin-top:22px">ACTIVITY</div>
+<div class="sec"><span class="eyebrow">Activity</span> </div>
 <div id="activity" style="font-size:12px;color:#8a8578"></div>
 <div id="digest" style="margin-top:24px;font-size:12px;color:#8a8578"></div>
 <div style="margin-top:6px;font-size:11px;color:#6b6557">agents run in Terminal windows on this Mac; they appear in LIVE SESSIONS as they work, and milestones tick only when their work verifies</div>
@@ -537,7 +595,9 @@ async function tick(){
   document.getElementById("moving").innerHTML = (ins.moving||[]).map(x=>
     `<div style="margin:2px 0;color:#d8d2c4">▸ ${esc(x)}</div>`).join("") || `<div style="color:${DIM}">no agents reporting</div>`;
   const v = s.store.active? (100*s.store.verified/s.store.active).toFixed(1):"0";
-  const stat=(val,lab,tip)=>`<div title="${tip||""}" style="cursor:default"><div style="font-size:24px;color:${G}">${val}</div><div style="font-size:12px;color:${DIM}">${lab}</div></div>`;
+  const stat=(val,lab,tip)=>`<div class="stat" title="${tip||""}">`
+    +`<div style="font-size:25px;line-height:1.1;color:${G};font-variant-numeric:tabular-nums">${val}</div>`
+    +`<div class="muted" style="font-size:11px;margin-top:4px">${lab}</div></div>`;
   document.getElementById("stats").innerHTML =
     stat(s.store.active,"facts it knows",
       "A memory here = one fact about your work, saved with a receipt: the exact file and line it came from, so it can be re-checked forever.")+
@@ -764,7 +824,19 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 def make_server(port: int = DEFAULT_PORT) -> ThreadingHTTPServer:
-    return ThreadingHTTPServer(("127.0.0.1", port), _Handler)
+    srv = ThreadingHTTPServer(("127.0.0.1", port), _Handler)
+    # Fill the caches before anyone asks. The first poll costs ~5.7s cold, so
+    # without this the console opens to an empty screen and fills in later —
+    # which is exactly what "not connected enough" looks like.
+    threading.Thread(target=_warm, daemon=True).start()
+    return srv
+
+
+def _warm() -> None:
+    try:
+        state()
+    except Exception:
+        pass
 
 
 def main(argv: Optional[List[str]] = None) -> int:
