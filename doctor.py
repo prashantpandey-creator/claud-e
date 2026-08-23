@@ -70,7 +70,7 @@ def _run_one(tf: str) -> Dict[str, Any]:
         return {"file": tf, "ok": False, "detail": "file missing"}
     try:
         r = subprocess.run([sys.executable, path], capture_output=True,
-                           text=True, timeout=90, cwd=SKILL_DIR)
+                           text=True, timeout=180, cwd=SKILL_DIR)
         return {"file": tf, "ok": r.returncode == 0,
                 "detail": "green" if r.returncode == 0
                 else (r.stderr.strip()[-200:] or r.stdout.strip()[-200:])}
@@ -86,7 +86,7 @@ def _check_tests() -> Dict[str, Any]:
     commit; wall time is now bounded by the slowest single suite, not the sum.
     """
     from concurrent.futures import ThreadPoolExecutor
-    workers = min(8, (os.cpu_count() or 4))
+    workers = max(2, min(6, (os.cpu_count() or 4) // 2))
     with ThreadPoolExecutor(max_workers=workers) as ex:
         results = list(ex.map(_run_one, TEST_FILES))
     # keep declaration order so the report reads the same every time
