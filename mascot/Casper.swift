@@ -83,6 +83,24 @@ final class Meditate {
                      facts: 0, verified: 0)
     }
 
+    /// The short list of things worth attention — one spoken line each, with
+    /// the command that would deal with it.
+    static func agenda() -> [(say: String, action: String)] {
+        let out = run([skillDir + "/voice.py", "--agenda"], timeout: 40)
+        return out.split(separator: "\n").compactMap { line in
+            let parts = String(line).components(separatedBy: "\t")
+            guard let first = parts.first, !first.isEmpty else { return nil }
+            return (say: first, action: parts.count > 1 ? parts[1] : "")
+        }
+    }
+
+    /// The first line he ever says. Comes from the tool, not from Swift, so
+    /// it can name something true about THIS machine.
+    static func hello() -> String {
+        return run([skillDir + "/voice.py", "--hello"], timeout: 30)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     /// Ask Casper's reasoning brain a real question (headless claude).
     static func advise(_ question: String) -> String {
         let out = run([skillDir + "/advisor.py", question], timeout: 90)
@@ -280,7 +298,7 @@ final class GhostView: NSView {
             let r = CGFloat.random(in: 62...96)
             sparks.append(Spark(x: cx + cos(a) * r, y: cy + sin(a) * r,
                                 vx: -cos(a) * r * 1.5, vy: -sin(a) * r * 1.5,
-                                life: 0.85))
+                                life: 0.62))   // gone at the moment he lands
         }
     }
 
@@ -487,7 +505,13 @@ final class GhostView: NSView {
             let pop = max(0.02, 1 + c3 * pow(x - 1, 3) + c1 * pow(x - 1, 2))
             bw *= pop; bh *= pop
         }
-        let ty = h * 0.10 + bob
+        // While arriving, scale about his CENTRE, not his top edge. Scaling
+        // from the top anchor left a tiny ghost stranded above the point the
+        // sparks were converging on — the two halves of the effect
+        // disagreeing about where he was about to be.
+        let arriveShift: CGFloat = appear < 1
+            ? (h * 0.10 + h * 0.70 / 2) - (h * 0.10 + bh / 2) : 0
+        let ty = h * 0.10 + bob + arriveShift
         let left = cx - bw / 2
 
         // ---- ground shadow: what makes him sit in the world, not float on it
@@ -735,6 +759,9 @@ final class App: NSObject, NSApplicationDelegate {
     var serverState = "?"
 
     var pendingAction = ""
+    /// What "Yes" means at this moment: read the list, or run the command.
+    var pendingKind = ""
+    var agendaItems: [(say: String, action: String)] = []
     var lastSpoken = ""
     var busy = false
 
@@ -804,6 +831,25 @@ final class App: NSObject, NSApplicationDelegate {
         showOffer(false)
         refreshMicButton()
         setBubble("")
+
+        // The very first run: he gathers himself out of nothing in front of
+        // you and introduces himself. Once only — a trick you have seen twice
+        // is furniture, and every launch after this he is simply already there.
+        if !UserDefaults.standard.bool(forKey: App.arrivedKey) {
+            UserDefaults.standard.set(true, forKey: App.arrivedKey)
+            ghost.materialize()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.7) { [weak self] in
+                guard let self = self else { return }
+                DispatchQueue.global().async {
+                    let line = Meditate.hello()
+                    DispatchQueue.main.async {
+                        self.say(line.isEmpty
+                                 ? "Oh — hello. I'm Casper. Click me any time."
+                                 : line)
+                    }
+                }
+            }
+        }
 
         window.makeKeyAndOrderFront(nil)
         NSApp.setActivationPolicy(.accessory)       // menubar-less companion
@@ -929,15 +975,51 @@ final class App: NSObject, NSApplicationDelegate {
     /// because the rule that waits for a pause had him silent all day — anyone
     /// working at a keyboard is never idle long enough for it to fire.
     func greet() {
-        var line = "Hi, I'm Casper. I keep an eye on your work. "
-                 + "Click me any time and just talk."
-        if let b = Meditate.brief(), !b.headline.isEmpty, b.kind != "clear" {
-            line += " Right now: " + b.headline
-            pendingAction = b.action
+        // Say what he is and what he is for BEFORE saying anything about the
+        // work. Someone meeting him for the first time does not need a status
+        // line — they need to know what he can be asked for.
+        var line = "Hi, I'm Casper. I keep track of what you're building "
+                 + "\u{2014} what you told me, what's still true, and what's "
+                 + "waiting on you. Ask me anything about your work, or tell me "
+                 + "to fix something and I'll put someone on it."
+
+        agendaItems = Meditate.agenda()
+        let real = agendaItems.filter { !$0.action.isEmpty }
+        if real.isEmpty {
+            line += " I've been through everything just now, and nothing's "
+                  + "broken or waiting on you."
+            showOffer(false)
+        } else {
+            line += " I've just been through everything. There "
+                  + (real.count == 1 ? "is one thing" : "are \(real.count) things")
+                  + " worth your attention. Want to hear "
+                  + (real.count == 1 ? "it" : "them") + "?"
+            pendingKind = "agenda"
+            style(yesBtn, title: "Yes, tell me", accent: true)
+            showOffer(true)
         }
         say(line)
-        showOffer(!pendingAction.isEmpty)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 6) { self.check() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 25) { self.check() }
+    }
+
+    /// Read the list out, then offer to act on the first one.
+    func readAgenda() {
+        let real = agendaItems.filter { !$0.action.isEmpty }
+        guard !real.isEmpty else { say("Nothing on the list."); return }
+        var line = ""
+        for (i, item) in real.enumerated() {
+            if real.count > 1 {
+                line += (i == 0 ? "First, " : (i == 1 ? "Second, " : "Then, "))
+            }
+            line += item.say + " "
+        }
+        pendingAction = real[0].action
+        pendingKind = "run"
+        line += real.count == 1 ? "Want me to get on it?"
+                                : "Want me to start with the first one?"
+        say(line)
+        style(yesBtn, title: "Yes, do it", accent: true)
+        showOffer(true)
     }
 
     /// Poll meditate. If there's something worth saying AND you're at a pause,
@@ -964,7 +1046,14 @@ final class App: NSObject, NSApplicationDelegate {
     }
 
     @objc func sayYes() {
+        if pendingKind == "agenda" {          // "Yes, tell me" — read the list
+            pendingKind = ""
+            showOffer(false)
+            readAgenda()
+            return
+        }
         let action = pendingAction
+        pendingKind = ""
         showOffer(false)
         setBubble("On it…")
         DispatchQueue.global().async {
@@ -1057,6 +1146,9 @@ final class App: NSObject, NSApplicationDelegate {
         parts.append("speaking=" + (mouth.speaking ? "yes" : "no"))
         parts.append(String(format: "mouth=%.3f", Double(mouth.drive)))
         parts.append("armed=" + (armed ? "yes" : "no"))
+        parts.append("yesMeans=" + (pendingKind.isEmpty ? "-" : pendingKind))
+        parts.append("yesLabel=" + yesBtn.title.replacingOccurrences(of: " ", with: "_"))
+        parts.append("agenda=" + String(agendaItems.filter { !$0.action.isEmpty }.count))
         // Which connections are actually live, checked at runtime rather than
         // by reading the source and calling it wired.
         var wired: [String] = []
@@ -1088,6 +1180,7 @@ final class App: NSObject, NSApplicationDelegate {
     /// dot appears, he starts transcribing the room, and nobody asked him to.
     /// A companion does not get to decide that for you.
     static let micKey = "micEnabled"
+    static let arrivedKey = "hasArrived"
 
     var micEnabled: Bool {
         get { UserDefaults.standard.bool(forKey: App.micKey) }
