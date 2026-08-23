@@ -2,6 +2,7 @@
 from __future__ import annotations
 import json
 import os
+import freshcheck as _fresh
 import sys
 import tempfile
 import unittest
@@ -50,6 +51,8 @@ class TestMetrics(unittest.TestCase):
         self.assertEqual(_bar(1.0, 5), "█████")
 
     def test_coverage_positive(self):
+        if _fresh.is_fresh():
+            self.skipTest("fresh install — nothing graded yet")
         from metrics import compute_metrics
         cov = compute_metrics()["coverage"]
         self.assertGreater(cov["sessions_known"], 0)

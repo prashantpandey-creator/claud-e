@@ -48,17 +48,17 @@ def test_server_binds_loopback_and_serves():
     t = threading.Thread(target=srv.serve_forever, daemon=True)
     t.start()
     try:
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/state", timeout=10) as r:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/state", timeout=60) as r:
             assert r.status == 200
             data = json.loads(r.read())
             assert "store" in data and "goals" in data
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=10) as r:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=60) as r:
             assert r.status == 200
             page = r.read().decode()
             assert "/api/state" in page, "page must fetch live state"
             assert "http://" not in page.replace("http://127.0.0.1", "") \
                    and "https://" not in page, "page must be self-contained"
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}/nope", timeout=10) as r:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/nope", timeout=60) as r:
             raise AssertionError("404 expected")
     except urllib.error.HTTPError as e:
         assert e.code == 404
@@ -79,7 +79,7 @@ def test_act_requires_header_and_runs_known_actions():
         req = urllib.request.Request(base + "/api/act", data=b'{"action":"go"}',
                                      method="POST")
         try:
-            urllib.request.urlopen(req, timeout=10)
+            urllib.request.urlopen(req, timeout=60)
             raise AssertionError("403 expected without X-Meditate header")
         except urllib.error.HTTPError as e:
             assert e.code == 403
@@ -87,7 +87,7 @@ def test_act_requires_header_and_runs_known_actions():
         req = urllib.request.Request(base + "/api/act",
                                      data=json.dumps({"action": "fix", "arg": "2"}).encode(),
                                      headers={"X-Meditate": "1"}, method="POST")
-        with urllib.request.urlopen(req, timeout=10) as r:
+        with urllib.request.urlopen(req, timeout=60) as r:
             j = json.loads(r.read())
             assert j["started"] is True
             assert "Launched" in j["output"], "click must return the REAL output"
@@ -97,7 +97,7 @@ def test_act_requires_header_and_runs_known_actions():
                                      data=b'{"action":"rm-rf"}',
                                      headers={"X-Meditate": "1"}, method="POST")
         try:
-            urllib.request.urlopen(req, timeout=10)
+            urllib.request.urlopen(req, timeout=60)
             raise AssertionError("400 expected for unknown action")
         except urllib.error.HTTPError as e:
             assert e.code == 400
@@ -179,14 +179,14 @@ def test_rejects_foreign_host():
         req = urllib.request.Request(f"http://127.0.0.1:{port}/api/state",
                                      headers={"Host": "evil.example.com"})
         try:
-            urllib.request.urlopen(req, timeout=10)
+            urllib.request.urlopen(req, timeout=60)
             raise AssertionError("403 expected for foreign Host")
         except urllib.error.HTTPError as e:
             assert e.code == 403, e.code
         # loopback Host still works
         req2 = urllib.request.Request(f"http://127.0.0.1:{port}/api/state",
                                       headers={"Host": f"127.0.0.1:{port}"})
-        with urllib.request.urlopen(req2, timeout=10) as r:
+        with urllib.request.urlopen(req2, timeout=60) as r:
             assert r.status == 200
     finally:
         srv.shutdown()

@@ -167,7 +167,14 @@ def _check_heartbeat() -> Dict[str, Any]:
 
 def _check_stillness() -> Dict[str, Any]:
     if not os.path.isfile(STILLNESS_PATH):
-        return {"exists": False, "age_days": None, "overdue": True}
+        # A new install has never run a stilling pass. "Overdue" says the
+        # user is behind on something they have not started, and a fresh
+        # install that reports a problem teaches people to ignore the report.
+        import freshcheck as _fresh
+        never_used = _fresh.is_fresh()
+        return {"exists": False, "age_days": None,
+                "overdue": not never_used,
+                "never_run": never_used}
     mtime = os.path.getmtime(STILLNESS_PATH)
     age_days = (time.time() - mtime) / 86400
     return {
@@ -251,6 +258,8 @@ def run(run_tests: bool = True) -> Dict[str, Any]:
         issues.append("heartbeat_not_loaded")
     if stillness["overdue"]:
         issues.append("stillness_overdue")
+    elif stillness.get("never_run"):
+        pass          # new install, nothing owed yet
 
     healthy = len(issues) == 0
     data = {

@@ -46,6 +46,11 @@ def test_normalize_is_generic_no_owner_names():
 
 
 def test_rollup_counts_attention_and_ranks():
+    # Aliases are a per-user file. Asserting "purangpt" only passed on a
+    # machine whose ~/.claude/meditation/project-aliases.txt maps vedic ->
+    # purangpt; a fresh install got "vedic" and this went red on first run.
+    os.environ["MEDITATE_PROJECT_ALIASES"] = "vedic=purangpt"
+    pj._aliases.cache_clear() if hasattr(pj._aliases, "cache_clear") else None
     sessions = [
         {"_project_slug": "-Users-badenath-projects-vedic-puran",
          "counts": {"user": 40}, "ts_end": "2026-08-22T00:00:00"},
@@ -115,29 +120,43 @@ def test_cli_envelope():
 
 # ---- attribution: what was BUILT, not where it was launched ---------------
 
+def _tree(root, *repos):
+    """Build a container holding real repos, so these tests do not depend on
+    what happens to be in the author's home directory."""
+    for r in repos:
+        d = os.path.join(root, r)
+        os.makedirs(os.path.join(d, ".git"), exist_ok=True)
+        os.makedirs(os.path.join(d, "src"), exist_ok=True)
+    return root
+
+
 def test_a_container_directory_is_not_a_project():
-    """The workspace holds several products in one folder. Counting them as
-    one said purangpt owned 96.3% of all attention; measured by what was
+    """A folder holding several products is not one product. Counting them as
+    one said purangpt owned 96.3% of all attention; by what was actually
     edited it is 30.5%, and this tool itself is the other 30.3%."""
-    game = "/Users/badenath/projects/vedic puran/AwakenerUnity/Assets/x.cs"
-    api = "/Users/badenath/projects/vedic puran/purangpt/backend/main.py"
-    assert pj.project_of_work([game]) == "awakenerunity"
-    assert pj.project_of_work([api]) == "purangpt"
-    assert pj.project_of_work([game]) != pj.project_of_work([api])
+    with tempfile.TemporaryDirectory() as t:
+        box = _tree(os.path.join(t, "workspace"), "AwakenerUnity", "purangpt")
+        game = os.path.join(box, "AwakenerUnity", "src", "x.cs")
+        api = os.path.join(box, "purangpt", "src", "main.py")
+        c = [t]
+        assert pj.project_of_work([game], c) == "awakenerunity"
+        assert pj.project_of_work([api], c) == "purangpt"
 
 
 def test_a_source_folder_is_not_a_project():
-    """'vedic puran/AwakenerUnity' is a game and 'job-copilot/src' is a source
-    folder — both are the second path segment, so position cannot tell them
-    apart. The repo root can."""
-    assert pj.project_of_work(
-        ["/Users/badenath/projects/job-copilot/src/a.ts"]) == "job-copilot"
+    """A game directory and a src directory are both the second path segment,
+    so position cannot tell them apart. The repo root can."""
+    with tempfile.TemporaryDirectory() as t:
+        _tree(t, "job-copilot")
+        f = os.path.join(t, "job-copilot", "src", "a.ts")
+        assert pj.project_of_work([f], [t]) == "job-copilot"
 
 
 def test_sibling_apps_stay_separate():
-    assert pj.project_of_work(
-        ["/Users/badenath/projects/vedic puran/purangpt-next/src/app/p.tsx"]
-    ) == "purangpt-next"
+    with tempfile.TemporaryDirectory() as t:
+        box = _tree(os.path.join(t, "workspace"), "purangpt", "purangpt-next")
+        f = os.path.join(box, "purangpt-next", "src", "p.tsx")
+        assert pj.project_of_work([f], [t]) == "purangpt-next"
 
 
 def test_the_memory_store_is_not_a_project():

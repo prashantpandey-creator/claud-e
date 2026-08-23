@@ -1,0 +1,58 @@
+name: tests
+
+# Every suite, on every push, on a real macOS runner.
+#
+# This project's own doctor is the gate locally; CI exists so the gate keeps
+# holding on a machine that is NOT the author's. Four suites went red the
+# first time they ran under a clean HOME — three because they assert on live
+# data a new install does not have yet, one because a test named the author's
+# own directories. Nothing catches that class except running somewhere else.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  suite:
+    runs-on: macos-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Show what we are testing on
+        run: |
+          python3 --version
+          echo "HOME=$HOME"
+
+      - name: Install into this runner's HOME
+        # launchctl exists on the runner but there is no user session to load
+        # an agent into, so the heartbeat step is expected to warn, not fail.
+        run: bash install.sh || true
+
+      - name: The suite
+        run: |
+          set -e
+          fail=0
+          for t in test_*.py; do
+            [ "$t" = "test_doctor.py" ] && continue
+            if python3 "$t" > "/tmp/$t.log" 2>&1; then
+              echo "ok   $t"
+            else
+              echo "FAIL $t"; sed -n '1,40p' "/tmp/$t.log"; fail=1
+            fi
+          done
+          exit $fail
+
+      - name: Doctor
+        run: python3 doctor.py
+
+      - name: The page's JavaScript must parse
+        # A syntax error here serves HTTP 200 with every section blank; it
+        # cost this project a whole dashboard once, silently.
+        run: python3 test_page_js.py

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import freshcheck as _fresh
 import subprocess
 import sys
 import tempfile
@@ -135,6 +136,8 @@ def _edit_as(sid, path):
 
 
 def test_hook_collision_between_two_sessions():
+    if _fresh.is_fresh():
+        return _fresh.skip("this suite reads the live store")
     with tempfile.TemporaryDirectory() as t:
         env = _iso_env(t)
         fire(_edit_as("session-aaaa", "/repo/shared.py"), env=env)
@@ -144,6 +147,8 @@ def test_hook_collision_between_two_sessions():
 
 
 def test_hook_serves_graded_fact_once():
+    if _fresh.is_fresh():
+        return _fresh.skip("this suite reads the live store")
     with tempfile.TemporaryDirectory() as t:
         env = _iso_env(t)
         os.makedirs(env["MEDITATE_STORE_DIR"], exist_ok=True)
@@ -232,6 +237,22 @@ def test_presence_touch_never_creates_a_file_for_an_unknown_session():
                          ' "tool_input": {"command": "echo hi"}}',
                    capture_output=True, text=True, timeout=20)
     assert not os.path.exists(ghost), "hook invented a presence file"
+
+
+def test_the_hook_finds_the_skill_wherever_it_was_installed_from():
+    """The installed hook hardcoded ~/.claude/skills/meditate while install.sh
+    resolves the skill from wherever it is run. Clone the repo anywhere else
+    and the hook returned {} forever — no guard rules, no fact serving, no
+    collision warnings. Installed, reported healthy, and inert."""
+    src = open(HOOK).read()
+    assert "skill-path" in src, "hook cannot be told where the skill lives"
+    assert 'COORD="$SKILL_HOME/coordination.py"' in src, \
+        "hook still hardcodes a skill location"
+    # and install.sh must actually write that file
+    inst = open(os.path.join(os.path.dirname(HOOK), "..", "install.sh")).read()
+    assert '> "$SKILL_PATH_FILE"' in inst, "install.sh never records the path"
+    assert inst.index('SKILL_PATH_FILE=') < inst.index('> "$SKILL_PATH_FILE"'), \
+        "install.sh writes the path file before defining it"
 
 
 def _main():

@@ -150,7 +150,8 @@ def _is_repo(path: str) -> bool:
     return _GIT_CACHE[path]
 
 
-def project_dir_of(path: str) -> Optional[str]:
+def project_dir_of(path: str,
+                   containers: Optional[List[str]] = None) -> Optional[str]:
     """The directory that IS the project this file belongs to.
 
     Two signals, in order:
@@ -169,7 +170,7 @@ def project_dir_of(path: str) -> Optional[str]:
             return None
     d = os.path.dirname(p)
     root = None
-    for c in _CONTAINERS:
+    for c in (containers if containers is not None else _CONTAINERS):
         if p.startswith(c + os.sep):
             root = c
             break
@@ -187,7 +188,8 @@ def project_dir_of(path: str) -> Optional[str]:
     return None
 
 
-def project_of_work(files: Optional[List[str]]) -> Optional[str]:
+def project_of_work(files: Optional[List[str]],
+                    containers: Optional[List[str]] = None) -> Optional[str]:
     """Which project a session actually WORKED on, from the files it edited.
 
     The folder you launch Claude from is not the thing you are building. This
@@ -204,7 +206,7 @@ def project_of_work(files: Optional[List[str]]) -> Optional[str]:
         return None
     counts: Dict[str, int] = {}
     for f in files:
-        d = project_dir_of(f)
+        d = project_dir_of(f, containers)
         if not d:
             continue
         name = _clean_project_name(os.path.basename(d))

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import freshcheck as _fresh
 import sys
 import time
 
@@ -32,6 +33,8 @@ COORD = os.path.expanduser("~/.claude/coordination")
 
 def test_edge_index_to_fact_serving():
     """bridge's path_index must be servable by coordination on a real path."""
+    if _fresh.is_fresh():
+        return _fresh.skip("no graded claims on a new install")
     import coordination as co
     idx_path = os.path.join(STORE, "path_index.json")
     assert os.path.exists(idx_path), "bridge never wrote path_index.json"
@@ -46,6 +49,8 @@ def test_edge_index_to_fact_serving():
 
 def test_edge_formed_memories_graded_and_askable():
     """formation -> store -> sleep grade -> ask retrieval, end to end."""
+    if _fresh.is_fresh():
+        return _fresh.skip("this suite reads the live store")
     import ask as ak
     mems = ak._load(STORE)
     formed = [m for m in mems if m.get("active") and "commit-fact" in m.get("tags", [])]
@@ -145,6 +150,8 @@ def test_edge_heartbeat_fresh():
     """The clock must actually tick — threshold DERIVED from the real
     interval, not a hardcoded 12.5h. A malformed plist once left the
     heartbeat dead 13.7h with nothing reporting it; this is that alarm."""
+    if _fresh.is_fresh():
+        return _fresh.skip("this suite reads the live store")
     log = os.path.join(MED, "heartbeat.log")
     assert os.path.exists(log), "heartbeat has never fired"
     import cadence as cd

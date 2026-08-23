@@ -43,7 +43,15 @@ fi
 # recording, collision warnings, graded-fact serving, and the pipeline/native
 # guard rules all live THERE — not split between bash and python. It always
 # exits 0 and always prints valid hook JSON.
-COORD="$HOME/.claude/skills/meditate/coordination.py"
+# Where the skill actually lives. install.sh writes this file with the real
+# path, because the skill can be cloned anywhere and the hook is copied to
+# ~/.claude/hooks/ where it cannot find its own source. Hardcoding
+# ~/.claude/skills/meditate meant that any user who cloned elsewhere got a
+# hook that silently returned {} forever: no guard rules, no fact serving,
+# no collision warnings — installed, reported healthy, and inert.
+SKILL_HOME="$(cat "$HOME/.claude/meditation/skill-path" 2>/dev/null)"
+[ -n "$SKILL_HOME" ] || SKILL_HOME="$HOME/.claude/skills/meditate"
+COORD="$SKILL_HOME/coordination.py"
 if [ -f "$COORD" ] && [[ "$IN" == *'"file_path"'* || "$IN" == *'"notebook_path"'* ]]; then
     trap - EXIT
     printf '%s' "$IN" | python3 "$COORD" hook-edit 2>/dev/null || printf '{}\n'
