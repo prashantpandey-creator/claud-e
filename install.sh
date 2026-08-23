@@ -303,7 +303,6 @@ elif command -v crontab >/dev/null 2>&1; then
     echo "0 */6 * * * $HEARTBEAT_CMD # meditate-heartbeat" >> "$CRON_TMP"
     if crontab "$CRON_TMP" 2>/dev/null; then
         echo "  [ok]  heartbeat installed via cron — self-check every 6h"
-        echo "  [DEBUG] immediately after: [$(crontab -l 2>&1)]"
     else
         echo "  [warn]  no launchd and cron refused; run the heartbeat yourself: meditate grade"
     fi
@@ -316,7 +315,6 @@ fi
 # ---- 6. Run tests
 echo
 echo "  Running test suite..."
-echo "  [DEBUG] crontab before test loop: [$(crontab -l 2>&1)]"
 TEST_PASS=true
 for tf in $(cd "$SKILL_DIR" && ls test_*.py 2>/dev/null | grep -v '^test_doctor\.py$'); do
     if [ -f "$SKILL_DIR/$tf" ]; then
@@ -326,10 +324,6 @@ for tf in $(cd "$SKILL_DIR" && ls test_*.py 2>/dev/null | grep -v '^test_doctor\
             echo "  [FAIL]  $tf"
             TEST_PASS=false
         fi
-        case "$tf" in
-            test_cadence.py|test_packaging.py|test_doctor.py|test_integration.py)
-                echo "  [DEBUG] crontab after $tf: [$(crontab -l 2>&1)]" ;;
-        esac
     fi
 done
 

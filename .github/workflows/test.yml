@@ -111,11 +111,6 @@ jobs:
       - name: Install into this runner's HOME
         run: bash install.sh || true
 
-      - name: DEBUG — crontab state in the very next step, before the suite runs
-        run: |
-          echo "crontab -l: [$(crontab -l 2>&1)]"
-          echo "whoami: $(whoami) HOME=$HOME"
-
       - name: The suite
         run: |
           set -e
