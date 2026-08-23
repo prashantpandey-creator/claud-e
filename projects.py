@@ -357,6 +357,49 @@ def _usable(name: Optional[str]) -> Optional[str]:
 
 
 _SHA_CACHE: Dict[str, Optional[str]] = {}
+_SHA_DISK = os.path.expanduser("~/.claude/meditation/sha-repo-cache.json")
+_SHA_LOADED = False
+_SHA_DIRTY = False
+
+
+def _sha_cache_load() -> None:
+    """Which repo holds a commit never changes, so this answer keeps.
+
+    Without it every CLI run re-spawned `git cat-file` once per sha per repo
+    from scratch. Measured on this machine: 79 shas, and 20.6s of the 27s
+    rollup was the process waiting on those subprocesses.
+
+    Only POSITIVE answers are kept. A miss means "no repo here has it YET" —
+    clone that repo tomorrow and the answer changes, so misses stay in memory
+    for this run only.
+    """
+    global _SHA_LOADED
+    if _SHA_LOADED:
+        return
+    _SHA_LOADED = True
+    try:
+        with open(_SHA_DISK) as f:
+            for k, v in json.load(f).items():
+                if v:
+                    _SHA_CACHE.setdefault(k, v)
+    except Exception:
+        pass
+
+
+def _sha_cache_save() -> None:
+    global _SHA_DIRTY
+    if not _SHA_DIRTY:
+        return
+    _SHA_DIRTY = False
+    keep = {k: v for k, v in _SHA_CACHE.items() if v}
+    try:
+        os.makedirs(os.path.dirname(_SHA_DISK), exist_ok=True)
+        tmp = _SHA_DISK + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(keep, f)
+        os.replace(tmp, _SHA_DISK)
+    except OSError:
+        pass
 
 
 def repo_of_commit(sha: str) -> Optional[str]:
@@ -368,6 +411,7 @@ def repo_of_commit(sha: str) -> Optional[str]:
     sha = (sha or "").strip()
     if len(sha) < 7 or not re.fullmatch(r"[0-9a-fA-F]+", sha):
         return None
+    _sha_cache_load()
     if sha in _SHA_CACHE:
         return _SHA_CACHE[sha]
     out = None
@@ -382,6 +426,10 @@ def repo_of_commit(sha: str) -> Optional[str]:
         except Exception:
             continue
     _SHA_CACHE[sha] = out
+    if out:
+        global _SHA_DIRTY
+        _SHA_DIRTY = True
+        _sha_cache_save()
     return out
 
 

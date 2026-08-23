@@ -299,6 +299,56 @@ def test_inheritance_never_overrides_direct_evidence():
     assert placed["a"] == ({"purangpt-next"}, "tag"), placed["a"]
 
 
+def test_commit_cache_never_changes_the_answer():
+    """A cache that changes the answer is worse than a slow lookup.
+
+    Which repo holds a commit is immutable, so the answer keeps on disk. This
+    checks a cached lookup against one that re-runs git from scratch.
+    """
+    import tempfile, json as _json
+    real = pj._SHA_DISK
+    try:
+        # Real commit ids off the real cache file — NOT out of _SHA_CACHE,
+        # which another test in this file fills with fakes. Reading shared
+        # in-process state made this test depend on run order.
+        try:
+            with open(real) as f:
+                shas = [s for s, v in _json.load(f).items() if v][:3]
+        except Exception:
+            return
+        if not shas:
+            return                                   # nothing to check here
+        pj._SHA_DISK = os.path.join(tempfile.mkdtemp(), "c.json")
+        pj._SHA_LOADED = False
+        fresh = {s: pj.repo_of_commit(s) for s in shas}
+        pj._SHA_CACHE.clear(); pj._SHA_LOADED = False
+        again = {s: pj.repo_of_commit(s) for s in shas}
+        assert fresh == again, (fresh, again)
+    finally:
+        pj._SHA_DISK = real
+        pj._SHA_LOADED = False
+
+
+def test_commit_cache_keeps_hits_and_not_misses():
+    """A miss means 'no repo here has it YET' — clone that repo tomorrow and
+    the answer changes, so misses must never be written to disk."""
+    import tempfile, json as _json
+    real = pj._SHA_DISK
+    try:
+        pj._SHA_DISK = os.path.join(tempfile.mkdtemp(), "c.json")
+        pj._SHA_CACHE.clear(); pj._SHA_LOADED = True
+        pj._SHA_CACHE["a" * 40] = None               # a miss
+        pj._SHA_CACHE["b" * 40] = "someproject"      # a hit
+        pj._SHA_DIRTY = True
+        pj._sha_cache_save()
+        on_disk = _json.load(open(pj._SHA_DISK))
+        assert "b" * 40 in on_disk, "a real answer must be kept"
+        assert "a" * 40 not in on_disk, "a miss must not be cached to disk"
+    finally:
+        pj._SHA_DISK = real
+        pj._SHA_LOADED = False
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

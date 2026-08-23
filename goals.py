@@ -7,7 +7,7 @@ human-editable, same family as the memory files):
     name: purangpt-ios-live
     title: PuranGPT iOS fully live
     project: purangpt
-    cwd: /Users/badenath/projects/vedic puran
+    cwd: ~/code/your-project
     status: evolving          # active | evolving | done | paused
     ---
     Why this matters, links, context — free text.

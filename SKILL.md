@@ -87,7 +87,7 @@ Read `data.sleep.after` for the graded census. Report `machine_checked` /
 
 Operate on the active project's memory dir (the one whose `MEMORY.md` is in your
 context; for vedic-puran:
-`/Users/badenath/.claude/projects/-Users-badenath-projects-vedic-puran/memory/`).
+`~/.claude/projects/<your-project-slug>/memory/`).
 Reflective consolidation: **read** all; **merge** duplicates (delete the loser,
 keep `[[links]]`); **fix stale facts** — verify any file/flag/path a memory names
 still exists before trusting its advice; convert relative dates to absolute;
