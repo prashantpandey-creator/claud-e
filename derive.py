@@ -9,20 +9,26 @@ should be easier to use — is the thing that should outlive it and keep
 driving. When the six hand-written goals run out of open milestones, the fleet
 has nothing to reach for and momentum stops on a file nobody wrote at 2am.
 
-Measured on the real workspace: 6 goal files cover 4 projects, while The
-Awakener (the owner's stated north star) carries 274 human turns across 4
-sessions with NO goal file, and the job-hunt cluster 282 turns with none.
-Real effort, no destination recorded.
+Measured on the real workspace: 6 goal files cover 4 projects, while
+claude-sync carries 1358 human turns with no goal, nidra 1294, vyasa 365 and
+the job-hunt cluster 337. Real effort, no destination recorded.
 
-HOW IT DERIVES WITHOUT INVENTING
---------------------------------
-The obvious approach — ask a model "what is the goal here?" — produces
-fluent fiction, and a fictional goal that reaches the fleet costs a night of
-agents. So nothing here is generated. A candidate is a CLUSTER OF REAL WORK,
-and its title is the owner's OWN most-used session title for that cluster.
-Every proposal carries its evidence: which sessions, how many human turns,
-over what dates. Same discipline as an evidence-graded memory — a claim you
-can check, not a claim you must believe.
+WHAT IT DERIVES, AND WHAT IT REFUSES TO
+---------------------------------------
+It derives the FACT: this project carries this much real effort across these
+sessions and has no goal. Every number is checkable against the transcripts.
+
+It refuses to derive the INTENT. Three heuristics were tried for naming a
+cluster from its session titles, and all three read well and were false —
+sessions here touch several projects each, so a bucket's "dominant title" is
+whichever unrelated session happened to weigh most, and 1358 turns of work
+came out labelled "Lexis Nexis employee country rule". Asking a model instead
+would produce the same fiction with better grammar.
+
+So a proposal is titled with the PROJECT, and the session titles are handed
+over underneath it as raw material. A wrong title that looks authoritative is
+worse than an obviously unfinished one: the first gets adopted, the second
+gets read.
 
 WHY IT PROPOSES AND NEVER ADOPTS
 --------------------------------
@@ -160,12 +166,19 @@ def candidates(sessions: List[Dict[str, Any]], goals_dir: str = GOALS_DIR,
         turns = sum(b["turns_by_sid"].values())     # unique sessions only
         if turns < min_turns or len(b["turns_by_sid"]) < min_sessions:
             continue
-        title = (b["titles"].most_common(1)[0][0] if b["titles"]
-                 else b["projects"][0])
         out.append({
+            # The PROJECT, never a guessed intent. Three heuristics were tried
+            # for deriving an intent-title from session titles; all three read
+            # well and were false, because sessions here touch many projects
+            # each, so a bucket's "dominant title" is whichever unrelated
+            # session weighed most — 1358 turns came out labelled "Lexis Nexis
+            # employee country rule". What is true and checkable is that this
+            # project carries real effort and has no goal. Say that; hand the
+            # session titles over as evidence and let a human do the naming.
             "project": b["projects"][0],
             "projects": b["projects"],
-            "title": title,                 # the OWNER's words, never generated
+            "title": b["projects"][0],
+            "session_titles": [t for t, _ in b["titles"].most_common(6)],
             "turns": turns,
             "sessions": sorted(b["turns_by_sid"]),
             "cwd": b["cwds"].most_common(1)[0][0] if b["cwds"] else "",
@@ -204,15 +217,17 @@ def render(c: Dict[str, Any]) -> str:
         "## Evidence\n"
         "- %d human turns across %d session(s)%s\n"
         "- sessions: %s\n"
-        "- title is the owner's own most-used session title for this cluster,\n"
-        "  not generated text\n"
+        "- those sessions were called: %s\n"
+        "  (raw material for a title — the tool does NOT pick one, because\n"
+        "  sessions here span several projects and the pick was wrong)\n"
         "\n"
         "## Milestones\n"
         "(none yet — deliberately. An invented milestone would report progress\n"
         "that never happened. Write the real ones, then move this file up one\n"
         "directory to adopt it.)\n"
         % (slug, c["title"], c["project"], c.get("cwd", ""),
-           c["turns"], len(c["sessions"]), span, ", ".join(c["sessions"][:8]))
+           c["turns"], len(c["sessions"]), span, ", ".join(c["sessions"][:8]),
+           "; ".join(c.get("session_titles") or ["(untitled)"]))
     )
 
 

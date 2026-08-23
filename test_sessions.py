@@ -79,6 +79,41 @@ def main():
         check("Edit" in dict(rec["top_tools"]), "top_tools should include Edit")
         check(rec["sprawl_score"] >= 0, "sprawl_score must be present")
 
+        # --- project attribution must work for ANYONE ---
+        # `_project_of` hardcoded the string "/vedic puran/", so for every
+        # user who is not this author it returned None for every file: no
+        # projects, so derive.py proposes nothing, projects.py is empty, and
+        # sprawl loses its multi-project term. A repo root is the general
+        # answer -- it is what a "project" means on any machine.
+        import subprocess as _sp
+        env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t",
+                   GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
+        repo = os.path.join(d, "code", "acme-api")
+        os.makedirs(os.path.join(repo, "src"))
+        _sp.run(["git", "init", "-q", repo], check=True, env=env)
+        check(sessions._project_of(os.path.join(repo, "src", "server.py")) == "acme-api",
+              "a plain repo on any machine must attribute: got %r"
+              % sessions._project_of(os.path.join(repo, "src", "server.py")))
+
+        # a git WORKTREE has .git as a FILE, not a directory -- this owner
+        # uses dozens of them, and treating only dirs as repos loses them all
+        wt = os.path.join(d, "code", "wt-feature")
+        os.makedirs(wt)
+        with open(os.path.join(wt, ".git"), "w") as f:
+            f.write("gitdir: /elsewhere/.git/worktrees/wt-feature\n")
+        check(sessions._project_of(os.path.join(wt, "app.py")) == "wt-feature",
+              "worktree not attributed: %r" % sessions._project_of(os.path.join(wt, "app.py")))
+
+        # outside any repo: fall back to the first segment under cwd, so work
+        # in a plain directory still groups instead of vanishing into None
+        loose = os.path.join(d, "loose")
+        os.makedirs(os.path.join(loose, "notes"))
+        check(sessions._project_of(os.path.join(loose, "notes", "a.md"), cwd=loose) == "notes",
+              "no-repo fallback failed: %r"
+              % sessions._project_of(os.path.join(loose, "notes", "a.md"), cwd=loose))
+        check(sessions._project_of("/nowhere/x.py") is None,
+              "unattributable path must be None, not a guess")
+
         # --- the filename IS the session id ---
         # A resumed/compacted transcript carries its ANCESTOR's sessionId in
         # its first rows. Trusting that made 12 of 132 real transcripts

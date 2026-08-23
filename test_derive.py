@@ -46,24 +46,27 @@ def test_work_with_no_goal_is_proposed():
         assert got[0]["turns"] == 274
 
 
-def test_title_is_the_owners_words_never_generated():
-    """THE anti-hallucination property. A derived title must be traceable to
-    something the owner actually named, or a proposal is fiction with a
-    filename."""
+def test_the_title_is_the_PROJECT_never_a_guessed_intent():
+    """Three heuristics tried, all wrong, so the claim was dropped.
+
+    Deriving an intent-title from session titles read well and was false.
+    Sessions here touch many projects each (a single session edits the memory
+    store, the tool, and the app), so the "dominant title" of a project bucket
+    is whichever unrelated session happened to weigh most: 1358 turns of work
+    came out labelled "Lexis Nexis employee country rule".
+
+    What IS true and checkable is that a project carries real effort and has
+    no goal. So the proposal states that, names the project, and hands the
+    session titles over as raw evidence for a human to name. A wrong title
+    that looks authoritative is worse than an obviously unfinished one."""
     with tempfile.TemporaryDirectory() as d:
         g = _goals(os.path.join(d, "goals"))
-        s = [_sess("a", "proj", 100, "Fix the retry loop"),
-             _sess("b", "proj", 10, "unrelated tangent")]
+        s = [_sess("a", "acme-api", 100, "Fix the retry loop"),
+             _sess("b", "acme-api", 10, "unrelated tangent")]
         got = derive.candidates(s, g)
-        assert got[0]["title"] == "Fix the retry loop", got[0]["title"]
-
-
-def test_title_weights_by_effort_not_count():
-    with tempfile.TemporaryDirectory() as d:
-        g = _goals(os.path.join(d, "goals"))
-        s = [_sess("a", "proj", 5, "tiny"), _sess("b", "proj", 5, "tiny"),
-             _sess("c", "proj", 200, "the real work")]
-        assert derive.candidates(s, g)[0]["title"] == "the real work"
+        assert got[0]["title"] == "acme-api", got[0]["title"]
+        # the owner's own titles survive as EVIDENCE, not as a verdict
+        assert "Fix the retry loop" in got[0]["session_titles"], got[0]
 
 
 def test_errands_do_not_become_goals():
@@ -87,6 +90,7 @@ def test_every_proposal_carries_its_evidence():
              _sess("bbbb2222", "proj", 100, "The work", end="2026-02-01T00:00:00")]
         body = derive.render(derive.candidates(s, g)[0])
         assert "200 human turns" in body, body
+        assert "The work" in body, "session titles must appear as evidence"
         assert "aaaa1111" in body and "bbbb2222" in body
         assert "2026-01-01" in body and "2026-02-01" in body
 
@@ -208,6 +212,30 @@ def test_untitled_sessions_still_cluster_by_project():
         s = [_sess("a", "proj", 100, None), _sess("b", "proj", 100, None)]
         got = derive.candidates(s, g)
         assert len(got) == 1 and got[0]["turns"] == 200, got
+
+
+def test_a_title_shared_by_several_projects_identifies_none_of_them():
+    """Live fire, second round: once project attribution actually worked,
+    claude-sync / meditate / nidra were all touched by the same sessions, so
+    all three inherited the same dominant title and "voice bot voice quality"
+    was proposed three times. A title that lands in several buckets is not
+    evidence about any one of them: it belongs to the bucket where the effort
+    actually is, and the others fall back to their project name."""
+    with tempfile.TemporaryDirectory() as d:
+        g = _goals(os.path.join(d, "goals"))
+        # OVERLAPPING but not identical session sets — the real shape, which
+        # exact-set merging cannot collapse
+        def S(sid, projects, turns):
+            return {"session_id": sid, "projects": projects,
+                    "title": "voice bot voice quality", "cwd": "/tmp/x",
+                    "counts": {"user": turns}, "ts_start": None, "ts_end": None}
+        s = [S("a", ["claude-sync", "meditate"], 300),
+             S("b", ["claude-sync", "nidra"], 300),
+             S("c", ["meditate", "nidra"], 300)]
+        got = derive.candidates(s, g)
+        titles = [c["title"] for c in got]
+        assert len(titles) == len(set(titles)), "same title proposed twice: %s" % titles
+        assert set(titles) <= {"claude-sync", "meditate", "nidra"}, titles
 
 
 def _main():

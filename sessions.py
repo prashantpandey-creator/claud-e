@@ -80,12 +80,56 @@ def _is_noise(text):
     return False
 
 
-def _project_of(file_path):
-    """Top-level project dir under .../vedic puran/ (or the parent dir)."""
-    marker = "/vedic puran/"
-    if marker in file_path:
-        rest = file_path.split(marker, 1)[1]
-        return rest.split("/", 1)[0] if "/" in rest else rest
+_REPO_CACHE = {}
+
+
+def _repo_root(start):
+    """Nearest ancestor holding a .git, or None. Cached per directory.
+
+    `.git` is checked with os.path.exists, not isdir: in a git WORKTREE it is
+    a FILE. This workspace alone has dozens of wt-* worktrees, and an isdir
+    check silently drops every one of them.
+    """
+    d = os.path.dirname(os.path.abspath(start))
+    seen = []
+    while True:
+        if d in _REPO_CACHE:
+            root = _REPO_CACHE[d]
+            break
+        seen.append(d)
+        if os.path.exists(os.path.join(d, ".git")):
+            root = d
+            break
+        parent = os.path.dirname(d)
+        if parent == d:
+            root = None
+            break
+        d = parent
+    for s in seen:
+        _REPO_CACHE[s] = root
+    return root
+
+
+def _project_of(file_path, cwd=None):
+    """What project does this file belong to? Works on ANY machine.
+
+    This used to match the literal string "/vedic puran/", so for every user
+    who is not this tool's author it returned None for every file — no
+    projects at all, which silently emptied the project rollup, dropped the
+    multi-project term from sprawl, and left goal derivation with nothing to
+    cluster. A repo root is what "project" means everywhere, so use that, and
+    fall back to the first directory under the session's own cwd when the
+    work happens outside any repo.
+    """
+    root = _repo_root(file_path)
+    if root:
+        return os.path.basename(root)
+    if cwd:
+        base = os.path.abspath(cwd)
+        full = os.path.abspath(file_path)
+        if full.startswith(base + os.sep):
+            rest = full[len(base) + 1:]
+            return rest.split(os.sep, 1)[0] if os.sep in rest else None
     return None
 
 
@@ -150,7 +194,7 @@ def extract_file(path, cap=DEFAULT_CAP, snippet=SNIPPET):
                             fp = inp.get("file_path")
                             if fp:
                                 files_touched.add(fp)
-                                pr = _project_of(fp)
+                                pr = _project_of(fp, cwd)
                                 if pr:
                                     projects.add(pr)
                         if name.endswith("mark_chapter") and inp.get("title"):
