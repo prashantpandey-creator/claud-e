@@ -52,6 +52,16 @@ fi
 SKILL_HOME="$(cat "$HOME/.claude/meditation/skill-path" 2>/dev/null)"
 [ -n "$SKILL_HOME" ] || SKILL_HOME="$HOME/.claude/skills/meditate"
 COORD="$SKILL_HOME/coordination.py"
+# PostToolUse on a file write is the squiggly: the file now EXISTS, so it can
+# be checked, and additionalContext for this event is shown in the transcript.
+# PreToolUse can only see an intent. Fires for every Write/Edit, must stay
+# silent unless something is actually wrong.
+if [[ "$IN" == *'"PostToolUse"'* ]]; then
+    trap - EXIT
+    printf '%s' "$IN" | python3 "$COORD" post-edit 2>/dev/null || printf '{}\n'
+    exit 0
+fi
+
 if [ -f "$COORD" ] && [[ "$IN" == *'"file_path"'* || "$IN" == *'"notebook_path"'* ]]; then
     trap - EXIT
     printf '%s' "$IN" | python3 "$COORD" hook-edit 2>/dev/null || printf '{}\n'

@@ -25,9 +25,13 @@ CLI (all exit 0 always; hook-edit always prints valid hook JSON):
 """
 from __future__ import annotations
 
+import ast
+import builtins
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
 import time
 from typing import Any, Dict, List, Optional
@@ -280,6 +284,101 @@ def ceiling_check(payload: Dict[str, Any], me: Dict[str, Any]) -> str:
             "not. Split now: run /meditate %s — it writes per-thread "
             "continuation chats."
             % (ctx // 1000, note % max(1, (ceil - ctx) // 1000), sid))
+
+
+def check_edit(path: str) -> str:
+    """The red squiggly: what is wrong with this file, right now. '' = fine.
+
+    A human editing code gets told about a bad reference while their hand is
+    still on it. An agent gets raw text and finds out at compile time, in a
+    later turn, after the file is committed — by which point the mistake is
+    archaeology instead of a typo.
+
+    Measured today, in this repo: `brain.py` gained `paths.goals_dir()`
+    without `import paths`. `ast.parse` said "parses OK" because the syntax
+    WAS fine, so the failure surfaced later as a NameError at import. Syntax
+    checking is not the check that was needed.
+
+    Two rules only, both stdlib, both high-precision:
+      1. it does not parse
+      2. a name is read at module level that the module never binds
+
+    Deliberately NOT a linter. It runs after every single edit, so a false
+    squiggle costs more than a missed one: an agent that learns to ignore
+    this line is worse off than one that never had it. Unused imports, style,
+    shadowing, anything inside a function body — all skipped, because module
+    scope is where "never bound anywhere" is decidable without inference.
+    """
+    if not path.endswith(".py") or not os.path.isfile(path):
+        return ""                     # only Python; silence about the rest
+
+    # ruff first when it is installed: it sees inside function bodies, where
+    # the stdlib pass below cannot go and where most real undefined-name bugs
+    # live. Deliberately a THREE-RULE selection, not ruff's opinions --
+    # E9 (syntax), F821 (undefined name), F822 (undefined name in __all__).
+    # Measured on this codebase, 102 files: that selection finds 0 issues,
+    # so it stays silent on working code exactly like the fallback does.
+    # Zero dependencies is not worth a worse tool; it is just the floor for
+    # anyone who has not installed one.
+    ruff = shutil.which("ruff")
+    if ruff:
+        try:
+            r = subprocess.run(
+                [ruff, "check", "--select", "E9,F821,F822", "--no-cache",
+                 "--quiet", "--output-format", "concise", path],
+                capture_output=True, text=True, timeout=5)
+            line = (r.stdout or "").strip().splitlines()
+            if line:
+                first = line[0]
+                # ".../brain.py:4:8: F821 Undefined name `paths`"
+                return os.path.basename(first) if first.startswith("/") else first
+            if r.returncode in (0, 1):
+                return ""              # ruff ran and found nothing
+        except (OSError, subprocess.SubprocessError):
+            pass                       # fall through to the stdlib pass
+    try:
+        with open(path, encoding="utf-8") as fh:
+            src = fh.read()
+    except (OSError, UnicodeDecodeError):
+        return ""
+    try:
+        tree = ast.parse(src, filename=path)
+    except SyntaxError as e:
+        return "%s:%s %s" % (os.path.basename(path), e.lineno or "?",
+                             (e.msg or "invalid syntax"))
+    except (ValueError, RecursionError):
+        return ""
+
+    bound = set(dir(builtins)) | {
+        "__file__", "__name__", "__doc__", "__package__", "__spec__",
+        "__loader__", "__builtins__", "__path__", "__all__", "__debug__",
+    }
+    for node in ast.walk(tree):                 # anything bound ANYWHERE counts
+        if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            bound.add(node.id)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            bound.add(node.name)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            for a in node.names:
+                bound.add((a.asname or a.name).split(".")[0])
+        elif isinstance(node, (ast.Global, ast.Nonlocal)):
+            bound.update(node.names)
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            bound.add(node.name)
+        elif isinstance(node, ast.arg):
+            bound.add(node.arg)
+
+    # Only module-level reads: inside a function a name may legitimately be
+    # defined later, or come from a scope this cheap pass cannot see.
+    for stmt in tree.body:
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        for node in ast.walk(stmt):
+            if (isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
+                    and node.id not in bound):
+                return "%s:%s '%s' is used but never imported or defined" % (
+                    os.path.basename(path), node.lineno, node.id)
+    return ""
 
 
 def hook_edit(payload: Dict[str, Any],
@@ -637,6 +736,31 @@ def main(argv: List[str]) -> int:
         except Exception:
             msg = ""
         _emit_hook_json("PreToolUse", msg)
+        return 0
+    if cmd == "post-edit":
+        # The squiggly. PostToolUse fires AFTER the write, which is the only
+        # place a checker can look at the result — PreToolUse sees an intent,
+        # not a file. additionalContext is shown in the transcript for this
+        # event, so the correction lands in the same turn as the mistake
+        # instead of surfacing as a traceback several turns later.
+        try:
+            payload = json.load(sys.stdin)
+            if not isinstance(payload, dict):
+                payload = {}
+        except Exception:
+            payload = {}
+        msg = ""
+        try:
+            ti = payload.get("tool_input") or {}
+            for k in ("file_path", "notebook_path", "path"):
+                if isinstance(ti, dict) and ti.get(k):
+                    problem = check_edit(str(ti[k]))
+                    if problem:
+                        msg = problem
+                    break
+        except Exception:
+            msg = ""                       # never break the loop over a check
+        _emit_hook_json("PostToolUse", msg)
         return 0
     if cmd == "session-start":
         try:

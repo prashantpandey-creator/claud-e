@@ -131,6 +131,11 @@ WANTED = [
     ("SessionStart", None, 10),
     ("PreToolUse", "Bash", 5),
     ("PreToolUse", "Write|Edit|MultiEdit", 5),
+    # The squiggly. PostToolUse is the only event that can look at the RESULT
+    # of a write; PreToolUse sees an intent. Its additionalContext shows in
+    # the transcript, so a bad reference is corrected in the same turn instead
+    # of surfacing as a traceback several turns later.
+    ("PostToolUse", "Write|Edit|MultiEdit", 5),
 ]
 
 def is_ours(entry):

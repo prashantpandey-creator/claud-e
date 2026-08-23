@@ -415,6 +415,126 @@ def test_ceiling_reads_the_tail_of_a_fat_transcript():
         assert "720k" in w, w
 
 
+def test_squiggle_catches_a_name_that_was_never_imported():
+    """The red squiggly. This is the exact bug shipped today.
+
+    `brain.py` gained `paths.goals_dir()` without `import paths`. Running
+    ast.parse on it printed "parses OK" -- syntax was fine -- and the failure
+    surfaced much later as a NameError at import time, in a different turn,
+    after the file had already been committed. A checker that runs at the
+    moment of the edit turns a later archaeology problem into a one-line
+    correction."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        f = os.path.join(d, "brain.py")
+        with open(f, "w") as fh:
+            fh.write("import os\nLIVE = [os.path.expanduser('~/x'), paths.goals_dir()]\n")
+        msg = co.check_edit(f)
+        assert "paths" in msg, msg
+        assert "2" in msg, "should name the line: %s" % msg
+
+
+def test_squiggle_sees_INSIDE_functions_when_ruff_is_present():
+    """The reason a dependency is worth taking here.
+
+    The stdlib fallback can only judge module scope: inside a function a name
+    may be defined later or come from a scope a cheap pass cannot see, so it
+    stays silent — and that is where most undefined-name bugs actually live.
+    ruff's F821 sees them. Zero dependencies is the floor for someone who has
+    not installed anything, not a reason to ship the weaker check to everyone.
+    """
+    import shutil, tempfile
+    if not shutil.which("ruff"):
+        return                                    # fallback path is tested below
+    with tempfile.TemporaryDirectory() as d:
+        f = os.path.join(d, "deep.py")
+        with open(f, "w") as fh:
+            fh.write("import os\ndef f():\n    return never_defined(os.sep)\n")
+        msg = co.check_edit(f)
+        assert "never_defined" in msg, msg
+        assert "deep.py" in msg, "must name the file: %s" % msg
+
+
+def test_squiggle_stdlib_fallback_works_without_ruff(monkeypatch=None):
+    """It must still catch the real bug on a machine with nothing installed."""
+    import tempfile
+    real = co.shutil.which
+    co.shutil.which = lambda n: None              # pretend ruff is absent
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            f = os.path.join(d, "brain.py")
+            with open(f, "w") as fh:
+                fh.write("import os\nLIVE = [os.sep, paths.goals_dir()]\n")
+            msg = co.check_edit(f)
+            assert "paths" in msg, msg
+    finally:
+        co.shutil.which = real
+
+
+def test_squiggle_catches_a_syntax_error():
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        f = os.path.join(d, "x.py")
+        with open(f, "w") as fh:
+            fh.write("def broken(:\n    pass\n")
+        msg = co.check_edit(f)
+        assert msg and ("syntax" in msg.lower() or "invalid" in msg.lower()), msg
+
+
+def test_squiggle_is_SILENT_on_correct_code():
+    """A checker that cries wolf gets ignored, and then it is worse than
+    nothing. Precision before recall -- the whole session's lesson."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        f = os.path.join(d, "ok.py")
+        with open(f, "w") as fh:
+            fh.write(
+                "import os\n"
+                "from collections import Counter\n"
+                "TOP = os.sep\n"
+                "def f(a, b=1):\n"
+                "    inner = a + b\n"
+                "    return inner, Counter(), TOP\n"
+                "class K:\n"
+                "    attr = 1\n"
+                "    def m(self):\n"
+                "        return self.attr, K\n"
+                "for i in range(3):\n"
+                "    print(i, len('x'), __file__)\n"
+                "try:\n"
+                "    import json as _j\n"
+                "except ImportError:\n"
+                "    _j = None\n"
+                "with open(os.devnull) as fh:\n"
+                "    data = fh.read()\n"
+                "[x for x in range(2)]\n"
+                "lam = lambda q: q + 1\n")
+            fh.flush()
+        assert co.check_edit(f) == "", co.check_edit(f)
+
+
+def test_squiggle_ignores_non_python_and_missing_files():
+    """Claim scope = check scope. It only knows Python; it must say nothing
+    about anything else rather than guess."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        f = os.path.join(d, "notes.md")
+        with open(f, "w") as fh:
+            fh.write("paths.goals_dir() in prose is not a bug\n")
+        assert co.check_edit(f) == ""
+        assert co.check_edit(os.path.join(d, "gone.py")) == ""
+
+
+def test_squiggle_never_raises_on_a_pathological_file():
+    """It runs on EVERY edit. It must fail silent, never break the loop."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        f = os.path.join(d, "weird.py")
+        with open(f, "wb") as fh:
+            fh.write(b"\xff\xfe\x00 not utf-8 at all \x00")
+        assert isinstance(co.check_edit(f), str)
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0
