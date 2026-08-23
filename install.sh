@@ -312,6 +312,9 @@ echo "  ================================"
 if [ "$TEST_PASS" = true ]; then
     echo "  meditate v${VERSION} installed. All tests green."
     echo
+    echo "  Your rules: ~/.claude/meditation/rules.md — write that file and it"
+    echo "  replaces the defaults this tool ships. Nothing personal is baked in."
+    echo
     echo "  Casper is the product — talk to him. From here:"
     echo "         meditate            where am I + the one next action"
     echo "         meditate go         move everything forward"

@@ -98,14 +98,27 @@ TARGET=$(printf '%s\n' "$PARSED" | sed -n 3p)
 MSG=""
 case "$EV" in
   SessionStart)
-    RULES="OPERATING RULES (owner, must-fire every turn):
+    # YOUR rules if you have written any, otherwise the ones this tool ships.
+    #
+    # These used to be seven hardcoded lines, two of which were the author's
+    # own: instructions about HIS production boxes and iOS app, and a ban on a
+    # named LLM provider. Every stranger who installed inherited them, in every
+    # session, with no way to edit or remove them. The defaults below are the
+    # ones that hold for anybody; anything specific to your work goes in your
+    # own file.
+    RULES_FILE="${MEDITATE_RULES_FILE:-$HOME/.claude/meditation/rules.md}"
+    if [ -r "$RULES_FILE" ]; then
+        RULES=$(cat "$RULES_FILE")
+    else
+        RULES="OPERATING RULES (must-fire every turn):
 1. Voice — few real lines, not narration; decide by leverage and drive, never hand ranked menus; end with one conclusion or the single next step (go/no).
 2. Proof before done — no fix OR DIAGNOSIS claimed without live output; \"built, not wired\" != done; a ledger \"fixed\" is a claim, verify the artifact/process. Claim scope = check scope: test the falsifying case, ship the number in the same sentence, label traced-vs-observed.
 3. Subtract, never add — fix by removal, not another layer.
 4. Plain words — stats/evals in workshop language, not jargon verdicts.
-5. Verify the world — external facts are research questions (curl/read/benchmark), don't guess; take the owner's facts about his own domain as given.
-6. Ship discipline — commit to a LOCAL branch and STOP; push only on explicit go; prod corpus/DB is shared infra (HANDOFF before writes); iOS work near main -> prove the web app untouched.
-7. Providers — never Groq; use OpenRouter / Cerebras / OpenAI."
+5. Verify the world — external facts are research questions (curl/read/benchmark), don't guess; take the owner's facts about their own domain as given.
+6. Ship discipline — commit to a LOCAL branch and STOP; push only on explicit go.
+Add your own in $RULES_FILE — that file replaces this list entirely."
+    fi
 
     # --- Nidra census (sub-second, fail-open) ---
     NIDRA_STATE=$(python3 - 2>/dev/null <<'PYSLOT'

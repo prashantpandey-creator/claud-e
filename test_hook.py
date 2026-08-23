@@ -255,6 +255,41 @@ def test_the_hook_finds_the_skill_wherever_it_was_installed_from():
         "install.sh writes the path file before defining it"
 
 
+def test_a_stranger_does_not_inherit_the_owners_rules():
+    """The seven rules used to be hardcoded, two of them personal: the author's
+    production boxes and iOS app, and a ban on a named LLM provider. Every
+    stranger who installed got them in every session with no way to remove
+    them. Defaults must carry nothing that belongs to one person."""
+    import subprocess, tempfile, json, os as _os
+    env = dict(_os.environ)
+    env["MEDITATE_RULES_FILE"] = _os.path.join(tempfile.mkdtemp(), "absent.md")
+    r = subprocess.run(["bash", HOOK], input=json.dumps(
+        {"session_id": "s", "hook_event_name": "SessionStart", "cwd": "/tmp"}),
+        capture_output=True, text=True, timeout=30, env=env)
+    ctx = json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"]
+    for private in ("Groq", "OpenRouter", "Cerebras", "prod corpus", "iOS work"):
+        assert private not in ctx, f"default rules leak {private!r} to strangers"
+    assert "must-fire every turn" in ctx, "defaults must still ship SOME rules"
+    assert "Add your own in" in ctx, "must say where their own rules go"
+
+
+def test_your_own_rules_file_replaces_the_defaults_entirely():
+    """Whatever you write is what fires — not yours appended to theirs."""
+    import subprocess, tempfile, json, os as _os
+    d = tempfile.mkdtemp()
+    mine = _os.path.join(d, "rules.md")
+    with open(mine, "w") as f:
+        f.write("MY RULES:\n1. Only ever say banana.\n")
+    env = dict(_os.environ)
+    env["MEDITATE_RULES_FILE"] = mine
+    r = subprocess.run(["bash", HOOK], input=json.dumps(
+        {"session_id": "s", "hook_event_name": "SessionStart", "cwd": "/tmp"}),
+        capture_output=True, text=True, timeout=30, env=env)
+    ctx = json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"]
+    assert "Only ever say banana" in ctx, "my file was not used"
+    assert "Subtract, never add" not in ctx, "defaults leaked in alongside mine"
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

@@ -301,7 +301,14 @@ def test_launch_report_carries_title_milestone_and_place():
         with open(os.path.join(gdir, "ship-widget.md"), "w") as f:
             f.write("---\nname: ship-widget\ntitle: Ship the widget — checkout"
                     " live\ncwd: %s\n---\n- [ ] wire the payment key\n" % t)
+        # Isolate the world. Without meditation_dir/store_dir this reads the
+        # REAL repair queue, and `go` does repair before goals — so on any
+        # machine with an open queue the goal never launches and this test
+        # fails for a reason that has nothing to do with what it checks.
+        med = os.path.join(t, "med"); os.makedirs(med)
+        store = os.path.join(med, "nidra_store"); os.makedirs(store)
         res = go2.run(launcher=lambda c, p, n, m="": True, goals_dir=gdir,
+                      meditation_dir=med, store_dir=store,
                       ledger_path=os.path.join(t, "l.jsonl"))
         d = (res.get("launched") or [{}])[0]
         assert d.get("title") == "Ship the widget", d

@@ -25,7 +25,7 @@ import os
 import re
 import sys
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 SKILL_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SKILL_DIR)
@@ -327,6 +327,87 @@ def commit_history(recent_days: int = 30,
     return out
 
 
+# Directory names that are somewhere files live, not projects.
+_NOT_A_PROJECT = {"projects", "downloads", "documents", "desktop", "library",
+                  "claude-sync", "wt", "tmp", "src", "backups"}
+
+_KNOWN_CACHE: Dict[str, Any] = {"at": 0.0, "names": set()}
+
+
+def known_project_names(ttl_s: float = 300.0) -> set:
+    """Every real repo on this machine, by name — used to recognise a project
+    when a fact names one in plain words."""
+    if time.time() - _KNOWN_CACHE["at"] < ttl_s and _KNOWN_CACHE["names"]:
+        return _KNOWN_CACHE["names"]
+    try:
+        names = {k for k in _repo_dirs()
+                 if len(k) >= 4 and not k.startswith(".")
+                 and k not in _NOT_A_PROJECT}
+    except Exception:
+        names = set()
+    _KNOWN_CACHE.update({"at": time.time(), "names": names})
+    return names
+
+
+def _usable(name: Optional[str]) -> Optional[str]:
+    if not name or name.startswith(".") or len(name) < 3:
+        return None
+    return None if name in _NOT_A_PROJECT else name
+
+
+def project_of_fact(mem: Dict[str, Any],
+                    known: Optional[set] = None) -> Tuple[set, str]:
+    """Which project a graded fact is ABOUT, and how we know.
+
+    It used to be decided by each memory's `evidence.source` — which is the
+    path of the memory FILE, inside the store, under the session slug of
+    wherever it was written. On this machine that is one directory for almost
+    everything, so 448 of 495 facts were filed under purangpt and every other
+    project showed zero. The console said one project held all the knowledge
+    in the workspace; it held the memory files, which is not the same claim.
+
+    Three signals, best first, and no guessing after them:
+      path   a path: locator, resolved to its repo the same way work is
+      tag    an explicit project: tag that names a project, not a session slug
+      named  the fact's own words naming a repo that exists on this machine
+
+    A fact with none of those is returned unattributed. 272 of 495 here are,
+    and that is the honest answer — better than a number that points every
+    question at the wrong project.
+    """
+    known = known_project_names() if known is None else known
+    names = set()
+    for e in mem.get("evidence", []) or []:
+        loc = str(e.get("locator", ""))
+        if loc.startswith("path:"):
+            d = project_dir_of(loc[5:])
+            if d:
+                n = _usable(_clean_project_name(os.path.basename(d)))
+                if n:
+                    names.add(n)
+    if names:
+        return names, "path"
+
+    for t in mem.get("tags", []) or []:
+        if t.startswith("project:"):
+            v = t[8:]
+            # a session slug is where you were, not what it is about
+            if not v.startswith("-Users-") and not v.startswith("."):
+                n = _usable(normalize(v))
+                if n:
+                    names.add(n)
+    if names:
+        return names, "tag"
+
+    if known:
+        text = (str(mem.get("statement", "")) + " "
+                + " ".join(mem.get("tags", []) or [])).lower()
+        hit = {k for k in known if re.search(r"\b%s\b" % re.escape(k), text)}
+        if hit:
+            return hit, "named"
+    return set(), "none"
+
+
 def rollup(sessions: Optional[List[Dict]] = None,
            store_dir: str = STORE_DIR,
            goals_dir: Optional[str] = None,
@@ -379,6 +460,8 @@ def rollup(sessions: Optional[List[Dict]] = None,
 
     # knowledge
     mp = os.path.join(store_dir, "memories.jsonl")
+    known = known_project_names()
+    unattributed = 0
     if os.path.exists(mp):
         with open(mp, errors="replace") as f:
             for line in f:
@@ -390,18 +473,20 @@ def rollup(sessions: Optional[List[Dict]] = None,
                     continue
                 if not m.get("active"):
                     continue
-                names = {normalize(t[8:]) for t in m.get("tags", [])
-                         if t.startswith("project:")}
-                for ev in m.get("evidence", []):
-                    src = str(ev.get("source", ""))
-                    if src:
-                        names.add(normalize(src))
-                for n in (names or {"other"}):
+                names, _how = project_of_fact(m, known)
+                if not names:
+                    unattributed += 1
+                    continue          # never invent an owner for a fact
+                for n in names:
                     r = row(n)
                     r["facts"] += 1
                     if m.get("epistemic", {}).get("evidence_status") == "unverified" \
                             and (m.get("evidence") or m.get("flags")):
                         r["repair_items"] += 1
+
+    # How many facts nobody can place. Shown, not hidden: a project column
+    # that silently drops half the store is the same lie in a quieter voice.
+    rollup.facts_unattributed = unattributed
 
     # goals + the task-level view
     kw = {}

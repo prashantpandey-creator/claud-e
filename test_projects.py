@@ -176,6 +176,71 @@ def test_worktrees_are_not_their_own_projects():
     assert pj._clean_project_name("mila-rustore-wt") == "mila-rustore"
 
 
+# ---- facts belong to what they are ABOUT ---------------------------------
+
+def test_a_fact_is_placed_by_its_path_locator():
+    """The strongest signal: a real file, resolved to its repo the same way
+    work is."""
+    with tempfile.TemporaryDirectory() as t:
+        _tree(t, "awakenerunity")
+        f = os.path.join(t, "awakenerunity", "src", "x.cs")
+        mem = {"evidence": [{"locator": "path:" + f}], "statement": "", "tags": []}
+        names, how = pj.project_of_fact(mem, known=set())
+        assert names == {"awakenerunity"} and how == "path", (names, how)
+
+
+def test_the_memory_files_own_home_is_not_the_subject():
+    """Every fact used to be filed by evidence.source — the path of the memory
+    FILE, under the session slug of wherever it was written. On one machine
+    that is one directory, so 448 of 495 facts landed on purangpt and every
+    other project read zero."""
+    mem = {"evidence": [{"source": "/Users/x/claude-sync/memory/"
+                                   "-Users-x-projects-vedic-puran/a.md"}],
+           "statement": "something with no project in it", "tags": []}
+    names, how = pj.project_of_fact(mem, known=set())
+    assert names == set() and how == "none", (names, how)
+
+
+def test_a_session_slug_tag_is_where_you_were_not_what_it_is_about():
+    mem = {"evidence": [], "tags": ["project:-Users-x-projects-vedic-puran"],
+           "statement": "no project named here"}
+    names, how = pj.project_of_fact(mem, known=set())
+    assert names == set(), (names, how)
+
+
+def test_a_real_project_tag_is_used():
+    mem = {"evidence": [], "tags": ["project:purangpt-next"], "statement": ""}
+    names, how = pj.project_of_fact(mem, known=set())
+    assert names == {"purangpt-next"} and how == "tag", (names, how)
+
+
+def test_a_fact_that_names_a_real_repo_is_placed_by_its_words():
+    mem = {"evidence": [], "tags": [],
+           "statement": "The nidra store now grades every receipt on write."}
+    names, how = pj.project_of_fact(mem, known={"nidra", "purangpt"})
+    assert names == {"nidra"} and how == "named", (names, how)
+
+
+def test_a_repo_name_must_match_whole_words():
+    """Substring matching would put every fact mentioning 'meditation' onto
+    the 'meditate' project."""
+    mem = {"evidence": [], "tags": [], "statement": "a meditative pause"}
+    names, _ = pj.project_of_fact(mem, known={"meditate"})
+    assert names == set(), names
+
+
+def test_a_fact_with_no_signal_is_left_unowned():
+    mem = {"evidence": [], "tags": [], "statement": "the sky is blue"}
+    names, how = pj.project_of_fact(mem, known={"purangpt"})
+    assert names == set() and how == "none"
+
+
+def test_generic_directories_are_never_projects():
+    for junk in ("downloads", "projects", "src", "wt", ".ssh"):
+        assert pj._usable(junk) is None, junk
+    assert pj._usable("purangpt") == "purangpt"
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

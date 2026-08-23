@@ -27,6 +27,7 @@ SKILL_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SKILL_DIR)
 
 from coordination import last_file as _last_file
+from projects import rollup as _pj_rollup
 from casper_page import CASPER_PAGE          # the mascot's face
 
 DEFAULT_PORT = 7711
@@ -284,6 +285,7 @@ def state() -> Dict[str, Any]:
         "timing": _casper_timing(),
         "projects": _projects_rollup(),
         "projects_window_days": _window_days_cached(),
+        "facts_unattributed": getattr(_pj_rollup, "facts_unattributed", 0),
         "fleet_running": _fleet_running(),
         "activity": _recent_events(),
     }
@@ -696,7 +698,8 @@ async function tick(){
     `<span style="color:${DIM}">reading the room…</span>`;
   const wd = s.projects_window_days||0;
   if (wd) document.getElementById("projlabel").textContent =
-    `— % is share of the last ${wd} days of chats; commits are the whole history`;
+    `\u2014 % is share of the last ${wd} days of chats; commits are the whole history`
+    + (s.facts_unattributed ? `; ${s.facts_unattributed} facts name no project` : "");
   document.getElementById("projects").innerHTML = (s.projects||[]).map(p=>{
     const share = 100*p.messages/tot;
     const hist = p.commits ? `${p.commits} commits since ${(p.since||"").slice(0,7)}`
