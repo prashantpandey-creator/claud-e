@@ -171,6 +171,28 @@ if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--say" {
     RunLoop.main.run()
 }
 
+// `casper --frames <seconds>` reports how often he actually repaints while
+// idle. The adaptive-redraw claim is only worth making with this number.
+if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--frames" {
+    _ = NSApplication.shared
+    let secs = Double(CommandLine.arguments[2]) ?? 5
+    let n = Int(secs * 60)
+    let v = GhostView(frame: NSRect(x: 0, y: 0, width: 200, height: 200))
+    v.mood = .idle
+    for _ in 0..<n { v.tick(dt: 1.0 / 60) }
+    let v2 = GhostView(frame: NSRect(x: 0, y: 0, width: 200, height: 200))
+    v2.mood = .speaking
+    v2.mouthDrive = 0.5
+    for _ in 0..<n { v2.tick(dt: 1.0 / 60) }
+    print(String(format: "idle:     %d ticks -> %d repaints (%.0f%%)",
+                 v.framesSeen, v.framesDrawn,
+                 100.0 * Double(v.framesDrawn) / Double(max(1, v.framesSeen))))
+    print(String(format: "speaking: %d ticks -> %d repaints (%.0f%%)",
+                 v2.framesSeen, v2.framesDrawn,
+                 100.0 * Double(v2.framesDrawn) / Double(max(1, v2.framesSeen))))
+    exit(0)
+}
+
 if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--render" {
     _ = NSApplication.shared                     // AppKit needs to exist to draw
     renderFrames(to: CommandLine.arguments[2])
