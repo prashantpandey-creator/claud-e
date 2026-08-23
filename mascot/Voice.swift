@@ -273,6 +273,27 @@ final class Mouth: NSObject, AVSpeechSynthesizerDelegate {
     /// the one talking.
     private(set) var lane = "apple"
 
+    /// Start the voice server if nobody has. Once per launch.
+    ///
+    /// Nothing else starts it. Casper only ASKED it to render, and when it was
+    /// not running he fell silently back to Apple's voice — which measured
+    /// 122 Hz against Kokoro's 205, i.e. the opposite of what was asked for.
+    /// A fallback nobody is told about is a setting nobody chose.
+    private static var triedToStart = false
+    static func ensureVoiceServer() {
+        guard !triedToStart else { return }
+        triedToStart = true
+        let skill = ("~/.claude/skills/meditate" as NSString).expandingTildeInPath
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        // python3.10 specifically: onnxruntime ships no wheel for 3.14, so the
+        // interpreter this app's helpers use cannot load the model at all.
+        p.arguments = ["python3.10", skill + "/tts.py", "--serve"]
+        p.standardOutput = FileHandle.nullDevice
+        p.standardError = FileHandle.nullDevice
+        try? p.run()          // if python3.10 is absent, Apple's voice stands in
+    }
+
     /// Ask the warm Kokoro server (tts.py --serve, loopback :7712) to render.
     /// Returns the samples, or nil in one network timeout when it is down —
     /// the fallback must be instant, not a stall.
@@ -336,6 +357,7 @@ final class Mouth: NSObject, AVSpeechSynthesizerDelegate {
         // down, so he is never mute, just less human for a while.
         DispatchQueue.global().async { [weak self] in
             guard let self = self else { return }
+            Mouth.ensureVoiceServer()
             if let buf = self.kokoroRender(clean) {
                 DispatchQueue.main.async {
                     self.lane = "kokoro"

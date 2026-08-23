@@ -1121,13 +1121,28 @@ final class App: NSObject, NSApplicationDelegate {
     var askBtn: NSButton!
     var fleetBtn: NSButton!
     var stopBtn: NSButton!
+    var muteBtn: NSButton!
 
     /// Quiet mode: he never speaks or offers UNPROMPTED. Click him or say his
     /// name and he still answers — this disables the intrusion, not the tool.
     static let quietKey = "casper.quiet"
+    /// Muted is not the same as quiet, and folding them together would lose
+    /// one of them. `quiet` = do not VOLUNTEER things. `voiceOff` = never
+    /// make a sound; the words still arrive, in writing.
+    static let muteKey = "casper.muted"
     var quiet: Bool {
         get { UserDefaults.standard.bool(forKey: App.quietKey) }
         set { UserDefaults.standard.set(newValue, forKey: App.quietKey) }
+    }
+
+    var voiceOff: Bool {
+        get { UserDefaults.standard.bool(forKey: App.muteKey) }
+        set {
+            UserDefaults.standard.set(newValue, forKey: App.muteKey)
+            // Flush now: this app gets killed rather than quit, and an unflushed
+            // preference is one that silently forgets what you chose.
+            UserDefaults.standard.synchronize()
+        }
     }
     /// The full spoken introduction happens ONCE, ever. Repeating the whole
     /// speech at every launch was most of what made him feel intrusive.
@@ -1152,7 +1167,7 @@ final class App: NSObject, NSApplicationDelegate {
     var muteGraceFrames = 0
 
     func applicationDidFinishLaunching(_ n: Notification) {
-        let W: CGFloat = 200, H: CGFloat = 248
+        let W: CGFloat = 268, H: CGFloat = 248
         let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         let frame = NSRect(x: screen.maxX - W - 24, y: screen.minY + 40, width: W, height: H)
 
@@ -1168,7 +1183,7 @@ final class App: NSObject, NSApplicationDelegate {
         let root = NSView(frame: NSRect(origin: .zero, size: frame.size))
         window.contentView = root
 
-        ghost = GhostView(frame: NSRect(x: 34, y: 100, width: 132, height: 132))
+        ghost = GhostView(frame: NSRect(x: 68, y: 100, width: 132, height: 132))
         // Layer-backed, or he flickers. A borderless transparent window that
         // redraws 60 times a second without a layer lets the window server
         // composite half-drawn frames — the whole mascot strobes.
@@ -1217,21 +1232,25 @@ final class App: NSObject, NSApplicationDelegate {
         // then fill the space to its left.
         let fleetW = App.widthFor("Stop 88", font: bf)
         let fleetXPos = W - 8 - fleetW
-        let leftWidth = fleetXPos - 4
+        let leftWidth = fleetXPos - 12   // a real gap before the fleet switch
         let offerX = App.rowX(["Yes", "Not now"], font: bf, width: leftWidth)
-        let ctrlX  = App.rowX(["Hearing", "Ask"], font: bf, width: leftWidth)
+        let ctrlX  = App.rowX(["Hearing", "Muted", "Ask"], font: bf, width: leftWidth)
 
         yesBtn = button("Yes", x: offerX[0].0, w: offerX[0].1)
         yesBtn.target = self; yesBtn.action = #selector(sayYes)
         yesBtn.keyEquivalent = "\r"                 // the obvious answer is the default
         noBtn = button("Not now", x: offerX[1].0, w: offerX[1].1)
         noBtn.target = self; noBtn.action = #selector(sayNo)
-        askBtn = button("Ask", x: ctrlX[1].0, w: ctrlX[1].1)
+        askBtn = button("Ask", x: ctrlX[2].0, w: ctrlX[2].1)
         askBtn.target = self; askBtn.action = #selector(askSomething)
         fleetBtn = button("Start", x: fleetXPos, w: fleetW)
         fleetBtn.target = self; fleetBtn.action = #selector(toggleFleet)
         tinted(fleetBtn, title: "Start", tint: .green)
         root.addSubview(fleetBtn)
+
+        muteBtn = button("Mute", x: ctrlX[1].0, w: ctrlX[1].1)
+        muteBtn.target = self; muteBtn.action = #selector(toggleMute)
+        root.addSubview(muteBtn)
 
         micBtn = button("Talk", x: ctrlX[0].0, w: ctrlX[0].1)
         micBtn.target = self; micBtn.action = #selector(toggleMic)
@@ -1262,6 +1281,7 @@ final class App: NSObject, NSApplicationDelegate {
             .font: NSFont.systemFont(ofSize: 12, weight: .medium)])
         closeBtn.toolTip = "Close Casper (meditate casper brings him back)"
         [yesBtn, noBtn, askBtn, micBtn, closeBtn].forEach { root.addSubview($0!) }
+        refreshMuteButton()
         showOffer(false)
         refreshMicButton()
         setBubble("")
@@ -1455,10 +1475,23 @@ final class App: NSObject, NSApplicationDelegate {
     /// its own text. Returns (x, width) per item.
     static func rowX(_ titles: [String], font: NSFont, width: CGFloat,
                      margin: CGFloat = 8) -> [(CGFloat, CGFloat)] {
-        let ws = titles.map { widthFor($0, font: font) }
-        let total = ws.reduce(0, +)
+        var ws = titles.map { widthFor($0, font: font) }
         let gaps = max(1, titles.count - 1)
-        let gap = max(4, (width - margin * 2 - total) / CGFloat(gaps))
+        let usable = width - margin * 2
+        // If the pills do not fit, SHRINK them. The old version floored the
+        // gap at 4 and kept laying out past the edge, so the last pill ran
+        // underneath the control pinned to its right — measured: "Ask" and
+        // "Start" overlapped by 5pt and rendered as one 105pt slab. A layout
+        // that silently overflows is worse than one that looks cramped.
+        let minGap: CGFloat = 8
+        var total = ws.reduce(0, +)
+        let need = total + minGap * CGFloat(gaps)
+        if need > usable {
+            let scale = (usable - minGap * CGFloat(gaps)) / total
+            ws = ws.map { max(34, $0 * scale) }
+            total = ws.reduce(0, +)
+        }
+        let gap = max(minGap, (usable - total) / CGFloat(gaps))
         var out: [(CGFloat, CGFloat)] = []
         var x = margin
         for w in ws { out.append((x, w)); x += w + gap }
@@ -1506,6 +1539,7 @@ final class App: NSObject, NSApplicationDelegate {
         noBtn.isHidden = !on
         askBtn.isHidden = on          // one row, two states — never four buttons
         micBtn.isHidden = on
+        muteBtn.isHidden = on
         // ...except the fleet switch, which stays. Whether work is running is
         // not a question he asked you, and you should always be able to stop it.
         fleetBtn.isHidden = false
@@ -1540,8 +1574,14 @@ final class App: NSObject, NSApplicationDelegate {
 
     func say(_ text: String) {
         setBubble(text)
-        ear.muted = true                 // never answer his own last sentence
         markDelivered(text)
+        if voiceOff {
+            // Muted means no SOUND, not no answer. The sentence is already in
+            // the bubble above; speaking it is the only part being skipped.
+            ghost.mood = .idle
+            return
+        }
+        ear.muted = true                 // never answer his own last sentence
         mouth.say(text)
     }
 
@@ -1813,7 +1853,11 @@ final class App: NSObject, NSApplicationDelegate {
         parts.append(String(format: "floor=%.3f", Double(ear.noiseFloor)))
         parts.append(String(format: "quiet=%.1f", ear.quietFor))
         parts.append("heard=" + String(ear.heardSoFar.prefix(40)))
-        parts.append("muted=" + (ear.muted ? "yes" : "no"))
+        // Two different mutes, and one name for both is how a test reads the
+        // wrong one: earMuted is the ear ignoring HIM while he speaks;
+        // voice is the switch you press to stop him making noise at all.
+        parts.append("earMuted=" + (ear.muted ? "yes" : "no"))
+        parts.append("voice=" + (voiceOff ? "OFF" : "on"))
         parts.append(String(format: "taskAge=%.0f", ear.taskAge))
         parts.append("earErr=" + (ear.lastError.isEmpty ? "-"
                      : String(ear.lastError.prefix(48))
@@ -1984,6 +2028,27 @@ final class App: NSObject, NSApplicationDelegate {
         a.addButton(withTitle: "OK")
         NSApp.activate(ignoringOtherApps: true)
         a.runModal()
+    }
+
+    /// Mute: no sound at all. The words keep arriving in the bubble, which is
+    /// why this is a separate switch from `quiet` — one stops him volunteering,
+    /// this one stops him making noise.
+    @objc func toggleMute() {
+        voiceOff.toggle()
+        if voiceOff {
+            mouth.shutUp()
+            ear.muted = false
+            setBubble("Muted. I'll still write, just not out loud.")
+        } else {
+            setBubble("Voice back on.")
+        }
+        refreshMuteButton()
+    }
+
+    func refreshMuteButton() {
+        guard muteBtn != nil else { return }
+        tinted(muteBtn, title: voiceOff ? "Muted" : "Mute",
+               tint: voiceOff ? .red : .neutral)
     }
 
     @objc func toggleQuiet() {

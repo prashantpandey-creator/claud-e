@@ -34,13 +34,24 @@ MODELS = os.path.expanduser("~/.claude/meditation/models")
 MODEL = os.path.join(MODELS, "kokoro-v1.0.onnx")
 VOICES = os.path.join(MODELS, "voices-v1.0.bin")
 
-# Calm, low, unhurried first. af_* female, am_* male, b* British.
-# Male, calm and low first — the owner asked for a male voice, and a default
-# nobody chose is still a choice. MEDITATE_TTS_VOICE overrides.
-PREFERRED = ["am_michael", "bm_george", "am_adam", "am_eric",
-             "af_heart", "bf_emma", "af_sarah"]
+# af_* female, am_* male, b* British.
+#
+# This list led with am_michael because the owner asked for a male voice. On
+# 2026-08-24 he asked for a CUTE one instead, so it leads with the light,
+# bright end now. That is a reversal of a recorded decision, not a drift, and
+# MEDITATE_TTS_VOICE still overrides either way.
+#
+# Ordered by measured pitch on one sentence, which is the closest objective
+# handle on "cute" there is:
+#     af_heart   200 Hz    bf_lily  200 Hz    af_bella 198 Hz
+#     af_sky     161 Hz    af_nicole 155 Hz (and drawn out: 4.4s vs 2.9s)
+#     am_michael 122 Hz  <- the old default, the lowest of the six
+# af_heart leads because it ties for the highest AND is Kokoro's best-rated
+# voice; bf_lily is the same pitch with a British lift if you prefer it.
+PREFERRED = ["af_heart", "bf_lily", "af_bella", "af_sky",
+             "bf_emma", "af_sarah", "am_michael"]
 DEFAULT_VOICE = os.environ.get("MEDITATE_TTS_VOICE", PREFERRED[0])
-SPEED = float(os.environ.get("MEDITATE_TTS_SPEED", "0.92"))   # a touch unhurried
+SPEED = float(os.environ.get("MEDITATE_TTS_SPEED", "0.98"))   # bright, not draggy
 
 
 def _why_not() -> str:
