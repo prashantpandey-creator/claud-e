@@ -139,6 +139,38 @@ def test_cli_envelope():
     assert "state" in env["data"]["timing"]
 
 
+def test_patience_shortens_the_gap_he_waits_for():
+    """"Never break flow" is right for ten minutes and wrong forever: someone
+    working at a keyboard is never 25 s idle, so the rule muted him all day."""
+    import tempfile, time as _t
+    med = tempfile.mkdtemp()
+    p = os.path.join(med, "last-spoke")
+
+    def spoke(ago):
+        open(p, "w").write("x")
+        os.utime(p, (_t.time() - ago, _t.time() - ago))
+
+    sig = {"idle_s": 8, "frontmost": "Terminal"}
+    spoke(30)                      # just said something
+    assert vc.interruptibility(sig=sig, meditation_dir=med)["interrupt_ok"] is False, \
+        "should still be waiting for a real pause"
+    spoke(2400)                    # holding it 40 minutes
+    r = vc.interruptibility(sig=sig, meditation_dir=med)
+    assert r["interrupt_ok"] is True, "held that long, 8 s of quiet is a fair moment"
+
+
+def test_patience_never_overrides_a_meeting():
+    """Politeness that decays must not decay through the one hard no."""
+    import tempfile, time as _t
+    med = tempfile.mkdtemp()
+    p = os.path.join(med, "last-spoke")
+    open(p, "w").write("x")
+    os.utime(p, (_t.time() - 99999, _t.time() - 99999))
+    r = vc.interruptibility(sig={"idle_s": 2, "frontmost": "zoom.us",
+                                 "in_meeting": True}, meditation_dir=med)
+    assert r["interrupt_ok"] is False and r["state"] == "meeting", r
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

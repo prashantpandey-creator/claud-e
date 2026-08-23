@@ -210,6 +210,12 @@ final class GhostView: NSView {
     private struct Spark { var x, y, vx, vy, life: CGFloat }
     private var sparks: [Spark] = []
 
+    // ---- arriving ----------------------------------------------------------
+    /// 0 = not here yet, 1 = fully present. Only ever below 1 on the very
+    /// first run, when he gathers himself out of nothing in front of you.
+    private var appear: CGFloat = 1
+    private var burstDone = true
+
     /// Live microphone loudness, 0..1, set by the Ear. The listening pose is
     /// driven by this and nothing else — he leans further and his sound arcs
     /// swell because you actually got louder.
@@ -258,6 +264,26 @@ final class GhostView: NSView {
         }
     }
 
+    /// Arrive. Sparks rush INWARD and gather, he swells out of nothing with
+    /// an overshoot, then they scatter and his eyes open on you.
+    ///
+    /// Only the first run gets this. A trick you have seen twice is furniture.
+    func materialize() {
+        appear = 0
+        burstDone = false
+        blink = 0
+        blinkAt = 1e9                 // eyes stay shut until he is here
+        sparks.removeAll()
+        let cx = bounds.width / 2, cy = bounds.height * 0.42
+        for i in 0..<20 {
+            let a = CGFloat(i) / 20 * .pi * 2
+            let r = CGFloat.random(in: 62...96)
+            sparks.append(Spark(x: cx + cos(a) * r, y: cy + sin(a) * r,
+                                vx: -cos(a) * r * 1.5, vy: -sin(a) * r * 1.5,
+                                life: 0.85))
+        }
+    }
+
     /// Caught off guard.
     func startle() { feel(.surprised, for: 1.1); hopV -= 90; blinksOwed = 0 }
 
@@ -272,6 +298,26 @@ final class GhostView: NSView {
         framesSeen += 1
 
         if t > feelingUntil { feeling = .neutral }
+
+        // ---- arriving --------------------------------------------------------
+        if appear < 1 {
+            appear = min(1, appear + dt / 1.5)
+            if !burstDone && appear > 0.52 {
+                burstDone = true
+                blink = 0
+                blinkAt = t + 0.05        // and then he looks at you
+                hopV -= 120
+                let cx = bounds.width / 2, cy = bounds.height * 0.42
+                for i in 0..<16 {
+                    let a = CGFloat(i) / 16 * .pi * 2 + 0.2
+                    sparks.append(Spark(x: cx + cos(a) * 8, y: cy + sin(a) * 8,
+                                        vx: cos(a) * CGFloat.random(in: 55...120),
+                                        vy: sin(a) * CGFloat.random(in: 55...120) - 30,
+                                        life: CGFloat.random(in: 0.6...1.2)))
+                }
+            }
+            if appear >= 1 { feel(.happy, for: 2.4) }
+        }
 
         // ---- energy: what is actually happening, not a script --------------
         let busy: CGFloat = (mood == .speaking || mood == .listening) ? 0.95
@@ -370,14 +416,14 @@ final class GhostView: NSView {
             for i in sparks.indices {
                 sparks[i].x += sparks[i].vx * dt
                 sparks[i].y += sparks[i].vy * dt
-                sparks[i].vy += 150 * dt                 // gravity
+                if burstDone { sparks[i].vy += 150 * dt }   // gravity, after he lands
                 sparks[i].life -= dt
             }
             sparks.removeAll { $0.life <= 0 }
         }
 
         // ---- adaptive redraw ---------------------------------------------------
-        let moving = mood != .idle || act != .none || !sparks.isEmpty
+        let moving = appear < 1 || mood != .idle || act != .none || !sparks.isEmpty
             || abs(hopV) > 1 || abs(hop) > 0.3 || mouth > 0.01
             || blink < 0.999 || feeling != .neutral
         if moving {
@@ -737,9 +783,9 @@ final class App: NSObject, NSApplicationDelegate {
         style(yesBtn, title: "Yes, fix it", accent: true)
         noBtn = button("Not now", x: 102, w: 92)
         noBtn.target = self; noBtn.action = #selector(sayNo)
-        askBtn = button("Ask", x: 102, w: 92)
+        askBtn = button("Ask me", x: 102, w: 92)
         askBtn.target = self; askBtn.action = #selector(askSomething)
-        micBtn = button("Mic", x: 6, w: 92)
+        micBtn = button("Talk to me", x: 6, w: 92)
         micBtn.target = self; micBtn.action = #selector(toggleMic)
         [yesBtn, noBtn, askBtn, micBtn].forEach { root.addSubview($0!) }
         showOffer(false)
@@ -804,7 +850,7 @@ final class App: NSObject, NSApplicationDelegate {
         Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in self.writeStatus() }
 
         Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { _ in self.check() }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { self.check() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { self.greet() }
     }
 
     /// A button that draws itself.
@@ -865,6 +911,22 @@ final class App: NSObject, NSApplicationDelegate {
         mouth.say(text)
     }
 
+    /// The first thing he ever says. Spoken whatever the timing layer thinks,
+    /// because a companion that has never introduced itself is a widget, and
+    /// because the rule that waits for a pause had him silent all day — anyone
+    /// working at a keyboard is never idle long enough for it to fire.
+    func greet() {
+        var line = "Hi, I'm Casper. I keep an eye on your work. "
+                 + "Click me any time and just talk."
+        if let b = Meditate.brief(), !b.headline.isEmpty, b.kind != "clear" {
+            line += " Right now: " + b.headline
+            pendingAction = b.action
+        }
+        say(line)
+        showOffer(!pendingAction.isEmpty)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 6) { self.check() }
+    }
+
     /// Poll meditate. If there's something worth saying AND you're at a pause,
     /// brighten, speak it once, and OFFER the fix as a question.
     func check() {
@@ -891,7 +953,7 @@ final class App: NSObject, NSApplicationDelegate {
     @objc func sayYes() {
         let action = pendingAction
         showOffer(false)
-        setBubble("Running \(action)…")
+        setBubble("On it…")
         DispatchQueue.global().async {
             let out = Meditate.perform(action)
             let first = out.split(separator: "\n").first.map(String.init) ?? "Done."
@@ -916,7 +978,7 @@ final class App: NSObject, NSApplicationDelegate {
         if mouth.speaking { mouth.shutUp(); ear.muted = false; return }
         if armed {
             armed = false
-            setBubble("Not listening. Click me, or just say my name.")
+            setBubble("Stopped listening. Click me when you want to talk.")
             return
         }
         guard ear.running else {
@@ -944,7 +1006,7 @@ final class App: NSObject, NSApplicationDelegate {
             return
         }
         armed = true
-        setBubble("Listening. Say what you like \u{2014} click me to stop.")
+        setBubble("Go ahead \u{2014} I'm listening. Click me to stop.")
     }
 
     /// One finished utterance. Decide whether it was aimed at him at all.
@@ -1024,7 +1086,7 @@ final class App: NSObject, NSApplicationDelegate {
             armed = false
             ear.stop()
             micEnabled = false
-            setBubble("Microphone off. I can't hear anything now.")
+            setBubble("Off. I won't hear anything until you switch me back on.")
         } else {
             micEnabled = true
             Ear.requestAccess { [weak self] ok, why in
@@ -1045,7 +1107,7 @@ final class App: NSObject, NSApplicationDelegate {
 
     func refreshMicButton() {
         let on = ear.running
-        style(micBtn, title: on ? "Listening" : "Mic off", accent: on)
+        style(micBtn, title: on ? "I'm listening" : "Talk to me", accent: on)
         micBtn.toolTip = on ? "Click to stop listening"
                             : "Click to let Casper hear you"
     }

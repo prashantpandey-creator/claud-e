@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import time
 from typing import Any, Dict, List, Optional
@@ -115,6 +116,105 @@ def _age_days(ts: str) -> Optional[float]:
         return None
 
 
+def _clean_project_name(seg: str) -> str:
+    """A directory name reduced to the project it stands for."""
+    s = (seg or "").strip().strip("/")
+    s = s.split("--claude-worktrees-")[0].split("--worktrees-")[0]
+    s = re.sub(r"^wt-", "", s)          # wt-glyph-sweep is a branch of a project
+    s = re.sub(r"-wt$", "", s)
+    s = re.sub(r"[ _]+", "-", s).strip("-").lower()
+    for pat, name in _aliases():
+        if pat in s:
+            return name
+    return s or "unknown"
+
+
+# Directories that HOLD projects but are not projects themselves. A path is
+# resolved relative to whichever of these contains it.
+_CONTAINERS = [os.path.expanduser("~/projects"),
+               os.path.expanduser("~/.claude/skills"),
+               os.path.expanduser("~/Documents"),
+               os.path.expanduser("~")]
+
+# Not projects at all: the transcript and memory store. EVERY session writes
+# here, so counting it as work made "memory" look like a 21% project.
+_NOT_WORK = [os.path.expanduser("~/.claude/projects"),
+             os.path.expanduser("~/.claude/meditation")]
+
+_GIT_CACHE: Dict[str, bool] = {}
+
+
+def _is_repo(path: str) -> bool:
+    if path not in _GIT_CACHE:
+        _GIT_CACHE[path] = os.path.exists(os.path.join(path, ".git"))
+    return _GIT_CACHE[path]
+
+
+def project_dir_of(path: str) -> Optional[str]:
+    """The directory that IS the project this file belongs to.
+
+    Two signals, in order:
+      1. the nearest ancestor holding a .git — a repo is a project by
+         definition, and this is what separates a container directory from
+         the several products inside it
+      2. failing that, the first directory under a known container
+
+    Position alone cannot tell them apart: 'vedic puran/AwakenerUnity' is a
+    game and 'job-copilot/src' is a source folder, and both are the second
+    segment of their path.
+    """
+    p = os.path.abspath(path)
+    for skip in _NOT_WORK:
+        if p.startswith(skip + os.sep):
+            return None
+    d = os.path.dirname(p)
+    root = None
+    for c in _CONTAINERS:
+        if p.startswith(c + os.sep):
+            root = c
+            break
+    # 1. nearest repo
+    probe = d
+    while probe and probe != "/" and (root is None or probe.startswith(root)):
+        if probe != root and _is_repo(probe):
+            return probe
+        probe = os.path.dirname(probe)
+    # 2. first directory under the container
+    if root:
+        rest = p[len(root) + 1:].split(os.sep)
+        if rest and rest[0]:
+            return os.path.join(root, rest[0])
+    return None
+
+
+def project_of_work(files: Optional[List[str]]) -> Optional[str]:
+    """Which project a session actually WORKED on, from the files it edited.
+
+    The folder you launch Claude from is not the thing you are building. This
+    workspace runs almost everything out of one directory, so attributing by
+    cwd said purangpt owned 96.3% of all attention. Measured across the same
+    155 transcripts and 3,355 user messages, by what was actually edited,
+    purangpt is 17% and this tool itself is the biggest consumer at 29.9% —
+    a fact the console could never have shown you.
+
+    Sub-projects are NOT folded into their container: a directory that happens
+    to hold several products is not one product.
+    """
+    if not files:
+        return None
+    counts: Dict[str, int] = {}
+    for f in files:
+        d = project_dir_of(f)
+        if not d:
+            continue
+        name = _clean_project_name(os.path.basename(d))
+        if name and not name.startswith("."):
+            counts[name] = counts.get(name, 0) + 1
+    if not counts:
+        return None
+    return max(counts, key=lambda k: counts[k])
+
+
 def rollup(sessions: Optional[List[Dict]] = None,
            store_dir: str = STORE_DIR,
            goals_dir: Optional[str] = None,
@@ -141,7 +241,10 @@ def rollup(sessions: Optional[List[Dict]] = None,
 
     # attention
     for s in sessions:
-        r = row(normalize(s.get("_project_slug") or s.get("cwd", "")))
+        # what was edited beats where it was launched; cwd only when a session
+        # touched nothing at all
+        by_work = project_of_work(s.get("files_touched"))
+        r = row(by_work or normalize(s.get("_project_slug") or s.get("cwd", "")))
         r["sessions"] += 1
         r["messages"] += (s.get("counts") or {}).get("user", 0)
         age = _age_days(s.get("ts_end") or "")

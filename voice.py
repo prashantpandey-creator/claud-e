@@ -48,7 +48,8 @@ LIVE_S = 3600        # presence younger than this = the session still counts
 
 
 def interruptibility(coord_dir: str = COORD_DIR,
-                     sig: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                     sig: Optional[Dict[str, Any]] = None,
+                     meditation_dir: str = MEDITATION_DIR) -> Dict[str, Any]:
     """flow | pause | settled | meeting | away — and WHY.
 
     This used to be inferred from how long ago a session touched a file, which
@@ -83,7 +84,18 @@ def interruptibility(coord_dir: str = COORD_DIR,
             return {"state": "away", "interrupt_ok": False, "since_s": int(idle),
                     "basis": basis,
                     "why": "no key or mouse for %d min" % (idle // 60)}
-        if idle < FLOW_S:
+        # How long he has been sitting on something. Patience shrinks the gap
+        # he is willing to take: "never break flow" is right for the first ten
+        # minutes and wrong forever, because someone working at a keyboard is
+        # never 25 seconds idle. Held long enough, a breath between sentences
+        # is a fair moment.
+        held = _held_for(meditation_dir)
+        gate = FLOW_S
+        if held > 1800:                     # half an hour unheard
+            gate = 5
+        elif held > 900:
+            gate = 10
+        if idle < gate:
             where = sig.get("frontmost") or "something"
             return {"state": "flow", "interrupt_ok": False, "since_s": int(idle),
                     "basis": basis,
@@ -214,6 +226,15 @@ def _pick(options, seed_text: str) -> str:
     import hashlib
     h = int(hashlib.sha256(seed_text.encode("utf-8", "replace")).hexdigest()[:8], 16)
     return options[h % len(options)]
+
+
+def _held_for(meditation_dir: str = MEDITATION_DIR) -> float:
+    """Seconds since he last actually said anything out loud."""
+    try:
+        return time.time() - os.path.getmtime(
+            os.path.join(meditation_dir, "last-spoke"))
+    except OSError:
+        return 1e9          # never spoken: he has been holding it forever
 
 
 def mark_spoke(meditation_dir: str = MEDITATION_DIR) -> None:
