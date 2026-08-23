@@ -68,6 +68,22 @@ else
            --options runtime --entitlements Casper.entitlements "$APP"
 fi
 
+# TCC binds its decision to a bundle's code signature. Changing the signing
+# identity (ad-hoc -> a developer certificate, say) leaves a STALE record, and
+# a stale record makes the app abort at launch with
+# "must contain an NSSpeechRecognitionUsageDescription key" — while the key is
+# sitting right there in the Info.plist. Two crash reports, 0.2s after launch,
+# before that was clear. If the signature changed since the last build, clear
+# the decisions so the next launch re-reads the plist instead of dying.
+SIGFILE="$APP/../.last-signature"
+NOWSIG=$(codesign -dvvv "$APP" 2>&1 | awk -F= '/^Authority=/{print $2; exit}')
+if [ -f "$SIGFILE" ] && [ "$(cat "$SIGFILE")" != "$NOWSIG" ]; then
+  echo "signing identity changed — clearing stale privacy decisions"
+  tccutil reset SpeechRecognition com.meditate.casper >/dev/null 2>&1 || true
+  tccutil reset Microphone com.meditate.casper >/dev/null 2>&1 || true
+fi
+printf '%s\n' "$NOWSIG" > "$SIGFILE"
+
 cp "$BIN" ./casper          # bare binary stays, for --render and tests
 echo "built $APP  ($(stat -f%z "$BIN") bytes)"
 codesign -dv "$APP" 2>&1 | grep -E "Identifier|Signature" || true

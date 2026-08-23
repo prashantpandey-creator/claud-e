@@ -35,8 +35,10 @@ MODEL = os.path.join(MODELS, "kokoro-v1.0.onnx")
 VOICES = os.path.join(MODELS, "voices-v1.0.bin")
 
 # Calm, low, unhurried first. af_* female, am_* male, b* British.
-PREFERRED = ["af_heart", "bf_emma", "af_sarah", "am_michael", "bm_george",
-             "af_nicole", "am_adam"]
+# Male, calm and low first — the owner asked for a male voice, and a default
+# nobody chose is still a choice. MEDITATE_TTS_VOICE overrides.
+PREFERRED = ["am_michael", "bm_george", "am_adam", "am_eric",
+             "af_heart", "bf_emma", "af_sarah"]
 DEFAULT_VOICE = os.environ.get("MEDITATE_TTS_VOICE", PREFERRED[0])
 SPEED = float(os.environ.get("MEDITATE_TTS_SPEED", "0.92"))   # a touch unhurried
 

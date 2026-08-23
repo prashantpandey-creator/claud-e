@@ -532,8 +532,11 @@ final class Mouth: NSObject, AVSpeechSynthesizerDelegate {
 
     /// Calm and measured first, bright and chirpy last. Order is the taste
     /// call; quality tier still outranks all of it.
-    static let shortlist = ["Serena", "Daniel", "Samantha", "Ava", "Moira",
-                            "Karen", "Tessa", "Fiona", "Allison", "Susan"]
+    // Male voices first. Quality still outranks the shortlist, so a premium
+    // voice wins over a compact one of the preferred name — a good voice of
+    // the wrong sort beats a robot of the right one.
+    static let shortlist = ["Daniel", "Oliver", "Alex", "Tom", "Fred",
+                            "Rishi", "Aaron", "Arthur", "Serena", "Samantha"]
 
     static func rank(_ v: AVSpeechSynthesisVoice) -> (Int, Int) {
         let idx = shortlist.firstIndex(where: { v.name.contains($0) }) ?? shortlist.count

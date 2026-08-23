@@ -193,6 +193,38 @@ final class Meditate {
 /// whether a desktop companion speaks over your meeting or not, and a rule
 /// that can only be exercised by talking at a live window is a rule nobody
 /// checks. Returns nil when the utterance was not aimed at him.
+/// How far apart two words are, letter by letter.
+func editDistance(_ a: String, _ b: String) -> Int {
+    let x = Array(a), y = Array(b)
+    if x.isEmpty || y.isEmpty { return max(x.count, y.count) }
+    var prev = Array(0...y.count)
+    for i in 1...x.count {
+        var cur = [i]
+        for j in 1...y.count {
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1,
+                           prev[j - 1] + (x[i - 1] == y[j - 1] ? 0 : 1)))
+        }
+        prev = cur
+    }
+    return prev[y.count]
+}
+
+/// Was the first word his name, allowing for it being misheard?
+///
+/// Measured by talking at him: "Casper" came back as "Rahul", and on other
+/// passes "Caspar" and "Jasper". Demanding the exact spelling of a name the
+/// recogniser was never taught means he answers only when it guesses right —
+/// which from the outside is indistinguishable from not listening at all.
+func soundsLikeHisName(_ token: String) -> Bool {
+    let t = token.lowercased().trimmingCharacters(
+        in: CharacterSet.alphanumerics.inverted)
+    guard t.count >= 4, t.count <= 9 else { return false }
+    if t.contains("asper") || t.contains("aspar") || t.contains("caspe") {
+        return true
+    }
+    return editDistance(t, "casper") <= 2
+}
+
 func addressedQuestion(_ raw: String, armed: Bool) -> String? {
     let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
     let lower = text.lowercased()
@@ -205,7 +237,16 @@ func addressedQuestion(_ raw: String, armed: Bool) -> String? {
             .trimmingCharacters(in: CharacterSet(charactersIn: " ,.?!"))
         break
     }
-    if !addressed && lower.contains("casper") { addressed = true }
+    if !addressed {
+        let words = text.split(separator: " ").map(String.init)
+        if let first = words.first, soundsLikeHisName(first) {
+            addressed = true
+            question = words.dropFirst().joined(separator: " ")
+                .trimmingCharacters(in: CharacterSet(charactersIn: " ,.?!"))
+        } else if lower.contains("casper") {
+            addressed = true
+        }
+    }
     guard addressed, question.count > 2 else { return nil }
     return question
 }
@@ -602,15 +643,33 @@ final class GhostView: NSView {
     private let amber   = NSColor(srgbRed: 0.91, green: 0.71, blue: 0.25, alpha: 1)
 
     var onClick: (() -> Void)?
+    var onDoubleClick: (() -> Void)?
     var onRightClick: ((NSEvent) -> Void)?
     private var downAt = NSPoint.zero
+    private var pendingClick: DispatchWorkItem?
 
     override func rightMouseDown(with e: NSEvent) { onRightClick?(e) }
 
     override func mouseDown(with e: NSEvent) { downAt = e.locationInWindow }
     override func mouseUp(with e: NSEvent) {
         let d = hypot(e.locationInWindow.x - downAt.x, e.locationInWindow.y - downAt.y)
-        if d < 4 { bounce(); onClick?() } else { super.mouseUp(with: e) }
+        guard d < 4 else { super.mouseUp(with: e); return }
+        // A double click must not ALSO fire the single-click action, or opening
+        // the dashboard would silently toggle the microphone on the way. The
+        // single click waits a quarter second to find out which it was.
+        if e.clickCount >= 2 {
+            pendingClick?.cancel()
+            pendingClick = nil
+            bounce()
+            onDoubleClick?()
+            return
+        }
+        let w = DispatchWorkItem { [weak self] in
+            self?.bounce()
+            self?.onClick?()
+        }
+        pendingClick = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: w)
     }
 
     override func draw(_ dirty: NSRect) {
@@ -1124,6 +1183,9 @@ final class App: NSObject, NSApplicationDelegate {
         root.addSubview(stopBtn)
 
         ghost.onRightClick = { [weak self] e in self?.showMenu(e) }
+        ghost.onDoubleClick = { [weak self] in self?.openDashboard() }
+        ghost.toolTip = "Click to talk · double-click for the dashboard · "
+                      + "right-click for more"
         // Somewhere to click when you want him gone. A companion with no way
         // to dismiss it is not a companion.
         closeBtn = NSButton(title: "\u{00D7}", target: self,
@@ -1813,6 +1875,9 @@ final class App: NSObject, NSApplicationDelegate {
 
     func showMenu(_ e: NSEvent) {
         let m = NSMenu()
+        m.addItem(withTitle: "Open dashboard", action: #selector(openDashboard),
+                  keyEquivalent: "").target = self
+        m.addItem(NSMenuItem.separator())
         m.addItem(withTitle: "About Casper", action: #selector(showAbout),
                   keyEquivalent: "").target = self
         let q = NSMenuItem(title: "Stay quiet (only answer when asked)",
@@ -1824,6 +1889,12 @@ final class App: NSObject, NSApplicationDelegate {
         m.addItem(withTitle: "Quit Casper", action: #selector(quitCasper),
                   keyEquivalent: "").target = self
         NSMenu.popUpContextMenu(m, with: e, for: ghost)
+    }
+
+    /// The dashboard is the place you decide what is next. Reaching it should
+    /// not require remembering a port number.
+    @objc func openDashboard() {
+        if let u = URL(string: Notifier.dashboard) { NSWorkspace.shared.open(u) }
     }
 
     @objc func showAbout() {
@@ -1861,44 +1932,82 @@ final class App: NSObject, NSApplicationDelegate {
     /// tells you once when it lands, or once when it clearly has not.
     var fleetTicked: [String: Bool] = [:]
     var fleetToldStalled: Set<String> = []
-    static let stallMinutes = 15
+    /// Measured on this machine: real agents ran 26, 47, 47 and 50 minutes
+    /// while still working. Fifteen minutes was not a stall, it was normal
+    /// work — so four of six jobs tripped it and he asked four times.
+    static let stallMinutes = 45
 
     func watchFleet() {
         DispatchQueue.global().async {
             let rows = Meditate.fleet()
             guard !rows.isEmpty else { return }
             DispatchQueue.main.async {
-                for r in rows {
-                    let was = self.fleetTicked[r.goal]
-                    self.fleetTicked[r.goal] = r.ticked
-                    // landed: it was open last time we looked, now it is done
-                    if was == false && r.ticked {
-                        self.ghost.celebrate()
-                        let name = self.pretty(r.goal)
-                        self.say(name + " just landed.")
-                        Notifier.shared.post(title: name + " is done",
-                                             body: "Click to open the dashboard.")
-                        return
-                    }
-                    // stalled: dispatched a while ago and still nothing ticked
-                    if !r.ticked, r.mins >= App.stallMinutes,
-                       !self.fleetToldStalled.contains(r.goal) {
-                        self.fleetToldStalled.insert(r.goal)
-                        // Telling you something is stuck and leaving you no
-                        // button is the worst of both: it takes your attention
-                        // and gives you nothing to do with it.
-                        self.pendingAction = "clear " + r.goal
-                        self.pendingKind = "stall"
-                        self.style(self.yesBtn, title: "Clear it", accent: true)
-                        self.showOffer(true)
-                        self.say(self.pretty(r.goal) + " has been going "
-                                 + "\(r.mins) minutes without finishing its step. "
-                                 + "Want me to drop it from the list?")
-                        return
-                    }
+                // LANDED first — good news interrupts, bad news waits.
+                for r in rows where self.fleetTicked[r.goal] == false && r.ticked {
+                    self.fleetTicked[r.goal] = true
+                    let name = self.pretty(r.goal)
+                    let landedToday = rows.filter { $0.ticked }.count
+                    self.ghost.celebrate()
+                    self.say(self.landedLine(name, of: landedToday))
+                    Notifier.shared.post(title: name + " is done",
+                                         body: "Click to open the dashboard.")
+                    return
                 }
+                for r in rows { self.fleetTicked[r.goal] = r.ticked }
+
+                // SLOW: asked about ONCE, for all of them together.
+                //
+                // This used to fire per goal. With four jobs past the
+                // threshold you got four separate questions, one every twenty
+                // seconds — which is how a helpful nudge becomes nagging.
+                let slow = rows.filter { !$0.ticked && $0.mins >= App.stallMinutes }
+                let fresh = slow.filter { !self.fleetToldStalled.contains($0.goal) }
+                guard !fresh.isEmpty, !self.quiet else { return }
+                fresh.forEach { self.fleetToldStalled.insert($0.goal) }
+
+                let longest = slow.max(by: { $0.mins < $1.mins })!
+                self.pendingAction = fresh.count == 1
+                    ? "clear " + fresh[0].goal : "clear"
+                self.pendingKind = "stall"
+                self.style(self.yesBtn, title: "Stop tracking", accent: true)
+                self.showOffer(true)
+                self.say(self.slowLine(fresh.count, longest: self.pretty(longest.goal),
+                                       mins: longest.mins))
             }
         }
+    }
+
+    /// Deterministic variety: the same news gets the same words, different
+    /// news gets different words. Random phrasing would make him re-word an
+    /// identical fact every twenty seconds, which reads as instability.
+    func vary(_ options: [String], _ seed: String) -> String {
+        var h = 5381
+        for b in seed.utf8 { h = (h &* 33) &+ Int(b) }
+        return options[abs(h) % options.count]
+    }
+
+    func landedLine(_ name: String, of total: Int) -> String {
+        if total >= 3 {
+            return vary(["\(name) is done. That's \(total) finished now.",
+                         "\(name) just landed — \(total) done.",
+                         "And \(name)'s in. \(total) of them now."], name)
+        }
+        return vary(["\(name) just landed.",
+                     "\(name) is done.",
+                     "That's \(name) finished."], name)
+    }
+
+    /// Says what it MEANS. "Drop it from the list" told you nothing: not what
+    /// list, not whether the agent dies with it. It does not — the agent keeps
+    /// working in its own window; this only stops me watching for it.
+    func slowLine(_ n: Int, longest: String, mins: Int) -> String {
+        let body = n == 1
+            ? "\(longest) has been going \(mins) minutes and hasn't ticked anything off."
+            : "\(n) jobs are past \(App.stallMinutes) minutes with nothing ticked — "
+              + "\(longest) the longest at \(mins)."
+        return body + " Want me to stop tracking "
+             + (n == 1 ? "it" : "them")
+             + "? They keep running either way — it just clears my board."
     }
 
     /// "goal-mila-unblocked" is a key. "Mila unblocked" is a thing you said.
