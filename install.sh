@@ -291,10 +291,22 @@ elif command -v crontab >/dev/null 2>&1; then
     # Existing meditate lines are filtered out first so re-installing does not
     # stack duplicate heartbeats.
     HEARTBEAT_CMD="{ python3 \"$SKILL_DIR/nidra_bridge.py\" --sleep; python3 \"$SKILL_DIR/archive.py\" --apply; python3 \"$SKILL_DIR/dashboard.py\"; python3 \"$SKILL_DIR/voice.py\" --notify --quiet; } >> \"$MEDITATION_DIR/heartbeat.log\" 2>&1"
-    ( crontab -l 2>/dev/null | grep -v "meditate-heartbeat" || true
-      echo "0 */6 * * * $HEARTBEAT_CMD # meditate-heartbeat" ) | crontab - 2>/dev/null \
-      && echo "  [ok]  heartbeat installed via cron — self-check every 6h" \
-      || echo "  [warn]  no launchd and cron refused; run the heartbeat yourself: meditate grade"
+    # `crontab -` reads its new table from STDIN — piping into it (directly,
+    # or via `crontab -l | ... | crontab -`) was observed, live on a fresh
+    # Linux CI runner, to report success while installing an EMPTY table
+    # (spool file held only the standard header, zero entries). crontab is a
+    # setgid binary; something about stdin specifically being a pipe into it
+    # is unreliable here. `crontab <file>` (a real, documented alternative to
+    # `-`) reads from a plain file instead — no pipe involved at all.
+    CRON_TMP="$(mktemp)"
+    crontab -l 2>/dev/null | grep -v "meditate-heartbeat" > "$CRON_TMP" || true
+    echo "0 */6 * * * $HEARTBEAT_CMD # meditate-heartbeat" >> "$CRON_TMP"
+    if crontab "$CRON_TMP" 2>/dev/null; then
+        echo "  [ok]  heartbeat installed via cron — self-check every 6h"
+    else
+        echo "  [warn]  no launchd and cron refused; run the heartbeat yourself: meditate grade"
+    fi
+    rm -f "$CRON_TMP"
 else
     echo "  [warn]  no launchd and no cron on this machine — the heartbeat will"
     echo "          not run by itself. Run 'meditate grade' when you want a pass."

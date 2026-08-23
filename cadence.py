@@ -17,7 +17,8 @@ now can be served as true for up to H more hours. `meditate cadence` prints
 the number, why, and what it would change.
 
     meditate cadence            # recommendation + reasoning
-    meditate cadence --apply    # rewrite the launchd interval and reload
+    meditate cadence --apply    # rewrite the schedule (launchd, or cron where
+                                 # launchd is absent) and reload
 """
 from __future__ import annotations
 
@@ -25,6 +26,8 @@ import argparse
 import glob
 import json
 import os
+import re
+import shutil
 import subprocess
 import sys
 import paths
@@ -34,6 +37,7 @@ from typing import Any, Dict, List, Optional
 MEMORY_ROOT = paths.memory_root()
 PROJECTS_DIR = os.path.expanduser("~/.claude/projects")
 PLIST = os.path.expanduser("~/Library/LaunchAgents/com.meditate.grade.plist")
+CRONTAB_TAG = "meditate-heartbeat"
 
 TARGET_CHANGES = 5      # edits worth waking for — below this a pass finds nothing
 MIN_H, MAX_H = 1, 24    # never thrash; never let a week of rot go unchecked
@@ -86,31 +90,100 @@ def recommend(c: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
             "worst_case_staleness_h": int(hours)}
 
 
+def _cron_line() -> Optional[str]:
+    """The heartbeat's crontab line, if install.sh used the cron fallback."""
+    if not shutil.which("crontab"):
+        return None
+    try:
+        r = subprocess.run(["crontab", "-l"], capture_output=True,
+                           text=True, timeout=10)
+    except Exception:
+        return None
+    for line in r.stdout.splitlines():
+        if CRONTAB_TAG in line:
+            return line
+    return None
+
+
+def _cron_interval_h(line: str) -> Optional[int]:
+    """Hour field of `0 */N * * *` (or `0 * * * *` for every hour)."""
+    fields = line.split()
+    if len(fields) < 2:
+        return None
+    hour_field = fields[1]
+    if hour_field == "*":
+        return 1
+    m = re.match(r"\*/(\d+)$", hour_field)
+    return int(m.group(1)) if m else None
+
+
 def current_interval_s() -> Optional[int]:
     try:
         import plistlib
         with open(PLIST, "rb") as f:
-            return int(plistlib.load(f).get("StartInterval") or 0) or None
+            v = int(plistlib.load(f).get("StartInterval") or 0)
+            if v:
+                return v
     except Exception:
-        return None
+        pass
+    line = _cron_line()
+    if line:
+        h = _cron_interval_h(line)
+        if h:
+            return h * 3600
+    return None
 
 
 def apply(seconds: int) -> Dict[str, Any]:
-    """Rewrite StartInterval in place and reload — nothing else touched."""
-    try:
-        import plistlib
-        with open(PLIST, "rb") as f:
-            d = plistlib.load(f)
-        d["StartInterval"] = int(seconds)
-        with open(PLIST, "wb") as f:
-            plistlib.dump(d, f)
-        subprocess.run(["launchctl", "unload", PLIST],
-                       capture_output=True, timeout=15)
-        r = subprocess.run(["launchctl", "load", "-w", PLIST],
+    """Rewrite the interval in place and reload — nothing else touched.
+    launchd's StartInterval if a plist is installed, else the cron schedule."""
+    if os.path.exists(PLIST):
+        try:
+            import plistlib
+            with open(PLIST, "rb") as f:
+                d = plistlib.load(f)
+            d["StartInterval"] = int(seconds)
+            with open(PLIST, "wb") as f:
+                plistlib.dump(d, f)
+            subprocess.run(["launchctl", "unload", PLIST],
                            capture_output=True, timeout=15)
-        return {"applied": r.returncode == 0, "seconds": int(seconds)}
-    except Exception as e:
-        return {"applied": False, "error": str(e)}
+            r = subprocess.run(["launchctl", "load", "-w", PLIST],
+                               capture_output=True, timeout=15)
+            return {"applied": r.returncode == 0, "seconds": int(seconds),
+                     "mechanism": "launchd"}
+        except Exception as e:
+            return {"applied": False, "error": str(e), "mechanism": "launchd"}
+
+    line = _cron_line()
+    if line and shutil.which("crontab"):
+        try:
+            hours = max(1, round(seconds / 3600))
+            hour_field = "*" if hours == 1 else "*/%d" % hours
+            rest = line.split(None, 5)[5]
+            new_line = "0 %s * * * %s" % (hour_field, rest)
+            cur = subprocess.run(["crontab", "-l"], capture_output=True,
+                                 text=True, timeout=10).stdout
+            kept = [l for l in cur.splitlines() if CRONTAB_TAG not in l]
+            kept.append(new_line)
+            # `crontab -` (stdin) was observed, live on a fresh Linux CI
+            # runner, to report success while installing an empty table.
+            # `crontab <file>` reads from a plain file instead — no pipe.
+            import tempfile
+            with tempfile.NamedTemporaryFile("w", suffix=".cron",
+                                             delete=False) as f:
+                f.write("\n".join(kept) + "\n")
+                tmp_path = f.name
+            try:
+                r = subprocess.run(["crontab", tmp_path], capture_output=True,
+                                   text=True, timeout=10)
+            finally:
+                os.unlink(tmp_path)
+            return {"applied": r.returncode == 0, "seconds": hours * 3600,
+                     "mechanism": "cron"}
+        except Exception as e:
+            return {"applied": False, "error": str(e), "mechanism": "cron"}
+
+    return {"applied": False, "error": "no launchd plist or cron heartbeat found"}
 
 
 def main(argv: Optional[List[str]] = None) -> int:

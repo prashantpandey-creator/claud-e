@@ -174,15 +174,28 @@ def _check_hook() -> Dict[str, Any]:
 
 
 def _check_heartbeat() -> Dict[str, Any]:
-    """The metabolism: grade must run WITHOUT a human. launchd every 6h."""
+    """The metabolism: grade must run WITHOUT a human. launchd on macOS,
+    cron where launchd is absent (Linux) — either counts as loaded."""
     plist = os.path.expanduser("~/Library/LaunchAgents/com.meditate.grade.plist")
     exists = os.path.isfile(plist)
     loaded = False
+    mechanism = None
     if exists:
         try:
             r = subprocess.run(["launchctl", "list"], capture_output=True,
                                text=True, timeout=10)
-            loaded = "com.meditate.grade" in r.stdout
+            if "com.meditate.grade" in r.stdout:
+                loaded = True
+                mechanism = "launchd"
+        except Exception:
+            pass
+    if not loaded and shutil.which("crontab"):
+        try:
+            r = subprocess.run(["crontab", "-l"], capture_output=True,
+                               text=True, timeout=10)
+            if "meditate-heartbeat" in r.stdout:
+                loaded = True
+                mechanism = "cron"
         except Exception:
             pass
     log = os.path.expanduser("~/.claude/meditation/heartbeat.log")
@@ -190,7 +203,8 @@ def _check_heartbeat() -> Dict[str, Any]:
     if os.path.exists(log):
         last_beat = time.strftime("%Y-%m-%d %H:%M",
                                   time.localtime(os.path.getmtime(log)))
-    return {"plist_exists": exists, "loaded": loaded, "last_beat": last_beat}
+    return {"plist_exists": exists, "loaded": loaded, "mechanism": mechanism,
+            "last_beat": last_beat}
 
 
 def _check_stillness() -> Dict[str, Any]:
@@ -343,7 +357,8 @@ def main(argv: List[str]) -> int:
 
     hb = d.get("heartbeat", {})
     print(f"\nHeartbeat:")
-    print(f"  [{'ok' if hb.get('loaded') else 'MISSING':>7}]  launchd com.meditate.grade "
+    mech = hb.get("mechanism") or "none"
+    print(f"  [{'ok' if hb.get('loaded') else 'MISSING':>7}]  com.meditate.grade via {mech} "
           f"(last beat: {hb.get('last_beat') or 'never'})")
 
     print(f"\nStillness:")

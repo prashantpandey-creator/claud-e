@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -179,6 +180,71 @@ def test_uninstall_spares_other_tools_hooks():
     left = [h["command"] for h in cfg["hooks"]["SessionStart"][0]["hooks"]]
     assert left == ["~/.claude/hooks/other-tool.sh"], left
     assert cfg.get("model") == "opus", "unrelated settings must survive"
+
+
+def test_uninstall_removes_cron_heartbeat_but_spares_other_cron_lines():
+    """Linux's cron fallback (install.sh, when launchd is absent) must be torn
+    down by uninstall the same way the launchd agent is on macOS — and any
+    unrelated crontab entries must survive."""
+    fake_bin = tempfile.mkdtemp()
+    store = os.path.join(fake_bin, "cron_store")
+    with open(store, "w") as f:
+        f.write("0 */6 * * * true # meditate-heartbeat\n"
+                "*/5 * * * * /usr/bin/some-other-job\n")
+    crontab_path = os.path.join(fake_bin, "crontab")
+    # uninstall.sh writes via `crontab <file>`, not `crontab -` (stdin) — a
+    # real Linux CI run showed piping into crontab's stdin can report success
+    # while installing an empty table. The fake mirrors both invocation forms
+    # uninstall.sh actually uses: `-l` to read, a file argument to write.
+    with open(crontab_path, "w") as f:
+        f.write("#!/bin/bash\n"
+                "STORE=\"%s\"\n"
+                "if [ \"$1\" = \"-l\" ]; then\n"
+                "  cat \"$STORE\" 2>/dev/null\n"
+                "  exit 0\n"
+                "fi\n"
+                "cp \"$1\" \"$STORE\"\n" % store)
+    os.chmod(crontab_path, 0o755)
+    # uninstall.sh only touches cron when $HOME matches /Users/* or /home/* —
+    # a plain tempdir (/tmp/... or /var/folders/...) trips that guard and the
+    # removal this test exists to check would silently never run. A private
+    # subdirectory of the REAL home satisfies the pattern honestly, the same
+    # way a real user's machine would, while every other path this script
+    # touches (hooks, settings.json, PATH shim) stays scoped under it — never
+    # the developer's actual ~/.claude.
+    home = os.path.join(os.path.expanduser("~"),
+                        ".meditate-test-home-%d" % os.getpid())
+    os.makedirs(home, exist_ok=True)
+
+    try:
+        subprocess.run(["bash", os.path.join(SKILL, "uninstall.sh")],
+                       capture_output=True, text=True,
+                       env=dict(os.environ, HOME=home,
+                                PATH=fake_bin + os.pathsep + os.environ.get("PATH", "")),
+                       timeout=60)
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
+
+    left = open(store).read()
+    assert "meditate-heartbeat" not in left, "cron heartbeat survived uninstall: %s" % left
+    assert "some-other-job" in left, "uninstall wiped an unrelated cron entry"
+
+
+def test_uninstall_refuses_crontab_under_a_fake_home():
+    """A test that calls uninstall.sh must not wipe the REAL system crontab.
+
+    Measured live in CI: test_uninstall_spares_other_tools_hooks calls
+    uninstall.sh with a fake $HOME but the real PATH — crontab is keyed by
+    the OS user, not $HOME, so uninstall.sh's cron-removal found and deleted
+    the REAL heartbeat entry install.sh had just installed moments earlier
+    in the same run, as a side effect of testing something unrelated.
+    """
+    src = open(os.path.join(SKILL, "uninstall.sh")).read()
+    i = src.find("crontab -l 2>/dev/null | grep -q")
+    assert i > 0, "no cron-removal detection found"
+    guard = src[max(0, i - 400):i]
+    assert "REAL_HOME" in guard, \
+        "uninstall.sh's cron removal has no guard that $HOME is a real home"
 
 
 def test_readme_documents_only_commands_that_exist():

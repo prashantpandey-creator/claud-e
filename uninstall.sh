@@ -48,6 +48,38 @@ else
     echo "  [skip] no launchd agent installed"
 fi
 
+# Linux (or any machine without launchd) runs the same heartbeat via cron —
+# install.sh's fallback. Leaving that line behind after uninstall means the
+# heartbeat keeps firing against a skill directory that no longer exists.
+#
+# crontab is keyed by the OS user, NOT by $HOME — unlike the plist above, a
+# fake $HOME does not isolate it. Caught live: a pre-existing, unrelated test
+# (settings.json hook-sparing) calls this script under a fake HOME but the
+# real PATH, and this block happily found and wiped the REAL system crontab
+# install.sh had just written moments earlier in the same CI run. Same guard
+# install.sh itself uses before touching launchd or cron.
+case "$HOME" in
+    /Users/*|/home/*) REAL_HOME=1 ;;
+    *)                REAL_HOME=0 ;;
+esac
+if [ "$REAL_HOME" = "0" ]; then
+    echo "  [skip] HOME=$HOME is not a real home — not touching cron"
+elif command -v crontab >/dev/null 2>&1 && crontab -l 2>/dev/null | grep -q "meditate-heartbeat"; then
+    say "stop and remove the cron heartbeat (meditate-heartbeat)"
+    if [ "$DRY" != 1 ]; then
+        # `crontab -` reads from STDIN — piping into it was observed, live on
+        # a fresh Linux CI runner, to report success while writing an empty
+        # table. `crontab <file>` reads from a plain file instead, sidestepping
+        # whatever about pipe-into-a-setgid-binary is unreliable here.
+        CRON_TMP="$(mktemp)"
+        crontab -l 2>/dev/null | grep -v "meditate-heartbeat" > "$CRON_TMP" || true
+        crontab "$CRON_TMP" 2>/dev/null || true
+        rm -f "$CRON_TMP"
+    fi
+else
+    echo "  [skip] no cron heartbeat installed"
+fi
+
 # ---- 2. the running companion -----------------------------------------------
 if pgrep -f "Casper.app/Contents" >/dev/null 2>&1; then
     say "close Casper"
