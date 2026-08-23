@@ -163,13 +163,20 @@ func addressedQuestion(_ raw: String, armed: Bool) -> String? {
 
 final class GhostView: NSView {
     enum Mood { case idle, listening, thinking, speaking, alert }
+    /// A short-lived colour over the top of the mood. Moods say what he is
+    /// DOING; feelings say how it went, and fade on their own.
+    enum Feeling { case neutral, happy, surprised, sleepy }
+
     var mood: Mood = .idle
     var glow: CGFloat = 0.25          // 0.25 calm .. 1.0 has something to say
+    private(set) var feeling: Feeling = .neutral
+    private var feelingUntil: CGFloat = 0
 
     // smoothed animation state — every one of these eases, none of them jump
     private var t: CGFloat = 0
     private var blink: CGFloat = 1            // 1 open .. 0 shut
     private var blinkAt: CGFloat = 2.5
+    private var blinksOwed = 0                // a double-blink reads as noticing
     private var mouth: CGFloat = 0            // 0 closed .. 1 wide
     private var mouthTarget: CGFloat = 0
     private var gaze = CGPoint(x: 0, y: 0)
@@ -177,6 +184,31 @@ final class GhostView: NSView {
     private var gazeAt: CGFloat = 1.5
     private var lean: CGFloat = 0
     private var ring: CGFloat = 0
+
+    // ---- body physics: one spring, doing all the bouncing ------------------
+    // A hop, a landing squash and a click bounce are the same thing from a
+    // mascot's point of view: a mass on a spring. Driving them from real
+    // physics is why the squash lands on the beat instead of near it.
+    private var hop: CGFloat = 0              // vertical offset, + is down
+    private var hopV: CGFloat = 0
+    private var tilt: CGFloat = 0             // head tilt, radians
+    private var tiltTo: CGFloat = 0
+    private var sway: CGFloat = 0             // side to side
+
+    // ---- idle life ---------------------------------------------------------
+    private enum Act { case none, look, tilt, hop, yawn, wiggle, peek }
+    private var act: Act = .none
+    private var actUntil: CGFloat = 0
+    private var nextActAt: CGFloat = 3
+
+    /// How lively he is right now, 0..1. Rises when things are happening,
+    /// decays toward calm when they are not — so he is bouncy in a busy
+    /// moment and quietly breathing at 2am, without anyone scripting it.
+    private(set) var energy: CGFloat = 0.45
+
+    // ---- sparkles ----------------------------------------------------------
+    private struct Spark { var x, y, vx, vy, life: CGFloat }
+    private var sparks: [Spark] = []
 
     /// Live microphone loudness, 0..1, set by the Ear. The listening pose is
     /// driven by this and nothing else — he leans further and his sound arcs
@@ -187,27 +219,107 @@ final class GhostView: NSView {
     /// oscillator run.
     var mouthDrive: CGFloat = -1
 
+    // ---- adaptive redraw ---------------------------------------------------
+    // Counted, not assumed: a mascot that repaints 60 times a second to show
+    // nothing moving is a battery bug with a face.
+    private(set) var framesSeen = 0
+    private(set) var framesDrawn = 0
+    private var quietFrames = 0
+
     override var isFlipped: Bool { true }
 
     /// Force the next frame to be mid-blink. Only render mode uses this —
     /// blinks are on a random schedule, so a review frame would never catch one.
     func forceBlink() { blinkAt = t - 0.001; blink = 0.18 }
 
+    // ---- things the app can ask him to do ----------------------------------
+
+    /// Poked. A quick squash and a look up at you.
+    func bounce() {
+        hopV -= 190
+        blinksOwed = 1
+        gazeTo = CGPoint(x: 0, y: -0.35)
+        gazeAt = t + 1.2
+        energy = min(1, energy + 0.35)
+    }
+
+    /// Something went well. This is the one that makes people smile back.
+    func celebrate() {
+        feel(.happy, for: 2.6)
+        hopV -= 300
+        energy = min(1, energy + 0.5)
+        for i in 0..<14 {
+            let a = CGFloat(i) / 14 * .pi * 2 + CGFloat.random(in: -0.2...0.2)
+            sparks.append(Spark(x: bounds.width / 2 + cos(a) * 14,
+                                y: bounds.height * 0.42 + sin(a) * 14,
+                                vx: cos(a) * CGFloat.random(in: 40...95),
+                                vy: sin(a) * CGFloat.random(in: 40...95) - 40,
+                                life: CGFloat.random(in: 0.7...1.3)))
+        }
+    }
+
+    /// Caught off guard.
+    func startle() { feel(.surprised, for: 1.1); hopV -= 90; blinksOwed = 0 }
+
+    func feel(_ f: Feeling, for seconds: CGFloat) {
+        feeling = f
+        feelingUntil = t + seconds
+    }
+
     /// One frame of life. Called at 60Hz.
     func tick(dt: CGFloat) {
         t += dt
+        framesSeen += 1
 
-        // blink: shut fast, open slower, then wait a random beat
+        if t > feelingUntil { feeling = .neutral }
+
+        // ---- energy: what is actually happening, not a script --------------
+        let busy: CGFloat = (mood == .speaking || mood == .listening) ? 0.95
+                          : (mood == .alert || mood == .thinking) ? 0.8
+                          : 0.18
+        energy += (busy - energy) * min(1, dt * 0.35)
+
+        // ---- blink ----------------------------------------------------------
         if t > blinkAt {
             blink -= dt * 14
-            if blink <= 0 { blink = 0; blinkAt = t + CGFloat.random(in: 2.2...5.5) }
+            if blink <= 0 {
+                blink = 0
+                if blinksOwed > 0 { blinksOwed -= 1; blinkAt = t + 0.16 }
+                else { blinkAt = t + CGFloat.random(in: 2.2...5.5) }
+            }
         } else if blink < 1 {
             blink = min(1, blink + dt * 9)
         }
 
-        // gaze: small saccades, eased. Thinking looks up and away.
+        // ---- idle life: he does small things when nobody is asking ---------
+        // Without this he is a screensaver. The gap between acts shortens as
+        // energy rises, so he is fidgety when busy and still when calm.
+        if mood == .idle && act == .none && t > nextActAt {
+            act = pickAct()
+            actUntil = t + (act == .yawn ? 1.9 : 1.2)
+            switch act {
+            case .look:
+                gazeTo = CGPoint(x: .random(in: -0.9 ... 0.9), y: .random(in: -0.7 ... 0.4))
+                gazeAt = t + 2.5
+            case .tilt:   tiltTo = CGFloat.random(in: -0.16 ... 0.16)
+            case .hop:    hopV -= 150
+            case .peek:   gazeTo = CGPoint(x: 0, y: -0.45); gazeAt = t + 2; blinksOwed = 1
+            case .yawn:   feel(.sleepy, for: 2.2)
+            default:      break
+            }
+        }
+        if act != .none && t > actUntil {
+            act = .none
+            tiltTo = 0
+            // livelier now = sooner again
+            nextActAt = t + CGFloat.random(in: 3.5...9.0) * (1.25 - energy * 0.7)
+        }
+
+        // ---- gaze -----------------------------------------------------------
         if mood == .thinking {
             gazeTo = CGPoint(x: -0.5, y: -0.6)
+        } else if mood == .listening {
+            gazeTo = CGPoint(x: 0, y: -0.25)          // look AT you while you talk
         } else if t > gazeAt {
             gazeTo = CGPoint(x: .random(in: -0.45...0.45), y: .random(in: -0.3...0.25))
             gazeAt = t + CGFloat.random(in: 1.4...3.6)
@@ -215,7 +327,7 @@ final class GhostView: NSView {
         gaze.x += (gazeTo.x - gaze.x) * min(1, dt * 6)
         gaze.y += (gazeTo.y - gaze.y) * min(1, dt * 6)
 
-        // mouth: a smoothed syllable oscillator, not per-frame noise
+        // ---- mouth -----------------------------------------------------------
         if mood == .speaking {
             if mouthDrive >= 0 {
                 mouthTarget = 0.12 + 0.88 * mouthDrive     // the real waveform
@@ -223,14 +335,26 @@ final class GhostView: NSView {
                 let syl = (sin(t * 11.5) * 0.5 + 0.5) * (sin(t * 4.3) * 0.35 + 0.65)
                 mouthTarget = 0.25 + 0.75 * syl            // only if audio is unavailable
             }
+        } else if act == .yawn {
+            let u = 1 - abs((t - (actUntil - 1.9)) / 1.9 * 2 - 1)   // in and out
+            mouthTarget = max(0, u) * 0.85
         } else if mood == .listening {
             mouthTarget = 0.06 + 0.10 * hearLevel
+        } else if feeling == .happy {
+            mouthTarget = 0.22
         } else {
             mouthTarget = 0
         }
         mouth += (mouthTarget - mouth) * min(1, dt * 16)
 
-        // lean toward you as you speak up; the arcs are your own loudness
+        // ---- spring, tilt, sway ----------------------------------------------
+        hopV += (-hop * 220 - hopV * 9) * dt          // pull home, damped
+        hop  += hopV * dt
+        tilt += (tiltTo - tilt) * min(1, dt * 6)
+        let swayTo: CGFloat = (act == .wiggle) ? sin(t * 7) * 4.5 : 0
+        sway += (swayTo - sway) * min(1, dt * 8)
+
+        // ---- lean and the listening arcs --------------------------------------
         let leanTo: CGFloat = (mood == .listening) ? (0.45 + 0.55 * hearLevel) : 0
         lean += (leanTo - lean) * min(1, dt * 5)
         if mood == .listening {
@@ -241,7 +365,39 @@ final class GhostView: NSView {
             ring = 0
         }
 
-        needsDisplay = true
+        // ---- sparkles ----------------------------------------------------------
+        if !sparks.isEmpty {
+            for i in sparks.indices {
+                sparks[i].x += sparks[i].vx * dt
+                sparks[i].y += sparks[i].vy * dt
+                sparks[i].vy += 150 * dt                 // gravity
+                sparks[i].life -= dt
+            }
+            sparks.removeAll { $0.life <= 0 }
+        }
+
+        // ---- adaptive redraw ---------------------------------------------------
+        let moving = mood != .idle || act != .none || !sparks.isEmpty
+            || abs(hopV) > 1 || abs(hop) > 0.3 || mouth > 0.01
+            || blink < 0.999 || feeling != .neutral
+        if moving {
+            quietFrames = 0
+        } else {
+            quietFrames += 1
+        }
+        // still breathing when calm, just repainted a third as often
+        if moving || quietFrames % 3 == 0 {
+            framesDrawn += 1
+            needsDisplay = true
+        }
+    }
+
+    private func pickAct() -> Act {
+        // low energy leans sleepy and small; high energy leans bouncy
+        var bag: [Act] = [.look, .look, .tilt, .peek]
+        if energy > 0.5 { bag += [.hop, .wiggle, .look] }
+        if energy < 0.35 { bag += [.yawn, .tilt] }
+        return bag.randomElement() ?? .look
     }
 
     // palette: warm off-white body so he reads on any wallpaper, amber accent
@@ -256,30 +412,36 @@ final class GhostView: NSView {
     override func mouseDown(with e: NSEvent) { downAt = e.locationInWindow }
     override func mouseUp(with e: NSEvent) {
         let d = hypot(e.locationInWindow.x - downAt.x, e.locationInWindow.y - downAt.y)
-        if d < 4 { onClick?() } else { super.mouseUp(with: e) }
+        if d < 4 { bounce(); onClick?() } else { super.mouseUp(with: e) }
     }
 
     override func draw(_ dirty: NSRect) {
         guard let ctx = NSGraphicsContext.current?.cgContext else { return }
         let w = bounds.width, h = bounds.height
-        let cx = w / 2
+        let cx = w / 2 + sway
 
         // breathing: squash and stretch that preserves volume, so he never
-        // looks like he is simply scaling up and down
+        // looks like he is simply scaling up and down. The spring adds its own
+        // on top — stretched going up, squashed on the landing.
         let breath = sin(t * 1.9) * 0.022
-        let bob = sin(t * 1.9) * 3.5 - lean * 4
-        var bw = w * 0.66 * (1 - breath)
-        var bh = h * 0.70 * (1 + breath)
+        let springSquash = max(-0.12, min(0.12, hopV * 0.00055))
+        let bob = sin(t * 1.9) * 3.5 - lean * 4 + hop
+        var bw = w * 0.66 * (1 - breath + springSquash)
+        var bh = h * 0.70 * (1 + breath - springSquash)
         bw *= 1 + glow * 0.02; bh *= 1 + glow * 0.02
         let ty = h * 0.10 + bob
         let left = cx - bw / 2
 
         // ---- ground shadow: what makes him sit in the world, not float on it
+        // Drawn BEFORE the tilt, and shrinking as he rises — a shadow that
+        // leans with the body is the thing that gives away a fake hop.
         ctx.saveGState()
-        let sh = NSBezierPath(ovalIn: NSRect(x: cx - bw * 0.27,
-                                             y: ty + bh + 3 - bob * 0.35,
-                                             width: bw * 0.54, height: bh * 0.052))
-        NSColor(white: 0, alpha: 0.10).setFill()
+        let lift = max(0, -hop) / max(1, bh) * 0.9
+        let shW = bw * 0.54 * (1 - lift * 0.45)
+        let sh = NSBezierPath(ovalIn: NSRect(x: w / 2 - shW / 2,
+                                             y: h * 0.10 + bh + 3,
+                                             width: shW, height: bh * 0.052))
+        NSColor(white: 0, alpha: 0.10 * (1 - lift * 0.5)).setFill()
         ctx.setShadow(offset: .zero, blur: 7, color: NSColor(white: 0, alpha: 0.14).cgColor)
         sh.fill()
         ctx.restoreGState()
@@ -304,6 +466,15 @@ final class GhostView: NSView {
                     arc.stroke()
                 }
             }
+        }
+
+        // everything from here tilts together, pivoting on where he meets the
+        // ground — tilting about the centre makes a head look detached
+        ctx.saveGState()
+        if abs(tilt) > 0.0005 {
+            ctx.translateBy(x: cx, y: ty + bh)
+            ctx.rotate(by: tilt)
+            ctx.translateBy(x: -cx, y: -(ty + bh))
         }
 
         // ---- body
@@ -333,31 +504,21 @@ final class GhostView: NSView {
         // ---- face
         let eyeY = ty + bh * 0.40
         let eyeDX = bw * 0.21
-        let eyeW = bw * 0.115, eyeH = eyeW * 1.45 * max(0.08, blink)
-        for sx in [-eyeDX, eyeDX] {
-            let ex = cx + sx + gaze.x * bw * 0.055
-            let ey = eyeY + gaze.y * bh * 0.042
-            let e = NSBezierPath(roundedRect:
-                NSRect(x: ex - eyeW / 2, y: ey - eyeH / 2, width: eyeW, height: eyeH),
-                xRadius: eyeW / 2, yRadius: min(eyeW / 2, eyeH / 2))
-            ink.setFill(); e.fill()
-            if blink > 0.55 {          // specular dot — the thing that makes eyes alive
-                NSColor(white: 1, alpha: 0.92 * blink).setFill()
-                NSBezierPath(ovalIn: NSRect(x: ex - eyeW * 0.08, y: ey - eyeH * 0.26,
-                                            width: eyeW * 0.30, height: eyeW * 0.30)).fill()
-            }
-        }
+        drawEyes(cx: cx, eyeY: eyeY, eyeDX: eyeDX, bw: bw, bh: bh)
 
-        // blush
-        NSColor(srgbRed: 1.0, green: 0.60, blue: 0.55, alpha: 0.22).setFill()
+        // blush — deeper when pleased, which is most of what "cute" is
+        let blushA: CGFloat = feeling == .happy ? 0.42 : 0.22
+        NSColor(srgbRed: 1.0, green: 0.60, blue: 0.55, alpha: blushA).setFill()
+        let blushW: CGFloat = feeling == .happy ? 0.175 : 0.15
         for sx in [-bw * 0.31, bw * 0.31] {
-            NSBezierPath(ovalIn: NSRect(x: cx + sx - bw * 0.075, y: eyeY + bh * 0.075,
-                                        width: bw * 0.15, height: bh * 0.055)).fill()
+            NSBezierPath(ovalIn: NSRect(x: cx + sx - bw * blushW / 2,
+                                        y: eyeY + bh * 0.075,
+                                        width: bw * blushW, height: bh * 0.055)).fill()
         }
 
         // mouth: a smile that opens into speech
         let my = eyeY + bh * 0.155
-        let mw = bw * (0.15 + 0.10 * mouth)
+        let mw = bw * (0.15 + 0.10 * mouth) * (feeling == .happy ? 1.35 : 1)
         let mh = bh * (0.020 + 0.115 * mouth)
         let m = NSBezierPath()
         m.move(to: NSPoint(x: cx - mw / 2, y: my))
@@ -379,6 +540,85 @@ final class GhostView: NSView {
                 NSBezierPath(ovalIn: NSRect(x: cx - bw * 0.10 + CGFloat(i) * bw * 0.095 - d / 2,
                                             y: ty - bh * 0.09 - d / 2,
                                             width: d, height: d)).fill()
+            }
+        }
+
+        // sleepy: one little z drifting up
+        if feeling == .sleepy {
+            let u = (t * 0.6).truncatingRemainder(dividingBy: 1)
+            NSColor(srgbRed: 0.62, green: 0.46, blue: 0.13,
+                    alpha: 0.8 * (1 - u)).setFill()
+            let z = NSAttributedString(string: "z", attributes: [
+                .font: NSFont.systemFont(ofSize: bw * 0.20, weight: .bold),
+                .foregroundColor: NSColor(srgbRed: 0.55, green: 0.40, blue: 0.10,
+                                          alpha: 0.85 * (1 - u * 0.75))])
+            z.draw(at: NSPoint(x: cx + bw * 0.26 + u * 6, y: ty - bh * 0.02 - u * 16))
+        }
+
+        ctx.restoreGState()      // end tilt
+
+        // ---- sparkles, on top of everything and untilted
+        for s in sparks {
+            let a = max(0, min(1, s.life))
+            amber.withAlphaComponent(a).setFill()
+            let d = 3.2 * a + 1.2
+            NSBezierPath(ovalIn: NSRect(x: s.x - d / 2, y: s.y - d / 2,
+                                        width: d, height: d)).fill()
+        }
+    }
+
+    /// Eyes carry the whole expression, so they get their own routine.
+    private func drawEyes(cx: CGFloat, eyeY: CGFloat, eyeDX: CGFloat,
+                          bw: CGFloat, bh: CGFloat) {
+        let openAmt = max(0.08, blink)
+        let wide: CGFloat = feeling == .surprised ? 1.45 : 1.0
+        let lid: CGFloat = feeling == .sleepy ? 0.45 : 1.0
+        let eyeW = bw * 0.115 * wide
+        let eyeH = eyeW * 1.45 * openAmt * lid
+
+        for sx in [-eyeDX, eyeDX] {
+            let ex = cx + sx + gaze.x * bw * 0.055
+            let ey = eyeY + gaze.y * bh * 0.042
+
+            // sleepy: heavy lids drawn as a downward curve. Squashing the
+            // capsule was not enough — a short wide oval with a highlight in
+            // it still reads wide awake, which is the opposite of the point.
+            if feeling == .sleepy && blink > 0.6 {
+                let a = NSBezierPath()
+                let r = eyeW * 0.95
+                a.move(to: NSPoint(x: ex - r, y: ey - r * 0.15))
+                a.curve(to: NSPoint(x: ex + r, y: ey - r * 0.15),
+                        controlPoint1: NSPoint(x: ex - r * 0.35, y: ey + r * 0.55),
+                        controlPoint2: NSPoint(x: ex + r * 0.35, y: ey + r * 0.55))
+                a.lineWidth = max(1.6, eyeW * 0.34)
+                a.lineCapStyle = .round
+                ink.withAlphaComponent(0.85).setStroke(); a.stroke()
+                continue
+            }
+
+            // happy eyes are arcs, not dots — the single strongest "cute" cue
+            // there is, and it costs one bezier
+            if feeling == .happy && blink > 0.6 {
+                let a = NSBezierPath()
+                let r = eyeW * 0.95
+                a.move(to: NSPoint(x: ex - r, y: ey + r * 0.35))
+                a.curve(to: NSPoint(x: ex + r, y: ey + r * 0.35),
+                        controlPoint1: NSPoint(x: ex - r * 0.35, y: ey - r * 0.75),
+                        controlPoint2: NSPoint(x: ex + r * 0.35, y: ey - r * 0.75))
+                a.lineWidth = max(1.8, eyeW * 0.42)
+                a.lineCapStyle = .round
+                ink.setStroke(); a.stroke()
+                continue
+            }
+
+            let e = NSBezierPath(roundedRect:
+                NSRect(x: ex - eyeW / 2, y: ey - eyeH / 2, width: eyeW, height: eyeH),
+                xRadius: eyeW / 2, yRadius: min(eyeW / 2, eyeH / 2))
+            ink.setFill(); e.fill()
+            if blink > 0.55 {          // specular dot — the thing that makes eyes alive
+                NSColor(white: 1, alpha: 0.92 * blink).setFill()
+                NSBezierPath(ovalIn: NSRect(x: ex - eyeW * 0.08, y: ey - eyeH * 0.26,
+                                            width: eyeW * 0.30, height: eyeW * 0.30)).fill()
             }
         }
     }
@@ -424,6 +664,7 @@ final class App: NSObject, NSApplicationDelegate {
     var window: CasperWindow!
     var ghost: GhostView!
     var bubble: NSTextField!
+    var bubbleBox: NSView!
     var yesBtn: NSButton!
     var noBtn: NSButton!
     var askBtn: NSButton!
@@ -455,7 +696,7 @@ final class App: NSObject, NSApplicationDelegate {
         let root = NSView(frame: NSRect(origin: .zero, size: frame.size))
         window.contentView = root
 
-        ghost = GhostView(frame: NSRect(x: 34, y: 6, width: 132, height: 132))
+        ghost = GhostView(frame: NSRect(x: 34, y: 108, width: 132, height: 132))
         // Layer-backed, or he flickers. A borderless transparent window that
         // redraws 60 times a second without a layer lets the window server
         // composite half-drawn frames — the whole mascot strobes.
@@ -465,30 +706,40 @@ final class App: NSObject, NSApplicationDelegate {
         ghost.layerContentsRedrawPolicy = .onSetNeedsDisplay
         root.addSubview(ghost)
 
+        // A dark card behind a transparent label, because NSTextField has no
+        // padding of its own and text jammed against the edge of a box reads
+        // as broken rather than minimal.
+        bubbleBox = NSView(frame: NSRect(x: 6, y: 40, width: W - 12, height: 62))
+        bubbleBox.wantsLayer = true
+        bubbleBox.layer?.cornerRadius = 10
+        bubbleBox.layer?.backgroundColor =
+            NSColor(calibratedWhite: 0.13, alpha: 0.92).cgColor
+        root.addSubview(bubbleBox)
+
         bubble = NSTextField(wrappingLabelWithString: "")
-        bubble.frame = NSRect(x: 6, y: 146, width: W - 12, height: 66)
+        bubble.frame = NSRect(x: 10, y: 7, width: W - 32, height: 48)
         bubble.alignment = .center
         bubble.font = .systemFont(ofSize: 11, weight: .regular)
-        bubble.textColor = NSColor(calibratedWhite: 0.88, alpha: 1)
-        bubble.backgroundColor = NSColor(calibratedWhite: 0.09, alpha: 0.90)
-        bubble.drawsBackground = true
+        bubble.textColor = NSColor(calibratedWhite: 0.92, alpha: 1)
+        bubble.drawsBackground = false
         bubble.isBezeled = false
         bubble.isEditable = false
-        bubble.wantsLayer = true
-        bubble.layer?.cornerRadius = 10
+        bubble.isSelectable = false
         bubble.maximumNumberOfLines = 4
-        bubble.lineBreakMode = .byTruncatingTail
-        root.addSubview(bubble)
+        bubble.lineBreakMode = .byWordWrapping     // truncating hid the message
+        bubble.cell?.wraps = true
+        bubble.cell?.isScrollable = false
+        bubbleBox.addSubview(bubble)
 
-        yesBtn = button("Yes, fix it", x: 6, w: 90)
+        yesBtn = button("Yes, fix it", x: 6, w: 92)
         yesBtn.target = self; yesBtn.action = #selector(sayYes)
         yesBtn.keyEquivalent = "\r"                 // the obvious answer is the default
-        yesBtn.bezelColor = NSColor(srgbRed: 0.91, green: 0.71, blue: 0.25, alpha: 1)
-        noBtn = button("Not now", x: 102, w: 90)
+        style(yesBtn, title: "Yes, fix it", accent: true)
+        noBtn = button("Not now", x: 102, w: 92)
         noBtn.target = self; noBtn.action = #selector(sayNo)
-        askBtn = button("Ask", x: 102, w: 90)
+        askBtn = button("Ask", x: 102, w: 92)
         askBtn.target = self; askBtn.action = #selector(askSomething)
-        micBtn = button("Mic", x: 6, w: 90)
+        micBtn = button("Mic", x: 6, w: 92)
         micBtn.target = self; micBtn.action = #selector(toggleMic)
         [yesBtn, noBtn, askBtn, micBtn].forEach { root.addSubview($0!) }
         showOffer(false)
@@ -556,19 +807,49 @@ final class App: NSObject, NSApplicationDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { self.check() }
     }
 
+    /// A button that draws itself.
+    ///
+    /// The stock `.rounded` bezel is a vibrancy material: on a fully
+    /// transparent, borderless window it composites to nothing at all. The
+    /// controls were present the whole time — frames right, isHidden false —
+    /// and simply painted no pixels. Explicit fill, explicit text, no material.
     func button(_ title: String, x: CGFloat, w: CGFloat = 90) -> NSButton {
         let b = NSButton(title: title, target: nil, action: nil)
-        b.frame = NSRect(x: x, y: 218, width: w, height: 24)
-        b.bezelStyle = .rounded
-        b.font = .systemFont(ofSize: 11, weight: .medium)
+        b.frame = NSRect(x: x, y: 8, width: w, height: 26)
+        b.isBordered = false
+        b.wantsLayer = true
+        b.layer?.cornerRadius = 8
+        b.layer?.backgroundColor = NSColor(calibratedWhite: 0.13, alpha: 0.92).cgColor
+        style(b, title: title, accent: false)
         return b
+    }
+
+    func style(_ b: NSButton, title: String, accent: Bool) {
+        let fg = accent ? NSColor(calibratedWhite: 0.10, alpha: 1)
+                        : NSColor(calibratedWhite: 0.93, alpha: 1)
+        b.attributedTitle = NSAttributedString(string: title, attributes: [
+            .foregroundColor: fg,
+            .font: NSFont.systemFont(ofSize: 11.5, weight: .medium),
+        ])
+        b.layer?.backgroundColor = accent
+            ? NSColor(srgbRed: 0.91, green: 0.71, blue: 0.25, alpha: 1).cgColor
+            : NSColor(calibratedWhite: 0.13, alpha: 0.92).cgColor
     }
 
     /// An empty bubble is a grey slab taking up half the window. Hide it, and
     /// when there is nothing to say he is just a small ghost on your desktop.
     func setBubble(_ text: String) {
         bubble.stringValue = text
-        bubble.isHidden = text.isEmpty
+        bubbleBox.isHidden = text.isEmpty
+        guard !text.isEmpty else { return }
+        // grow the card to the text, up to four lines, and keep it centred
+        let w = bubbleBox.frame.width - 20
+        let h = min(64, max(20, bubble.sizeThatFits(
+            NSSize(width: w, height: .greatestFiniteMagnitude)).height))
+        bubble.frame = NSRect(x: 10, y: (h + 14 - h) / 2, width: w, height: h)
+        bubbleBox.frame = NSRect(x: 6, y: 40, width: bubbleBox.frame.width,
+                                 height: h + 14)
+        bubble.frame.origin.y = 7
     }
 
     func showOffer(_ on: Bool) {
@@ -706,6 +987,13 @@ final class App: NSObject, NSApplicationDelegate {
         // main thread for up to 8s every 2s — a diagnostic that freezes the
         // thing it is diagnosing is not a diagnostic.
         parts.append("server=" + serverState)
+        let vis = [("mic", micBtn), ("ask", askBtn), ("yes", yesBtn)]
+            .map { n, b -> String in
+                let f = b?.frame ?? .zero
+                return "\(n):\(b?.isHidden == false ? "shown" : "hidden")@\(Int(f.minY))-\(Int(f.maxY))"
+            }.joined(separator: ",")
+        parts.append("btns=" + vis)
+        parts.append("root=" + String(Int(window.contentView?.bounds.height ?? 0)))
         parts.append("said=" + String(bubble.stringValue.prefix(70)))
         let line: String = parts.joined(separator: "  ")
         try? line.write(toFile: "/tmp/casper-status.txt", atomically: true,
@@ -749,9 +1037,7 @@ final class App: NSObject, NSApplicationDelegate {
 
     func refreshMicButton() {
         let on = ear.running
-        micBtn.title = on ? "Mic on" : "Mic off"
-        micBtn.bezelColor = on
-            ? NSColor(srgbRed: 0.91, green: 0.71, blue: 0.25, alpha: 1) : nil
+        style(micBtn, title: on ? "Listening" : "Mic off", accent: on)
         micBtn.toolTip = on ? "Click to stop listening"
                             : "Click to let Casper hear you"
     }
@@ -797,11 +1083,21 @@ func renderFrames(to dir: String) {
     let moods: [(String, GhostView.Mood, CGFloat)] = [
         ("idle", .idle, 0.25), ("alert", .alert, 1.0),
         ("listening", .listening, 1.0), ("speaking", .speaking, 1.0),
-        ("thinking", .thinking, 0.6), ("blink", .idle, 0.25)]
+        ("thinking", .thinking, 0.6), ("blink", .idle, 0.25),
+        ("happy", .idle, 0.4), ("surprised", .idle, 0.4),
+        ("sleepy", .idle, 0.25), ("hop", .idle, 0.4)]
     for (name, mood, glow) in moods {
         v.mood = mood; v.glow = glow
+        v.feel(.neutral, for: 0)       // a timed feeling would bleed into the next frame
         for _ in 0..<90 { v.tick(dt: 1.0 / 60) }
-        if name == "blink" { v.forceBlink(); v.tick(dt: 1.0 / 60) }
+        switch name {
+        case "blink":     v.forceBlink(); v.tick(dt: 1.0 / 60)
+        case "happy":     v.celebrate(); for _ in 0..<22 { v.tick(dt: 1.0 / 60) }
+        case "surprised": v.startle();   for _ in 0..<8  { v.tick(dt: 1.0 / 60) }
+        case "sleepy":    v.feel(.sleepy, for: 5); for _ in 0..<30 { v.tick(dt: 1.0 / 60) }
+        case "hop":       v.bounce();    for _ in 0..<11 { v.tick(dt: 1.0 / 60) }
+        default: break
+        }
         guard let rep = v.bitmapImageRepForCachingDisplay(in: v.bounds) else { continue }
         rep.size = v.bounds.size
         v.cacheDisplay(in: v.bounds, to: rep)
