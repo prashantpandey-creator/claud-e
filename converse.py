@@ -163,10 +163,29 @@ def turn(utterance: str, allow_actions: bool = False,
             out["speech"] = "Nothing verified on that yet."
         else:
             m = hits[0]
-            grade = m["epistemic"]["evidence_status"]
+            ep = m.get("epistemic") or {}
+            grade = ep.get("evidence_status")
+            scope = ep.get("evidence_scope")
             lead = m["statement"].strip()[:180]
-            out["speech"] = (lead if grade == "machine_checked"
-                             else "Unverified, so treat it carefully: " + lead)
+            if grade != "machine_checked":
+                out["speech"] = "Unverified, so treat it carefully: " + lead
+            elif scope == "world":
+                # Checked against something outside the store. Say it flat.
+                out["speech"] = lead
+            else:
+                # 'quote' (the memory quotes itself correctly) or 'internal'
+                # (it links to other memories) — graded green, but nothing in
+                # the world can refute either. Measured on the live store: 3 of
+                # 4 answers Casper would speak came out of this branch, flat,
+                # as confident fact. A spoken sentence carries more authority
+                # than a dashboard row, so this is where the conflation does
+                # the most damage.
+                #
+                # The fix is attribution, not hedging. A recorded decision is
+                # real and worth saying; it just must not sound like a
+                # measurement. Absent scope lands here too: unknown is not
+                # verified.
+                out["speech"] = "You wrote: " + lead
         return out
 
     # --- status / everything else ----------------------------------------

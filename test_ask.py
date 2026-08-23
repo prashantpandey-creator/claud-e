@@ -82,6 +82,49 @@ def test_cli_envelope():
         assert k in env
 
 
+def test_knowledge_query_does_not_answer_with_a_CHAT_STUB():
+    """A session record is not knowledge.
+
+    Measured on the live store: 140 of 526 active memories (27%) are session
+    stubs — "Session 'x' on y. 1 turns, 2 files, sprawl 0.5". They sat in the
+    same index as curated knowledge, so asking Casper about Razorpay payments
+    got that sentence read aloud as the answer. Metadata about a chat, spoken
+    with the authority of a fact, is worse than no answer: it sounds like one.
+
+    They stay IN the store (they answer "which session did X") — they are just
+    not what a "what do we know about ..." question is asking for."""
+    import tempfile, json as _j
+    with tempfile.TemporaryDirectory() as d:
+        with open(os.path.join(d, "memories.jsonl"), "w") as f:
+            f.write(_j.dumps({"id": "s1", "active": True,
+                "tags": ["meditate-session"],
+                "statement": "Session 'Locate and verify Razorpay key' on x. 1 turns.",
+                "epistemic": {"evidence_status": "machine_checked"}}) + "\n")
+            f.write(_j.dumps({"id": "k1", "active": True,
+                "tags": ["memory-file"],
+                "statement": "Razorpay live keys are stored in the frontend secrets env.",
+                "epistemic": {"evidence_status": "machine_checked"}}) + "\n")
+        hits = ak.query("razorpay", store_dir=d, k=3)
+        assert hits, "no hits at all"
+        assert hits[0]["id"] == "k1", \
+            "a chat stub outranked real knowledge: %s" % [h["id"] for h in hits]
+        assert all(h["id"] != "s1" for h in hits), \
+            "session stub reached a knowledge answer: %s" % [h["id"] for h in hits]
+
+
+def test_sessions_are_still_findable_when_asked_for():
+    """Filtering them out of knowledge must not delete them from the store."""
+    import tempfile, json as _j
+    with tempfile.TemporaryDirectory() as d:
+        with open(os.path.join(d, "memories.jsonl"), "w") as f:
+            f.write(_j.dumps({"id": "s1", "active": True,
+                "tags": ["meditate-session"],
+                "statement": "Session 'Razorpay key hunt' on x. 1 turns.",
+                "epistemic": {"evidence_status": "machine_checked"}}) + "\n")
+        hits = ak.query("razorpay", store_dir=d, k=3, include_sessions=True)
+        assert hits and hits[0]["id"] == "s1", hits
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

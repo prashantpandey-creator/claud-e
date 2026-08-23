@@ -106,6 +106,80 @@ def test_knowledge_question_queries_the_store():
         assert "mumbai" in r["speech"].lower() or "systemd" in r["speech"].lower()
 
 
+def _mem(mid, statement, scope, grade="machine_checked"):
+    return json.dumps({"id": mid, "active": True, "statement": statement,
+                       "epistemic": {"evidence_status": grade,
+                                     "evidence_scope": scope},
+                       "evidence": [{"source": "/x"}]}) + "\n"
+
+
+def test_world_backed_knowledge_is_stated_flat():
+    """Checked against the world, so say it. No mealy hedging."""
+    with tempfile.TemporaryDirectory() as t:
+        w = _world(t); store = w["store_dir"]
+        with open(os.path.join(store, "memories.jsonl"), "w") as f:
+            f.write(_mem("m1", "Deploys run via a systemd timer on the Mumbai box", "world"))
+        r = cv.turn("what do we know about deploys", **w)
+        assert "you wrote" not in r["speech"].lower(), r["speech"]
+        assert "mumbai" in r["speech"].lower()
+
+
+def test_self_referential_knowledge_is_ATTRIBUTED_not_asserted():
+    """THE fix. Measured on the live store: 3 of 4 answers Casper would speak
+    flat rested on evidence the world cannot falsify — 'quote' (the memory
+    quotes itself correctly) or 'internal' (it links to other memories). Both
+    were graded machine_checked, so both came out of the speaker's mouth as
+    confident fact.
+
+    A spoken sentence carries more authority than a dashboard row, so this is
+    where the conflation does the most damage. The honest move is not to hedge
+    into uselessness — it is to name the source. Your own recorded decision is
+    worth saying; it just must not sound like a measurement."""
+    with tempfile.TemporaryDirectory() as t:
+        w = _world(t); store = w["store_dir"]
+        with open(os.path.join(store, "memories.jsonl"), "w") as f:
+            f.write(_mem("m1", "Never use Groq; use OpenRouter", "quote"))
+        r = cv.turn("what do we know about groq", **w)
+        assert "you wrote" in r["speech"].lower(), r["speech"]
+        assert "groq" in r["speech"].lower()
+        # attribution, NOT a doubt-word: a recorded decision is still real
+        for weasel in ("maybe", "possibly", "i think", "might be"):
+            assert weasel not in r["speech"].lower(), r["speech"]
+
+
+def test_internal_scope_is_attributed_too():
+    with tempfile.TemporaryDirectory() as t:
+        w = _world(t); store = w["store_dir"]
+        with open(os.path.join(store, "memories.jsonl"), "w") as f:
+            f.write(_mem("m1", "Answers should end confusion, not add layers", "internal"))
+        r = cv.turn("what do we know about answers", **w)
+        assert "you wrote" in r["speech"].lower(), r["speech"]
+
+
+def test_unverified_still_wins_over_scope():
+    """Not-checked is a stronger warning than not-world-backed."""
+    with tempfile.TemporaryDirectory() as t:
+        w = _world(t); store = w["store_dir"]
+        with open(os.path.join(store, "memories.jsonl"), "w") as f:
+            f.write(_mem("m1", "Something unchecked", "world", grade="unverified"))
+        r = cv.turn("what do we know about something", **w)
+        assert "unverified" in r["speech"].lower(), r["speech"]
+
+
+def test_missing_scope_does_not_crash_or_over_claim():
+    """Old rows predate evidence_scope. Absent scope must not be read as
+    'world' — unknown is not verified."""
+    with tempfile.TemporaryDirectory() as t:
+        w = _world(t); store = w["store_dir"]
+        with open(os.path.join(store, "memories.jsonl"), "w") as f:
+            f.write(json.dumps({"id": "m1", "active": True,
+                "statement": "An older memory with no scope recorded",
+                "epistemic": {"evidence_status": "machine_checked"},
+                "evidence": [{"source": "/x"}]}) + "\n")
+        r = cv.turn("what do we know about older", **w)
+        assert r["speech"], "must still answer"
+
+
 def test_unheard_asks_to_repeat():
     with tempfile.TemporaryDirectory() as t:
         w = _world(t, goal=False)

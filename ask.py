@@ -55,13 +55,27 @@ def _load(store_dir: str) -> List[Dict[str, Any]]:
     return out
 
 
-def query(q: str, store_dir: str = STORE_DIR, k: int = 6) -> List[Dict[str, Any]]:
-    """Relevance via nidra retrieval, then verified-first within the hit set."""
+def query(q: str, store_dir: str = STORE_DIR, k: int = 6,
+          include_sessions: bool = False) -> List[Dict[str, Any]]:
+    """Relevance via nidra retrieval, then verified-first within the hit set.
+
+    Session records are excluded by default. They are memories about CHATS —
+    "Session 'Locate and verify Razorpay key' on x. 1 turns, 2 files, sprawl
+    0.5" — and 140 of 526 active memories (27%) are them. Sharing one index
+    with curated knowledge meant a "what do we know about razorpay" question
+    got that sentence read aloud as the answer. Metadata spoken with the
+    authority of a fact is worse than no answer, because it sounds like one.
+
+    They stay in the store and remain retrievable with include_sessions=True,
+    which is what a "which session did X" question actually wants.
+    """
     try:
         from nidra.retrieval import retrieve
     except ImportError:
         return []
     mems = [m for m in _load(store_dir) if m.get("active")]
+    if not include_sessions:
+        mems = [m for m in mems if "meditate-session" not in (m.get("tags") or [])]
     hits = retrieve(mems, q, k=k * 2)
     hits.sort(key=lambda m: _RANK.get(
         m.get("epistemic", {}).get("evidence_status", "unverified"), 3))
