@@ -58,32 +58,23 @@ left off.
 *(The engine is a small internal library — installed automatically, you never
 touch it. It lives in its own repo only so it can be tested in isolation.)*
 
-## The whole product is two verbs
+## The whole product is five lines
 
 ```bash
-meditate           # where am I + the ONE next action
-meditate go        # move everything forward: repair agent if knowledge
-                   # broke, plus one agent per open goal
+meditate           # where you are + the ONE next action
+meditate go        # move it forward: a repair agent if knowledge broke,
+                   # plus one agent per open goal
+meditate fix       # repair broken memories only
+meditate pulse     # the live console in your browser (localhost only)
+meditate doctor    # health: prereqs, test suites, hooks, heartbeat
 ```
 
-Everything else is there when you want a specific organ:
+Inside Claude Code, `/meditate` reads your sessions and splits the tangled ones.
 
-```bash
-meditate pulse       # LIVE dashboard in your browser (localhost only)
-meditate projects    # where your attention actually went, per project + tasks
-meditate ask "..."   # question the graded memory — verified facts first
-meditate fix         # repair broken knowledge (--list, or fix <n> for one)
-meditate fleet       # live progress of dispatched agents
-meditate report      # wins: drift caught/repaired, stilling, efficacy
-meditate distill     # sessions awaiting distillation into memory
-meditate archive     # tidy finished sessions away (reversible)
-meditate doctor      # health: prereqs, 37 test suites, hooks, heartbeat
-meditate where       # every path it resolved on this machine
-meditate help        # everything
-```
-
-Intent aliases work too — `what`/`search`/`find`/`recall` = ask,
-`run`/`work` = go, `repair` = fix, `where` = status, `live`/`brain` = pulse.
+Everything else runs itself on the heartbeat. The organs are still there as
+scripts — `meditate goals`, `meditate report`, `meditate archive`,
+`meditate grade` and the rest all work, they just aren't a menu you have to
+learn. `meditate help` names the five; `ls *.py` names the rest.
 
 ## Casper — it talks to you
 
@@ -342,26 +333,8 @@ Inside Claude Code:
 /meditate archive      archive finished sessions only
 ```
 
-From a terminal:
+From a terminal: see the five commands above.
 
-```bash
-meditate              # health check (doctor)
-meditate grade        # scan sessions + .md files, grade, consolidate
-meditate metrics      # drift rate, coverage, health dashboard
-meditate archive      # archive finished/empty sessions (dry-run; --apply)
-meditate drive        # dispatch goal agents (dry-run; --go N launches)
-meditate dashboard    # the whole organism, one self-contained HTML page
-meditate ask          # question the graded store — verified facts first
-meditate distill      # formation queue: sessions awaiting distillation
-meditate goals        # long-term goals: %, scope drift, agent kickoffs
-meditate report       # wins + efficacy: drift caught/repaired, stilling
-meditate drift        # memories whose evidence failed — exact claims
-meditate who          # live sessions in this workspace, their files
-meditate sessions     # show sessions ranked by sprawl
-meditate launch       # see live threads
-meditate launch --open  # open Terminal windows per thread
-meditate doctor --json  # full diagnostic as JSON envelope
-```
 
 ---
 

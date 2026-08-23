@@ -12,130 +12,6 @@ set -euo pipefail
 DIR="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")" && pwd)"
 
 case "${1:-}" in
-  grade)
-    shift
-    python3 "$DIR/nidra_bridge.py" --sleep "$@"
-    ;;
-  sessions)
-    shift
-    python3 "$DIR/sessions.py" "$@"
-    ;;
-  launch)
-    shift
-    python3 "$DIR/launch.py" "$@"
-    ;;
-  install)
-    bash "$DIR/install.sh"
-    ;;
-  uninstall|remove)
-    shift
-    bash "$DIR/uninstall.sh" "$@"
-    ;;
-  where|paths)
-    shift
-    python3 "$DIR/paths.py" "$@"
-    ;;
-  metrics)
-    shift
-    python3 "$DIR/metrics.py" "$@"
-    ;;
-  doctor)
-    shift
-    python3 "$DIR/doctor.py" "$@"
-    ;;
-  archive)
-    shift
-    python3 "$DIR/archive.py" "$@"
-    ;;
-  drive)
-    shift
-    python3 "$DIR/drive.py" "$@"
-    ;;
-  dashboard)
-    shift
-    python3 "$DIR/dashboard.py" "$@"
-    ;;
-  distill)
-    shift
-    python3 "$DIR/formation.py" "$@"
-    ;;
-  ask|what|search|find|recall)
-    shift
-    python3 "$DIR/ask.py" "$@"
-    ;;
-  goals)
-    shift
-    python3 "$DIR/goals.py" "$@"
-    ;;
-  report)
-    shift
-    python3 "$DIR/report.py" "$@"
-    ;;
-  drift)
-    shift
-    python3 "$DIR/coordination.py" drift "$@"
-    ;;
-  who)
-    shift
-    python3 "$DIR/coordination.py" who "$@"
-    ;;
-  help|--help|-h)
-    echo "meditate — evidence-graded memory + goal fleet"
-    echo ""
-    echo "EVERY DAY"
-    echo "  meditate            where am I + the ONE next action"
-    echo "  meditate brief      the catch-up, in sentences"
-    echo "  meditate go [N]     move everything forward: a repair agent if the"
-    echo "                      queue is open, plus one per open goal"
-    echo "                      (N caps it; 0 = dry run)"
-    echo "  meditate fix        repair failed memories only"
-    echo ""
-    echo "SEEING IT"
-    echo "  meditate pulse      the live console in your browser"
-    echo "  meditate casper     the desktop companion (talks, listens)"
-    echo "  meditate say ...    ask it something out loud"
-    echo "  meditate advise ... ask it to reason over what it knows"
-    echo ""
-    echo "CHATS"
-    echo "  meditate chats      which chats are waiting on you"
-    echo "  meditate sessions   every session, ranked by sprawl"
-    echo "  meditate tell ID .. send a message into another session"
-    echo "  meditate inbox      messages sent to this one"
-    echo "  meditate archive    put finished chats away (restorable)"
-    echo ""
-    echo "GOALS"
-    echo "  meditate goals      goals, stuck first then closest to done"
-    echo "  meditate milestones which milestones are already true"
-    echo "  meditate fleet      what the agents are doing right now"
-    echo "  meditate launch     open live threads in Terminal"
-    echo "  meditate progress   an agent reports in (agents call this)"
-    echo ""
-    echo "WHAT IT KNOWS"
-    echo "  meditate recall ... search the graded facts"
-    echo "  meditate grade      re-check every memory against reality"
-    echo "  meditate drift      memories that stopped matching"
-    echo "  meditate report     caught / repaired / time-to-repair"
-    echo "  meditate projects   where your attention actually went"
-    echo ""
-    echo "KEEPING IT HEALTHY"
-    echo "  meditate doctor     tests, hook, heartbeat, store"
-    echo "  meditate install    set it up on this machine"
-    echo "  meditate who        other sessions live in this repo"
-    echo "  meditate metrics    raw counters"
-    echo ""
-    echo "  Inside Claude Code: /meditate"
-    ;;
-  "")
-    python3 "$DIR/status.py"
-    ;;
-  go|run|work|act)
-    shift
-    python3 "$DIR/go.py" "$@"
-    ;;
-  fix|repair)
-    shift
-    python3 "$DIR/go.py" --repair-only "$@"
-    ;;
   casper|mascot|ghost|companion)
     shift
     # The NATIVE desktop companion — an .app bundle, not a bare binary. The
@@ -165,109 +41,73 @@ case "${1:-}" in
     echo "Click him and talk, or say \"Casper, ...\" — he answers from what he"
     echo "knows about your work. Everything he hears stays on this Mac."
     ;;
-  stop|halt)
-    shift
-    # Close every agent THIS tool dispatched, and nothing else — the window
-    # ids were recorded at launch precisely so this cannot take out the
-    # session you are typing in.
-    python3 -c "
-import sys; sys.path.insert(0, '$DIR')
-from drive import stop_fleet
-r = stop_fleet()
-if not r['was_running']:
-    print('Nothing of mine is running.')
-else:
-    print('Stopped %d agent(s).' % r['count'])
-    for a in r['closed']:
-        print('  %s  (%d min in)' % (a['goal'], a['age_min']))
-    for a in r['failed']:
-        print('  could not close: %s' % a['goal'])
-"
+  install)
+    bash "$DIR/install.sh"
     ;;
-  advise|advice|think)
+  uninstall|remove)
     shift
-    python3 "$DIR/advisor.py" "$@"
+    bash "$DIR/uninstall.sh" "$@"
+    ;;
+  doctor)
+    shift
+    python3 "$DIR/doctor.py" "$@"
+    ;;
+  help|--help|-h)
+    echo "meditate — evidence-graded memory, and a fleet that works from it"
+    echo ""
+    echo "  meditate            where you are + the ONE next action"
+    echo "  meditate go [N]     move it forward: a repair agent if knowledge"
+    echo "                      broke, plus one per open goal (N caps; 0 = dry run)"
+    echo "  meditate fix        repair broken memories only"
+    echo "  meditate pulse      the live console in your browser"
+    echo ""
+    echo "  meditate doctor     tests, hook, heartbeat, store"
+    echo "  meditate install / uninstall"
+    echo ""
+    echo "  Inside Claude Code: /meditate  — read the sessions, split the tangled ones"
+    echo ""
+    echo "Everything else runs itself on the heartbeat. The organs are still"
+    echo "there as scripts in this directory if you ever need one by hand:"
+    echo "  python3 $DIR/<name>.py --help"
+    ;;
+  "")
+    python3 "$DIR/status.py"
+    ;;
+  go|run|work|act)
+    shift
+    python3 "$DIR/go.py" "$@"
+    ;;
+  fix|repair)
+    shift
+    python3 "$DIR/go.py" --repair-only "$@"
     ;;
   pulse|live|sarathi|brain|serve|watch|soul)
     shift
     python3 "$DIR/brain.py" "$@"
     ;;
-  say|talk|hey)
-    shift
-    python3 "$DIR/converse.py" "$@"
-    ;;
-  voice|whisper)
-    shift
-    python3 "$DIR/voice.py" "$@"
-    ;;
-  brief|catchup|"catch-up")
-    shift
-    python3 "$DIR/brief.py" "$@"
-    ;;
-  chats|triage|waiting)
-    shift
-    python3 "$DIR/triage.py" "$@"
-    ;;
-  milestones|check-goals|verify-goals)
-    shift
-    python3 "$DIR/milestones.py" "$@"
-    ;;
-  projects|proj|where)
-    shift
-    python3 "$DIR/projects.py" "$@"
-    ;;
-  cadence|tempo|rhythm)
-    shift
-    python3 "$DIR/cadence.py" "$@"
-    ;;
-  progress|report-progress)
-    shift
-    python3 "$DIR/beacon.py" "$@"
-    ;;
-  tell|msg|message)
-    shift
-    python3 "$DIR/inbox.py" send "$@"
-    ;;
-  inbox|mail)
-    shift
-    python3 "$DIR/inbox.py" read "$@"
-    ;;
-  messages)
-    shift
-    python3 "$DIR/inbox.py" list "$@"
-    ;;
-  remote)
-    shift
-    python3 "$DIR/remote.py" "$@"
-    ;;
-  fleet|agents)
-    shift
-    # `fleet` shows; `fleet clear` acts. Watching a stuck row for 96 minutes
-    # with no way to dismiss it is what made this necessary.
-    if [ "${1:-}" = "clear" ] || [ "${1:-}" = "close" ]; then
-      python3 "$DIR/fleet.py" "$@"
-    else
-      python3 "$DIR/drive.py" fleet "$@"
-    fi
-    ;;
-  state|status)
-    shift
-    python3 "$DIR/status.py" "$@"
-    ;;
   *)
-    echo "don't know '$1'. The product is:" >&2
-    echo "  meditate            where am I + the one next action" >&2
+    # Passthrough, not a menu. Every organ is still a script in this
+    # directory; naming one runs it. That keeps 30+ capabilities reachable
+    # without 30+ hand-maintained branches drifting out of date -- the old
+    # fallback listed six verbs that no longer existed.
+    # A few organs were renamed over time; keep the old names working.
+    case "$1" in
+      grade)   shift; exec python3 "$DIR/nidra_bridge.py" --sleep "$@" ;;
+      distill) shift; exec python3 "$DIR/formation.py" "$@" ;;
+      drift)   shift; exec python3 "$DIR/coordination.py" drift "$@" ;;
+      who)     shift; exec python3 "$DIR/coordination.py" who "$@" ;;
+      where)   shift; exec python3 "$DIR/paths.py" "$@" ;;
+    esac
+    if [ -f "$DIR/$1.py" ]; then
+      cmd="$1"; shift
+      exec python3 "$DIR/$cmd.py" "$@"
+    fi
+    echo "don't know '$1'." >&2
+    echo "  meditate            where you are + the one next action" >&2
     echo "  meditate go         move everything forward" >&2
-    echo "  meditate ask \"...\"  question the graded memory" >&2
-    echo "  meditate fix        repair knowledge (--list, or fix <n> for one item)" >&2
-    echo "  meditate say \"...\"  talk to it: ask about a project, memory, or status" >&2
-    echo "  meditate voice      Casper: the one thing worth saying + if now is the moment" >&2
-    echo "  meditate projects   where your attention went, per project + open tasks" >&2
-    echo "  meditate fleet      live progress of dispatched agents" >&2
-    echo "  meditate casper     the desktop companion — a ghost that watches and asks" >&2
-    echo "  meditate advise \"...\" a junior-dev opinion on your real state" >&2
-    echo "  meditate pulse      your Claude live in the browser — click to run (localhost)" >&2
-    echo "everything else runs itself on the heartbeat (meditate help for plumbing)" >&2
+    echo "  meditate fix        repair broken memories" >&2
+    echo "  meditate pulse      the live console" >&2
+    echo "  meditate help       everything else" >&2
     exit 1
     ;;
 esac

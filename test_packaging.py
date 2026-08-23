@@ -188,10 +188,17 @@ def test_readme_documents_only_commands_that_exist():
     readme = open(os.path.join(SKILL, "README.md")).read()
     cli = open(os.path.join(SKILL, "meditate")).read()
     documented = set(_re.findall(r"^meditate ([a-z]+)", readme, _re.M))
-    # a case arm is `  verb)` or `  a|verb|b)` — alternatives on either side,
-    # and the arm may carry flags like `help|--help|-h)`
-    missing = [v for v in sorted(documented)
-               if not _re.search(r"^\s*[\w|.-]*\b%s\b[\w|.-]*\)" % v, cli, _re.M)]
+    # A verb works if the CLI has a case arm for it (`  verb)` or
+    # `  a|verb|b)`, possibly with flags like `help|--help|-h)`) OR if the
+    # passthrough can resolve it to a script of the same name. The check used
+    # to demand a case arm, which tested the implementation instead of the
+    # behaviour: after the CLI was cut from 35 branches to 8, `meditate goals`
+    # still ran fine via passthrough and the test called it missing.
+    def works(v):
+        if _re.search(r"^\s*[\w|.-]*\b%s\b[\w|.-]*\)" % v, cli, _re.M):
+            return True
+        return os.path.exists(os.path.join(SKILL, v + ".py"))
+    missing = [v for v in sorted(documented) if not works(v)]
     assert not missing, "README promises verbs the CLI lacks: %s" % missing
 
 
