@@ -116,6 +116,13 @@ if [ -f "$SIGFILE" ] && [ "$(cat "$SIGFILE")" != "$NOWSIG" ]; then
   echo "signing identity changed — clearing stale privacy decisions"
   tccutil reset SpeechRecognition com.meditate.casper >/dev/null 2>&1 || true
   tccutil reset Microphone com.meditate.casper >/dev/null 2>&1 || true
+  # AppleEvents too. Casper shells out to helpers that ask which app is in
+  # front, and macOS attributes that Apple Event to CASPER. A stale denial
+  # here does not deny the event, it SIGABRTs the app — and it does so around
+  # 30 seconds in, on the first briefing poll, with no crash report and no
+  # stderr. Measured: died at 30s on four consecutive launches; after
+  # `tccutil reset AppleEvents` it ran past two minutes and is still up.
+  tccutil reset AppleEvents com.meditate.casper >/dev/null 2>&1 || true
 fi
 printf '%s\n' "$NOWSIG" > "$SIGFILE"
 
