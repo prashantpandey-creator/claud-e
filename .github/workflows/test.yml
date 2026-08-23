@@ -91,6 +91,20 @@ jobs:
           command -v launchctl && echo "launchctl present (unexpected on Linux)" || echo "no launchctl — cron fallback is the path under test"
           command -v crontab && echo "crontab present" || echo "no crontab either"
 
+      - name: DEBUG — does crontab persist in a plain, standard Ubuntu container?
+        run: |
+          docker run --rm ubuntu:24.04 bash -c '
+            set -e
+            apt-get update -qq >/dev/null
+            apt-get install -y -qq cron >/dev/null
+            echo "crontab -l before: [$(crontab -l 2>&1)]"
+            echo "0 */6 * * * /bin/true # docker-test" | crontab -
+            echo "crontab -l after pipe write: [$(crontab -l 2>&1)]"
+            printf "0 */6 * * * /bin/true # docker-test-file\n" > /tmp/c.txt
+            crontab /tmp/c.txt
+            echo "crontab -l after file write: [$(crontab -l 2>&1)]"
+          '
+
       - name: Install into this runner's HOME
         run: bash install.sh || true
 
