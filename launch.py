@@ -209,9 +209,9 @@ def build_launch(cwd: str, kickoff: str, thread_name: str, model: str = ""):
               '  if ready then\n'
               '    delay 0.8\n'
               '    do script "%s" in w\n'
-              '    return "ready"\n'
+              '    return "ready:" & wid\n'
               '  else\n'
-              '    return "timeout"\n'
+              '    return "timeout:" & wid\n'
               '  end if\n'
               'end tell' % (as_escaped, kick_escaped))
     return kickoff_file, shell_cmd, script
@@ -225,7 +225,9 @@ def launch_claude(cwd: str, kickoff: str, thread_name: str, model: str = "") -> 
         r = subprocess.run(["osascript", "-e", script], check=True,
                            timeout=75, capture_output=True, text=True)
         out = (r.stdout or "").strip()
-        if out == "timeout":
+        state, _, wid = out.partition(":")
+        launch_claude.last_window_id = wid.strip()
+        if state == "timeout":
             # a window opened but claude never came up, so the kickoff was NOT
             # delivered. Saying "launched" here is how a dead agent gets
             # counted as a live one.
@@ -236,6 +238,9 @@ def launch_claude(cwd: str, kickoff: str, thread_name: str, model: str = "") -> 
     except Exception as e:
         print(f"  osascript error: {e}")
         return False
+
+
+launch_claude.last_window_id = ""   # set by the call above; read by drive.py
 
 
 def launch_all(auto_open: bool = False):
