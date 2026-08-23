@@ -188,10 +188,19 @@ if [ -d "$HOME/projects/nidra/nidra" ]; then
 else
     NIDRA_ROOT="$MEDITATION_DIR/nidra"
 fi
-if [ ! -d "$NIDRA_ROOT/nidra" ]; then
+# Prefer the PACKAGE over a git clone. Cloning on every install made this
+# tool the loudest visitor to its own engine's repo: 106 clones and "52
+# uniques" against 3 page views from 1 person — every number self-inflicted,
+# so the only adoption signal nidra had was unreadable. pip installs do not
+# touch repo traffic, and a released package is the right way to consume a
+# library anyway. Git clone stays as the fallback for a machine without pip
+# or before a release exists.
+if [ ! -d "$NIDRA_ROOT/nidra" ] && ! python3 -c "import nidra" >/dev/null 2>&1; then
     echo "  Fetching the grading engine (one-time)..."
-    if git clone --depth 1 https://github.com/prashantpandey-creator/nidra "$NIDRA_ROOT" >/dev/null 2>&1; then
-        echo "  [ok]  grading engine installed"
+    if python3 -m pip install --quiet --disable-pip-version-check nidra-agent-memory >/dev/null 2>&1; then
+        echo "  [ok]  grading engine installed (nidra-agent-memory)"
+    elif git clone --depth 1 https://github.com/prashantpandey-creator/nidra "$NIDRA_ROOT" >/dev/null 2>&1; then
+        echo "  [ok]  grading engine installed (source)"
     else
         echo "  [warn]  could not fetch the grading engine — check your network"
         echo "          meditate works without it; grading stays off until it is present."
