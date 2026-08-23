@@ -2084,9 +2084,26 @@ final class App: NSObject, NSApplicationDelegate {
                 for r in rows where self.fleetTicked[r.goal] == false && r.ticked {
                     self.fleetTicked[r.goal] = true
                     let name = self.pretty(r.goal)
-                    let landedToday = rows.filter { $0.ticked }.count
+                    let done = rows.filter { $0.ticked }
                     self.ghost.celebrate()
-                    self.say(self.landedLine(name, of: landedToday))
+                    var line = self.landedLine(name, of: done.count)
+
+                    // ...and OFFER to tidy up. He used to announce a finished
+                    // job and return — no button, no way to say yes. Telling
+                    // someone a thing is done and asking whether to clear the
+                    // board, with nothing to press, is worse than not asking.
+                    if !self.quiet {
+                        self.pendingAction = "clear"       // every finished row
+                        self.pendingKind = "run"
+                        self.style(self.yesBtn,
+                                   title: done.count > 1 ? "Clear them" : "Clear it",
+                                   accent: true)
+                        self.showOffer(true)
+                        line += done.count > 1
+                            ? " Want me to take those \(done.count) off the board?"
+                            : " Want me to take it off the board?"
+                    }
+                    self.say(line)
                     Notifier.shared.post(title: name + " is done",
                                          body: "Click to open the dashboard.")
                     return
