@@ -48,6 +48,18 @@ else
     echo "  [skip] no launchd agent installed"
 fi
 
+# Linux (or any machine without launchd) runs the same heartbeat via cron —
+# install.sh's fallback. Leaving that line behind after uninstall means the
+# heartbeat keeps firing against a skill directory that no longer exists.
+if command -v crontab >/dev/null 2>&1 && crontab -l 2>/dev/null | grep -q "meditate-heartbeat"; then
+    say "stop and remove the cron heartbeat (meditate-heartbeat)"
+    if [ "$DRY" != 1 ]; then
+        ( crontab -l 2>/dev/null | grep -v "meditate-heartbeat" || true ) | crontab - 2>/dev/null || true
+    fi
+else
+    echo "  [skip] no cron heartbeat installed"
+fi
+
 # ---- 2. the running companion -----------------------------------------------
 if pgrep -f "Casper.app/Contents" >/dev/null 2>&1; then
     say "close Casper"

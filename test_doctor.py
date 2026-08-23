@@ -57,6 +57,57 @@ def test_json_serializable():
     assert len(serialized) > 100, "envelope too small"
 
 
+def test_heartbeat_detects_cron_fallback():
+    """On a machine with no launchd plist (Linux), a crontab line tagged
+    meditate-heartbeat must still count as a loaded heartbeat — else a
+    correctly installed Linux box is permanently reported unhealthy."""
+    fake_home = tempfile.mkdtemp()
+    fake_bin = tempfile.mkdtemp()
+    crontab_path = os.path.join(fake_bin, "crontab")
+    with open(crontab_path, "w") as f:
+        f.write("#!/bin/bash\n"
+                "if [ \"$1\" = \"-l\" ]; then\n"
+                "  echo '0 */6 * * * true # meditate-heartbeat'\n"
+                "  exit 0\n"
+                "fi\n"
+                "cat > /dev/null\n")
+    os.chmod(crontab_path, 0o755)
+
+    old_home, old_path = os.environ.get("HOME"), os.environ.get("PATH", "")
+    try:
+        os.environ["HOME"] = fake_home
+        os.environ["PATH"] = fake_bin + os.pathsep + old_path
+        hb = doctor._check_heartbeat()
+    finally:
+        if old_home is not None:
+            os.environ["HOME"] = old_home
+        os.environ["PATH"] = old_path
+
+    assert hb["plist_exists"] is False, hb
+    assert hb["loaded"] is True, hb
+    assert hb["mechanism"] == "cron", hb
+
+
+def test_heartbeat_absent_when_neither_launchd_nor_cron():
+    """Falsifier for the check above: a fresh machine with no scheduler at
+    all must report not-loaded, not crash and not false-positive."""
+    fake_home = tempfile.mkdtemp()
+    fake_bin = tempfile.mkdtemp()  # empty: no crontab binary reachable
+
+    old_home, old_path = os.environ.get("HOME"), os.environ.get("PATH", "")
+    try:
+        os.environ["HOME"] = fake_home
+        os.environ["PATH"] = fake_bin
+        hb = doctor._check_heartbeat()
+    finally:
+        if old_home is not None:
+            os.environ["HOME"] = old_home
+        os.environ["PATH"] = old_path
+
+    assert hb["loaded"] is False, hb
+    assert hb["mechanism"] is None, hb
+
+
 def test_discovers_every_suite_without_running_them():
     """Cheap proof that discovery is real: every test_*.py on disk is in the
     list (minus self-referential ones). Actually EXECUTING them is what

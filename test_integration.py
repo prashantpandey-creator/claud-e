@@ -72,13 +72,21 @@ def test_edge_heartbeat_captures_every_stage():
     for a silently dead heartbeat, began firing on a heartbeat that was
     running fine (verified: hourly journal beats at 00:30/01:30/02:30 local
     while the log sat 6.2h stale). An alarm that cries wolf is worse than none.
+
+    Same chain, same defect class, whichever scheduler installed it — launchd
+    (macOS) or cron (Linux, install.sh's fallback when launchd is absent).
     """
     import plistlib
     plist = os.path.expanduser("~/Library/LaunchAgents/com.meditate.grade.plist")
-    if not os.path.exists(plist):
-        return
-    with open(plist, "rb") as f:
-        cmd = plistlib.load(f)["ProgramArguments"][-1]
+    if os.path.exists(plist):
+        with open(plist, "rb") as f:
+            cmd = plistlib.load(f)["ProgramArguments"][-1]
+    else:
+        import cadence as cd
+        line = cd._cron_line()
+        if not line:
+            return
+        cmd = line.split(None, 5)[5]
     head = cmd.split(">>")[0]
     assert "{" in head and "}" in cmd.split(">>")[0] + "}", \
         "redirect is not wrapped around the whole chain: %s" % cmd
@@ -189,9 +197,17 @@ def test_edge_plist_is_valid_xml():
 
 def test_edge_heartbeat_runs_all_silent_stages():
     """Install = consent: grade + archive-empties + dashboard all ride the
-    heartbeat; a plist missing a stage silently re-manualizes the product."""
+    heartbeat; a plist (or, on Linux, a crontab line) missing a stage
+    silently re-manualizes the product."""
     plist = os.path.expanduser("~/Library/LaunchAgents/com.meditate.grade.plist")
-    body = open(plist).read()
+    if os.path.exists(plist):
+        body = open(plist).read()
+    else:
+        import cadence as cd
+        line = cd._cron_line()
+        if not line:
+            return
+        body = line
     for stage in ("nidra_bridge.py", "archive.py", "dashboard.py"):
         assert stage in body, f"heartbeat missing silent stage: {stage}"
 

@@ -181,6 +181,45 @@ def test_uninstall_spares_other_tools_hooks():
     assert cfg.get("model") == "opus", "unrelated settings must survive"
 
 
+def test_uninstall_removes_cron_heartbeat_but_spares_other_cron_lines():
+    """Linux's cron fallback (install.sh, when launchd is absent) must be torn
+    down by uninstall the same way the launchd agent is on macOS — and any
+    unrelated crontab entries must survive."""
+    fake_bin = tempfile.mkdtemp()
+    store = os.path.join(fake_bin, "cron_store")
+    with open(store, "w") as f:
+        f.write("0 */6 * * * true # meditate-heartbeat\n"
+                "*/5 * * * * /usr/bin/some-other-job\n")
+    crontab_path = os.path.join(fake_bin, "crontab")
+    # uninstall.sh's removal is a real bash PIPELINE (crontab -l | grep -v
+    # ... | crontab -) — all stages start concurrently. A write branch that
+    # truncates $STORE directly can race ahead of the read branch's own
+    # `cat "$STORE"` and empty the file before it's read. Real crontab
+    # doesn't have this race (its own spool file has its own locking); this
+    # fake needs an atomic write (temp file + rename) to behave the same way.
+    with open(crontab_path, "w") as f:
+        f.write("#!/bin/bash\n"
+                "STORE=\"%s\"\n"
+                "if [ \"$1\" = \"-l\" ]; then\n"
+                "  cat \"$STORE\" 2>/dev/null\n"
+                "  exit 0\n"
+                "fi\n"
+                "tmp=\"$STORE.tmp.$$\"\n"
+                "cat > \"$tmp\"\n"
+                "mv \"$tmp\" \"$STORE\"\n" % store)
+    os.chmod(crontab_path, 0o755)
+    home = tempfile.mkdtemp()
+
+    subprocess.run(["bash", os.path.join(SKILL, "uninstall.sh")],
+                   capture_output=True, text=True,
+                   env=dict(os.environ, HOME=home,
+                            PATH=fake_bin + os.pathsep + os.environ.get("PATH", "")),
+                   timeout=60)
+    left = open(store).read()
+    assert "meditate-heartbeat" not in left, "cron heartbeat survived uninstall: %s" % left
+    assert "some-other-job" in left, "uninstall wiped an unrelated cron entry"
+
+
 def test_readme_documents_only_commands_that_exist():
     """A landing page that promises a verb the CLI does not have is the first
     thing a new user hits. Checked both ways."""
