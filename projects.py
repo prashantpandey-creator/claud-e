@@ -23,6 +23,7 @@ import argparse
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 from typing import Any, Dict, List, Optional, Tuple
@@ -355,6 +356,65 @@ def _usable(name: Optional[str]) -> Optional[str]:
     return None if name in _NOT_A_PROJECT else name
 
 
+_SHA_CACHE: Dict[str, Optional[str]] = {}
+
+
+def repo_of_commit(sha: str) -> Optional[str]:
+    """Which repo on this machine contains this commit.
+
+    A commit id is the most precise thing a fact can carry: it names one line
+    of history in exactly one repo. 67 facts here had one and nobody looked.
+    """
+    sha = (sha or "").strip()
+    if len(sha) < 7 or not re.fullmatch(r"[0-9a-fA-F]+", sha):
+        return None
+    if sha in _SHA_CACHE:
+        return _SHA_CACHE[sha]
+    out = None
+    for name, path in _repo_dirs().items():
+        try:
+            r = subprocess.run(["git", "-C", path, "cat-file", "-e",
+                                sha + "^{commit}"],
+                               capture_output=True, timeout=8)
+            if r.returncode == 0:
+                out = _usable(name)
+                break
+        except Exception:
+            continue
+    _SHA_CACHE[sha] = out
+    return out
+
+
+def _slug_project(source: str) -> Optional[str]:
+    """The workspace a memory was written in, when that IS a project.
+
+    A session slug is normally too coarse — this workspace runs everything out
+    of one directory, which is exactly how 448 facts ended up on one project.
+    But a slug that points at a real repo rather than a container is a fine
+    answer: -Users-x-projects-mila-english IS mila-english.
+    """
+    for marker in ("/memory/", "/projects/"):
+        if marker not in source:
+            continue
+        slug = source.split(marker, 1)[1].split("/")[0]
+        if not slug.startswith("-Users-"):
+            return None
+        guess = _clean_project_name(slug.rsplit("-", 1)[-1] if False else
+                                    slug.replace("-Users-", "").split("-", 1)[-1])
+        # resolve the slug back to a directory and demand it be a repo
+        parts = [p for p in slug.strip("-").split("-") if p]
+        cand = os.path.join("/", *parts)
+        if os.path.isdir(cand) and os.path.isdir(os.path.join(cand, ".git")):
+            return _usable(_clean_project_name(os.path.basename(cand)))
+        # the path may contain hyphens of its own; fall back to the last
+        # segment only when a repo of that exact name exists
+        tail = _clean_project_name(parts[-1]) if parts else None
+        if tail and tail in _repo_dirs():
+            return tail
+        return None
+    return None
+
+
 def project_of_fact(mem: Dict[str, Any],
                     known: Optional[set] = None) -> Tuple[set, str]:
     """Which project a graded fact is ABOUT, and how we know.
@@ -399,13 +459,86 @@ def project_of_fact(mem: Dict[str, Any],
     if names:
         return names, "tag"
 
+    for e in mem.get("evidence", []) or []:
+        loc = str(e.get("locator", ""))
+        if loc.startswith("commit:"):
+            n = repo_of_commit(loc[7:])
+            if n:
+                names.add(n)
+    if names:
+        return names, "commit"
+
     if known:
         text = (str(mem.get("statement", "")) + " "
                 + " ".join(mem.get("tags", []) or [])).lower()
         hit = {k for k in known if re.search(r"\b%s\b" % re.escape(k), text)}
         if hit:
             return hit, "named"
+
+    for e in mem.get("evidence", []) or []:
+        n = _slug_project(str(e.get("source", "")))
+        if n:
+            names.add(n)
+    if names:
+        return names, "slug"
     return set(), "none"
+
+
+def _memory_slug(mem: Dict[str, Any]) -> Optional[str]:
+    """The memory file this fact was written from, e.g. prod-moved-to-mumbai."""
+    for e in mem.get("evidence", []) or []:
+        src = str(e.get("source", ""))
+        if src.endswith(".md"):
+            return os.path.basename(src)[:-3]
+    return None
+
+
+def attribute_all(memories: List[Dict[str, Any]],
+                  known: Optional[set] = None) -> Dict[str, Any]:
+    """Place every fact, in two passes.
+
+    The second pass is why this is not per-memory: a fact that names nothing
+    may still LINK to facts that do. 923 wikilinks sit in this store and
+    nobody followed one.
+
+    Inheritance is deliberately the weakest signal and is labelled `linked`.
+    Linking to a fact about a project is not the same as being about it, and
+    65 of the 92 it places here go to the one project that was already
+    over-counted — so it demands an unambiguous winner among a fact's links,
+    and it never overrides direct evidence.
+    """
+    known = known_project_names() if known is None else known
+    placed: Dict[str, Any] = {}
+    owner: Dict[str, set] = {}
+    unplaced: List[Dict[str, Any]] = []
+
+    for m in memories:
+        names, how = project_of_fact(m, known)
+        mid = str(m.get("id", id(m)))
+        if names:
+            placed[mid] = (names, how)
+            slug = _memory_slug(m)
+            if slug:
+                owner[slug] = names
+        else:
+            unplaced.append(m)
+
+    for m in unplaced:
+        votes: Dict[str, int] = {}
+        for e in m.get("evidence", []) or []:
+            loc = str(e.get("locator", ""))
+            if not loc.startswith("wikilink:"):
+                continue
+            target = loc[9:].strip().strip("[]")
+            for n in owner.get(target, ()):  # only follow links we can resolve
+                votes[n] = votes.get(n, 0) + 1
+        if not votes:
+            continue
+        ranked = sorted(votes.items(), key=lambda kv: -kv[1])
+        if len(ranked) > 1 and ranked[0][1] == ranked[1][1]:
+            continue                      # a tie is not an answer
+        placed[str(m.get("id", id(m)))] = ({ranked[0][0]}, "linked")
+    return placed
 
 
 def rollup(sessions: Optional[List[Dict]] = None,
@@ -463,6 +596,7 @@ def rollup(sessions: Optional[List[Dict]] = None,
     known = known_project_names()
     unattributed = 0
     if os.path.exists(mp):
+        active_mems = []
         with open(mp, errors="replace") as f:
             for line in f:
                 if not line.strip():
@@ -471,18 +605,20 @@ def rollup(sessions: Optional[List[Dict]] = None,
                     m = json.loads(line)
                 except Exception:
                     continue
-                if not m.get("active"):
-                    continue
-                names, _how = project_of_fact(m, known)
-                if not names:
-                    unattributed += 1
-                    continue          # never invent an owner for a fact
-                for n in names:
-                    r = row(n)
-                    r["facts"] += 1
-                    if m.get("epistemic", {}).get("evidence_status") == "unverified" \
-                            and (m.get("evidence") or m.get("flags")):
-                        r["repair_items"] += 1
+                if m.get("active"):
+                    active_mems.append(m)
+        placed = attribute_all(active_mems, known)
+        for m in active_mems:
+            names = (placed.get(str(m.get("id", id(m)))) or (set(), ""))[0]
+            if not names:
+                unattributed += 1
+                continue              # never invent an owner for a fact
+            for n in names:
+                r = row(n)
+                r["facts"] += 1
+                if m.get("epistemic", {}).get("evidence_status") == "unverified" \
+                        and (m.get("evidence") or m.get("flags")):
+                    r["repair_items"] += 1
 
     # How many facts nobody can place. Shown, not hidden: a project column
     # that silently drops half the store is the same lie in a quieter voice.

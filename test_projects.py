@@ -11,6 +11,8 @@ SKILL = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SKILL)
 import projects as pj
 
+SKILL_DIR = os.path.dirname(os.path.abspath(__file__))
+
 GOAL = """---
 name: g-purangpt
 title: Ship purangpt
@@ -239,6 +241,62 @@ def test_generic_directories_are_never_projects():
     for junk in ("downloads", "projects", "src", "wt", ".ssh"):
         assert pj._usable(junk) is None, junk
     assert pj._usable("purangpt") == "purangpt"
+
+
+def test_a_commit_id_names_exactly_one_repo():
+    """The most precise thing a fact can carry: one line of history in one
+    repo. 67 facts had a commit locator and nothing looked at it."""
+    import subprocess
+    sha = subprocess.run(["git", "-C", SKILL_DIR, "rev-parse", "HEAD"],
+                         capture_output=True, text=True).stdout.strip()[:9]
+    assert pj.repo_of_commit(sha) == "meditate", sha
+    assert pj.repo_of_commit("deadbeef1234") is None
+    assert pj.repo_of_commit("") is None
+    assert pj.repo_of_commit("not-a-sha!!") is None
+
+
+def test_a_fact_carrying_a_commit_is_placed_by_it():
+    import subprocess
+    sha = subprocess.run(["git", "-C", SKILL_DIR, "rev-parse", "HEAD"],
+                         capture_output=True, text=True).stdout.strip()[:9]
+    mem = {"evidence": [{"locator": "commit:" + sha}], "tags": [],
+           "statement": "no project named in these words"}
+    names, how = pj.project_of_fact(mem, known=set())
+    assert names == {"meditate"} and how == "commit", (names, how)
+
+
+def test_a_fact_can_inherit_from_the_facts_it_links_to():
+    linked = {"id": "a", "statement": "about nidra grading", "tags": [],
+              "evidence": [{"source": "/x/memory/nidra-notes.md"}]}
+    orphan = {"id": "b", "statement": "no project here at all", "tags": [],
+              "evidence": [{"locator": "wikilink:[[nidra-notes]]"}]}
+    placed = pj.attribute_all([linked, orphan], known={"nidra"})
+    assert placed["a"][1] == "named"
+    assert placed["b"] == ({"nidra"}, "linked"), placed.get("b")
+
+
+def test_a_tie_between_linked_projects_is_not_an_answer():
+    """Linking to a fact about a project is not being about it. When the links
+    disagree, the honest result is no answer."""
+    a = {"id": "a", "statement": "about nidra", "tags": [],
+         "evidence": [{"source": "/x/memory/one.md"}]}
+    b = {"id": "b", "statement": "about vyasa", "tags": [],
+         "evidence": [{"source": "/x/memory/two.md"}]}
+    orphan = {"id": "c", "statement": "nothing named", "tags": [],
+              "evidence": [{"locator": "wikilink:[[one]]"},
+                           {"locator": "wikilink:[[two]]"}]}
+    placed = pj.attribute_all([a, b, orphan], known={"nidra", "vyasa"})
+    assert "c" not in placed, placed.get("c")
+
+
+def test_inheritance_never_overrides_direct_evidence():
+    direct = {"id": "a", "statement": "x", "tags": ["project:purangpt-next"],
+              "evidence": [{"source": "/x/memory/one.md"},
+                           {"locator": "wikilink:[[two]]"}]}
+    other = {"id": "b", "statement": "about nidra", "tags": [],
+             "evidence": [{"source": "/x/memory/two.md"}]}
+    placed = pj.attribute_all([direct, other], known={"nidra"})
+    assert placed["a"] == ({"purangpt-next"}, "tag"), placed["a"]
 
 
 def _main():

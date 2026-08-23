@@ -62,9 +62,10 @@ def test_fresh_session_never_archived():
 
 def test_dry_run_moves_nothing():
     with tempfile.TemporaryDirectory() as t:
+        store = os.path.join(t, "store"); os.makedirs(store)
         proj = os.path.join(t, "projects", "-x")
         p = _mk_session(proj, "empty-1")
-        rep = ar.run(projects_root=os.path.join(t, "projects"),
+        rep = ar.run(store_dir=store, projects_root=os.path.join(t, "projects"),
                      archive_root=os.path.join(t, "arch"), empty_only=True, apply=False)
         assert os.path.exists(p), "dry-run must not move files"
         assert rep["would_archive"] == 1 and rep["archived"] == 0
@@ -72,10 +73,11 @@ def test_dry_run_moves_nothing():
 
 def test_apply_moves_jsonl_and_sidecar():
     with tempfile.TemporaryDirectory() as t:
+        store = os.path.join(t, "store"); os.makedirs(store)
         proj = os.path.join(t, "projects", "-x")
         p = _mk_session(proj, "empty-1")
         arch = os.path.join(t, "arch")
-        rep = ar.run(projects_root=os.path.join(t, "projects"),
+        rep = ar.run(store_dir=store, projects_root=os.path.join(t, "projects"),
                      archive_root=arch, empty_only=True, apply=True)
         assert rep["archived"] == 1
         assert not os.path.exists(p)
@@ -90,10 +92,11 @@ def test_apply_moves_jsonl_and_sidecar():
 
 def test_restore_round_trip():
     with tempfile.TemporaryDirectory() as t:
+        store = os.path.join(t, "store"); os.makedirs(store)
         proj = os.path.join(t, "projects", "-x")
         p = _mk_session(proj, "empty-1")
         arch = os.path.join(t, "arch")
-        ar.run(projects_root=os.path.join(t, "projects"), archive_root=arch,
+        ar.run(store_dir=store, projects_root=os.path.join(t, "projects"), archive_root=arch,
                empty_only=True, apply=True)
         assert not os.path.exists(p)
         r = ar.restore("empty-1", archive_root=arch)
@@ -136,7 +139,7 @@ def test_archive_retargets_graded_evidence():
         ar.STORE_DIR = store
         try:
             arch = os.path.join(t, "arch")
-            ar.run(projects_root=os.path.join(t, "projects"), archive_root=arch,
+            ar.run(store_dir=store, projects_root=os.path.join(t, "projects"), archive_root=arch,
                    empty_only=True, apply=True)
             m = json.loads(open(os.path.join(store, "memories.jsonl")).read())
             assert m["evidence"][0]["source"].startswith(arch), \
@@ -160,9 +163,9 @@ def test_apply_skips_when_store_locked():
         store = os.path.join(t, "store"); os.makedirs(store)
         holder = open(os.path.join(store, ".grade.lock"), "w")
         fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        rep = ar.run(projects_root=os.path.join(t, "projects"),
+        rep = ar.run(store_dir=store, projects_root=os.path.join(t, "projects"),
                      archive_root=os.path.join(t, "arch"), empty_only=True,
-                     apply=True, store_dir=store)
+                     apply=True)
         holder.close()
         assert rep["archived"] == 0
         assert any("skip" in e for e in rep["errors"]), rep["errors"]

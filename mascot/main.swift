@@ -94,6 +94,21 @@ if CommandLine.arguments.count > 1,
     RunLoop.main.run()
 }
 
+// `casper --notify` posts one real completion notice through the same path a
+// finished agent uses, so the CLICK can be checked by a person — the one part
+// of this that no script can verify.
+if CommandLine.arguments.count > 1, CommandLine.arguments[1] == "--notify" {
+    let app = NSApplication.shared
+    app.setActivationPolicy(.accessory)
+    Notifier.shared.start()
+    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+        Notifier.shared.post(title: "Mila live is done",
+                             body: "Click to open the dashboard.")
+    }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 25) { exit(0) }
+    app.run()
+}
+
 if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--transcribe" {
     _ = NSApplication.shared
     guard let rec = SFSpeechRecognizer(locale: Locale(identifier: "en-US")) else {

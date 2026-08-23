@@ -12,6 +12,7 @@
 import Cocoa
 import AVFoundation
 import Speech
+import UserNotifications
 
 // MARK: - talking to meditate (the same commands the terminal runs)
 
@@ -924,6 +925,66 @@ final class BubbleView: NSView {
     }
 }
 
+
+// MARK: - telling you a job finished
+
+/// A completion notice you can click.
+///
+/// The notice used to be posted by `osascript` from whichever python process
+/// happened to be running, so clicking it activated Terminal and dropped you
+/// in a transcript — the raw log of the thing, not the place you go to decide
+/// what is next. Posted from THIS app it can carry an action, and the action
+/// opens the dashboard.
+final class Notifier: NSObject, UNUserNotificationCenterDelegate {
+    static let shared = Notifier()
+    static let dashboard = "http://127.0.0.1:7711"
+    private var ready = false
+
+    func start() {
+        let c = UNUserNotificationCenter.current()
+        c.delegate = self
+        c.requestAuthorization(options: [.alert, .sound]) { ok, _ in
+            DispatchQueue.main.async { self.ready = ok }
+        }
+        c.setNotificationCategories([
+            UNNotificationCategory(identifier: "done",
+                                   actions: [UNNotificationAction(
+                                        identifier: "open",
+                                        title: "Open dashboard",
+                                        options: [.foreground])],
+                                   intentIdentifiers: [])
+        ])
+    }
+
+    func post(title: String, body: String) {
+        guard ready else { return }
+        let c = UNMutableNotificationContent()
+        c.title = title
+        c.body = body
+        c.sound = .default
+        c.categoryIdentifier = "done"
+        UNUserNotificationCenter.current().add(
+            UNNotificationRequest(identifier: UUID().uuidString,
+                                  content: c, trigger: nil))
+    }
+
+    /// Clicking the notice, or its button, opens the dashboard.
+    func userNotificationCenter(_ c: UNUserNotificationCenter,
+                                didReceive r: UNNotificationResponse,
+                                withCompletionHandler done: @escaping () -> Void) {
+        if let u = URL(string: Notifier.dashboard) { NSWorkspace.shared.open(u) }
+        done()
+    }
+
+    /// Show it even when Casper is the app in front.
+    func userNotificationCenter(_ c: UNUserNotificationCenter,
+                                willPresent n: UNNotification,
+                                withCompletionHandler done:
+                                    @escaping (UNNotificationPresentationOptions) -> Void) {
+        done([.banner, .sound])
+    }
+}
+
 // MARK: - the window
 
 final class CasperWindow: NSWindow {
@@ -955,6 +1016,7 @@ final class App: NSObject, NSApplicationDelegate {
     var lastStep = ""
     var shotMode = false        // rendering the UI for review: no mic, no polling
     var micBtn: NSButton!
+    var closeBtn: NSButton!
     let mouth = Mouth()
     let ear = Ear()
     var armed = false          // click him = one turn without his name
@@ -1062,7 +1124,21 @@ final class App: NSObject, NSApplicationDelegate {
         root.addSubview(stopBtn)
 
         ghost.onRightClick = { [weak self] e in self?.showMenu(e) }
-        [yesBtn, noBtn, askBtn, micBtn].forEach { root.addSubview($0!) }
+        // Somewhere to click when you want him gone. A companion with no way
+        // to dismiss it is not a companion.
+        closeBtn = NSButton(title: "\u{00D7}", target: self,
+                            action: #selector(closeCasper))
+        closeBtn.frame = NSRect(x: W - 24, y: H - 24, width: 18, height: 18)
+        closeBtn.isBordered = false
+        closeBtn.wantsLayer = true
+        closeBtn.layer?.cornerRadius = 9
+        closeBtn.layer?.backgroundColor =
+            NSColor(calibratedWhite: 0.13, alpha: 0.75).cgColor
+        closeBtn.attributedTitle = NSAttributedString(string: "\u{00D7}", attributes: [
+            .foregroundColor: NSColor(calibratedWhite: 0.85, alpha: 1),
+            .font: NSFont.systemFont(ofSize: 12, weight: .medium)])
+        closeBtn.toolTip = "Close Casper (meditate casper brings him back)"
+        [yesBtn, noBtn, askBtn, micBtn, closeBtn].forEach { root.addSubview($0!) }
         showOffer(false)
         refreshMicButton()
         setBubble("")
@@ -1081,6 +1157,7 @@ final class App: NSObject, NSApplicationDelegate {
             ghost.materialize()
         }
 
+        Notifier.shared.start()
         window.makeKeyAndOrderFront(nil)
         NSApp.setActivationPolicy(.accessory)       // menubar-less companion
 
@@ -1797,7 +1874,10 @@ final class App: NSObject, NSApplicationDelegate {
                     // landed: it was open last time we looked, now it is done
                     if was == false && r.ticked {
                         self.ghost.celebrate()
-                        self.say(self.pretty(r.goal) + " just landed.")
+                        let name = self.pretty(r.goal)
+                        self.say(name + " just landed.")
+                        Notifier.shared.post(title: name + " is done",
+                                             body: "Click to open the dashboard.")
                         return
                     }
                     // stalled: dispatched a while ago and still nothing ticked
@@ -1832,6 +1912,12 @@ final class App: NSObject, NSApplicationDelegate {
 
     func resetOfferButton() {
         style(yesBtn, title: "Yes, fix it", accent: true)
+    }
+
+    @objc func closeCasper() {
+        ear.stop()
+        mouth.shutUp()
+        NSApp.terminate(nil)
     }
 
     @objc func sayNo() {

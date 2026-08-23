@@ -142,7 +142,16 @@ def test_edge_goals_to_session_start():
           and g["status"] not in ("done", "paused")]
     if not gs:
         return
-    out = session_start({"session_id": "integration-probe", "cwd": gs[0]["cwd"]})
+    # Register presence into a THROWAWAY dir. session_start now writes a
+    # presence file, so calling it against the live coordination dir left a
+    # phantom session behind — counted by live_sessions(), listed by
+    # `meditate who`, and fed to the sangama warning as a peer that does not
+    # exist. This test reads the real world on purpose; it must not join it.
+    import tempfile
+    throwaway = os.path.join(tempfile.mkdtemp(prefix="integ-"), "sessions")
+    os.makedirs(throwaway, exist_ok=True)
+    out = session_start({"session_id": "integration-probe", "cwd": gs[0]["cwd"]},
+                        coord_dir=throwaway)
     assert "Goal:" in out, f"goal exists for {gs[0]['cwd']} but no nudge"
 
 
