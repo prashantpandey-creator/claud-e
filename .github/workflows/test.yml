@@ -114,6 +114,10 @@ jobs:
           echo "--- now try writing our actual real line directly via crontab - ---"
           cat /tmp/piped.txt | crontab -; echo "crontab - rc=$?"
           echo "crontab -l after real write: [$(crontab -l 2>&1)]"
+          echo "--- now the EXACT single-pipeline form install.sh actually uses ---"
+          ( crontab -l 2>/dev/null | grep -v "meditate-heartbeat" || true
+            echo "0 */6 * * * /bin/true # pipeline-form-test" ) | crontab - 2>/dev/null
+          echo "crontab -l after single-pipeline write: [$(crontab -l 2>&1)]"
 
       - name: The suite
         run: |
