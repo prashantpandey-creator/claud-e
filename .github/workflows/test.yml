@@ -94,31 +94,6 @@ jobs:
       - name: Install into this runner's HOME
         run: bash install.sh || true
 
-      - name: DEBUG — crontab immediately after install
-        run: |
-          echo "exit code of crontab -l:"
-          crontab -l; echo "rc=$?"
-          echo "spool file, if any:"
-          sudo cat /var/spool/cron/crontabs/runner 2>&1 || true
-          echo "--- reproducing install.sh's exact pipe, writing to a file instead of crontab -"
-          SKILL_DIR="$PWD"
-          MEDITATION_DIR="$HOME/.claude/meditation"
-          HEARTBEAT_CMD="{ python3 \"$SKILL_DIR/nidra_bridge.py\" --sleep; python3 \"$SKILL_DIR/archive.py\" --apply; python3 \"$SKILL_DIR/dashboard.py\"; python3 \"$SKILL_DIR/voice.py\" --notify --quiet; } >> \"$MEDITATION_DIR/heartbeat.log\" 2>&1"
-          ( crontab -l 2>/dev/null | grep -v "meditate-heartbeat" || true
-            echo "0 */6 * * * $HEARTBEAT_CMD # meditate-heartbeat" ) > /tmp/piped.txt
-          echo "bytes piped: $(wc -c < /tmp/piped.txt)"
-          cat -A /tmp/piped.txt
-          echo "--- does a TRIVIAL crontab entry even persist on this runner? ---"
-          echo "* * * * * /bin/true # smoke-test" | crontab -
-          echo "crontab -l after trivial write: [$(crontab -l 2>&1)]"
-          echo "--- now try writing our actual real line directly via crontab - ---"
-          cat /tmp/piped.txt | crontab -; echo "crontab - rc=$?"
-          echo "crontab -l after real write: [$(crontab -l 2>&1)]"
-          echo "--- now the EXACT single-pipeline form install.sh actually uses ---"
-          ( crontab -l 2>/dev/null | grep -v "meditate-heartbeat" || true
-            echo "0 */6 * * * /bin/true # pipeline-form-test" ) | crontab - 2>/dev/null
-          echo "crontab -l after single-pipeline write: [$(crontab -l 2>&1)]"
-
       - name: The suite
         run: |
           set -e

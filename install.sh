@@ -264,10 +264,18 @@ elif command -v crontab >/dev/null 2>&1; then
     # Existing meditate lines are filtered out first so re-installing does not
     # stack duplicate heartbeats.
     HEARTBEAT_CMD="{ python3 \"$SKILL_DIR/nidra_bridge.py\" --sleep; python3 \"$SKILL_DIR/archive.py\" --apply; python3 \"$SKILL_DIR/dashboard.py\"; python3 \"$SKILL_DIR/voice.py\" --notify --quiet; } >> \"$MEDITATION_DIR/heartbeat.log\" 2>&1"
-    ( crontab -l 2>/dev/null | grep -v "meditate-heartbeat" || true
-      echo "0 */6 * * * $HEARTBEAT_CMD # meditate-heartbeat" ) | crontab - 2>/dev/null \
-      && echo "  [ok]  heartbeat installed via cron — self-check every 6h" \
-      || echo "  [warn]  no launchd and cron refused; run the heartbeat yourself: meditate grade"
+    # `crontab -l | ... | crontab -` as ONE pipeline runs the read and the
+    # write concurrently — real vixie-cron sometimes loses that race and
+    # installs an empty crontab (caught live on a fresh Linux CI runner: the
+    # install step reported [ok], but the entry was never actually there).
+    # Command substitution blocks until crontab -l fully completes, so
+    # capture it first and write in a wholly separate, later crontab - call.
+    EXISTING="$(crontab -l 2>/dev/null | grep -v "meditate-heartbeat" || true)"
+    if { printf '%s\n' "$EXISTING"; echo "0 */6 * * * $HEARTBEAT_CMD # meditate-heartbeat"; } | crontab - 2>/dev/null; then
+        echo "  [ok]  heartbeat installed via cron — self-check every 6h"
+    else
+        echo "  [warn]  no launchd and cron refused; run the heartbeat yourself: meditate grade"
+    fi
 else
     echo "  [warn]  no launchd and no cron on this machine — the heartbeat will"
     echo "          not run by itself. Run 'meditate grade' when you want a pass."
