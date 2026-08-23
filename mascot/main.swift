@@ -115,6 +115,20 @@ if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--hear" {
     }
     print("heard:     \(said)")
     print("question:  \(q)")
+    // the SAME decision the live mascot makes — proving the guarantees here
+    // proves them there
+    switch routeDecision(q) {
+    case .refuse(let line):
+        print("route:     REFUSED (code, not prompt)")
+        print("answer:    \(line)")
+        exit(0)
+    case .offer(let verb, let line):
+        print("route:     OFFER meditate \(verb) — nothing runs without Yes")
+        print("answer:    \(line)")
+        exit(0)
+    case .advise:
+        print("route:     advisor")
+    }
     let answer = Meditate.advise(q)
     print("answer:    \(answer.isEmpty ? "(empty)" : answer)")
     guard !answer.isEmpty else { print("CHAIN BROKE: advisor returned nothing"); exit(1) }
@@ -171,8 +185,33 @@ if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--say" {
     RunLoop.main.run()
 }
 
-// `casper --frames <seconds>` reports how often he actually repaints while
-// idle. The adaptive-redraw claim is only worth making with this number.
+// `casper --shot <out.png> [bubble text]` — a screenshot of the whole widget.
+// (Header reconstructed: this block arrived uncommitted from a concurrent
+// session and an over-wide edit of mine ate its first two lines.)
+if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--shot" {
+    let app = NSApplication.shared
+    let d = App()
+    d.shotMode = true                    // no mic, no timers doing work
+    app.delegate = d
+    d.applicationDidFinishLaunching(Notification(name: Notification.Name("shot")))
+    if CommandLine.arguments.count > 3 {
+        d.setBubble(CommandLine.arguments[3])
+    }
+    if CommandLine.arguments.contains("--offer") { d.showOffer(true) }
+    for _ in 0..<120 { d.ghost.tick(dt: 1.0 / 60) }
+    guard let root = d.window.contentView,
+          let rep = root.bitmapImageRepForCachingDisplay(in: root.bounds) else {
+        print("no view"); exit(1)
+    }
+    rep.size = root.bounds.size
+    root.cacheDisplay(in: root.bounds, to: rep)
+    if let png = rep.representation(using: .png, properties: [:]) {
+        try? png.write(to: URL(fileURLWithPath: CommandLine.arguments[2]))
+        print("wrote \(CommandLine.arguments[2])")
+    }
+    exit(0)
+}
+
 if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--frames" {
     _ = NSApplication.shared
     let secs = Double(CommandLine.arguments[2]) ?? 5

@@ -96,6 +96,21 @@ final class Meditate {
         }
     }
 
+    /// What the slow step running right now is doing. Read straight off the
+    /// file rather than by shelling out — this is polled twice a second while
+    /// he works, and a python launch per poll would cost more than the work.
+    static func thinkingStep() -> String {
+        let p = ("~/.claude/meditation/thinking.jsonl" as NSString).expandingTildeInPath
+        guard let d = FileManager.default.contents(atPath: p),
+              let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+              let step = j["step"] as? String, !step.isEmpty,
+              let ts = j["ts"] as? Double,
+              Date().timeIntervalSince1970 - ts < 120     // stale = a crash
+        else { return "" }
+        let detail = (j["detail"] as? String) ?? ""
+        return detail.isEmpty ? step : step + " \u{2014} " + detail
+    }
+
     /// Ask Casper's reasoning brain a real question (headless claude).
     static func advise(_ question: String) -> String {
         let out = run([skillDir + "/advisor.py", question], timeout: 90)
@@ -164,6 +179,40 @@ func addressedQuestion(_ raw: String, armed: Bool) -> String? {
     if !addressed && lower.contains("casper") { addressed = true }
     guard addressed, question.count > 2 else { return nil }
     return question
+}
+
+
+/// What a heard sentence IS, decided by code before any model sees it.
+/// The no-ship refusal and the command lane are behaviour guarantees, so they
+/// live here — callable from the app and from `--hear`, because a guarantee
+/// that can only be exercised by talking at a live window is a guarantee
+/// nobody checks.
+enum RouteKind {
+    case refuse(String)
+    case offer(verb: String, line: String)
+    case advise
+}
+
+func routeDecision(_ question: String) -> RouteKind {
+    let lower = question.lowercased()
+    for word in ["push", "deploy", "ship it", "release", "merge"]
+    where lower.contains(word) {
+        return .refuse("I won't push or deploy by voice \u{2014} that one "
+                       + "stays in the terminal with you.")
+    }
+    let commands: [(String, [String], String)] = [
+        ("fix", ["fix", "repair"],
+         "I can go repair what stopped being true. Yes?"),
+        ("grade", ["grade", "check your facts"],
+         "I can re-check everything I know. Yes?"),
+        ("go", ["run the fleet", "dispatch", "launch", "start the work",
+                "get someone on"],
+         "I can put agents on the open work. Yes?")]
+    for (verb, phrases, line) in commands
+    where phrases.contains(where: { lower.contains($0) }) {
+        return .offer(verb: verb, line: line)
+    }
+    return .advise
 }
 
 
@@ -806,6 +855,44 @@ final class GhostView: NSView {
     }
 }
 
+
+/// The speech card: rounded, with a tail pointing up at him, and a real
+/// shadow. A flat grey slab with square text in it is a debug console; the
+/// tail is what makes the words HIS rather than the app's.
+final class BubbleView: NSView {
+    var tailX: CGFloat = 0.5          // 0..1 across the width
+    override var isFlipped: Bool { true }
+
+    override func draw(_ dirty: NSRect) {
+        guard let ctx = NSGraphicsContext.current?.cgContext else { return }
+        let r = bounds.insetBy(dx: 1, dy: 1)
+        let tailH: CGFloat = 7, radius: CGFloat = 12
+        let body = NSRect(x: r.minX, y: r.minY + tailH,
+                          width: r.width, height: r.height - tailH)
+        let p = NSBezierPath(roundedRect: body, xRadius: radius, yRadius: radius)
+        // the tail, centred under him
+        let tx = r.minX + r.width * tailX
+        let t = NSBezierPath()
+        t.move(to: NSPoint(x: tx - 7, y: body.minY + 0.5))
+        t.line(to: NSPoint(x: tx, y: r.minY))
+        t.line(to: NSPoint(x: tx + 7, y: body.minY + 0.5))
+        t.close()
+        p.append(t)
+
+        ctx.saveGState()
+        ctx.setShadow(offset: CGSize(width: 0, height: 2), blur: 10,
+                      color: NSColor(white: 0, alpha: 0.38).cgColor)
+        NSColor(srgbRed: 0.10, green: 0.10, blue: 0.115, alpha: 0.95).setFill()
+        p.fill()
+        ctx.restoreGState()
+
+        // a hairline top edge: it lifts the card off the wallpaper behind it
+        NSColor(white: 1, alpha: 0.07).setStroke()
+        p.lineWidth = 1
+        p.stroke()
+    }
+}
+
 // MARK: - the window
 
 final class CasperWindow: NSWindow {
@@ -822,6 +909,8 @@ final class App: NSObject, NSApplicationDelegate {
     var askBtn: NSButton!
     var fleetBtn: NSButton!
     var fleetRunning = 0
+    var lastStep = ""
+    var shotMode = false        // rendering the UI for review: no mic, no polling
     var micBtn: NSButton!
     let mouth = Mouth()
     let ear = Ear()
@@ -853,7 +942,7 @@ final class App: NSObject, NSApplicationDelegate {
         let root = NSView(frame: NSRect(origin: .zero, size: frame.size))
         window.contentView = root
 
-        ghost = GhostView(frame: NSRect(x: 34, y: 108, width: 132, height: 132))
+        ghost = GhostView(frame: NSRect(x: 34, y: 100, width: 132, height: 132))
         // Layer-backed, or he flickers. A borderless transparent window that
         // redraws 60 times a second without a layer lets the window server
         // composite half-drawn frames — the whole mascot strobes.
@@ -866,18 +955,21 @@ final class App: NSObject, NSApplicationDelegate {
         // A dark card behind a transparent label, because NSTextField has no
         // padding of its own and text jammed against the edge of a box reads
         // as broken rather than minimal.
-        bubbleBox = NSView(frame: NSRect(x: 6, y: 40, width: W - 12, height: 62))
-        bubbleBox.wantsLayer = true
-        bubbleBox.layer?.cornerRadius = 10
-        bubbleBox.layer?.backgroundColor =
-            NSColor(calibratedWhite: 0.13, alpha: 0.92).cgColor
+        // The card he speaks from: tail pointing up at him, real shadow, and
+        // its own drawing rather than a tinted rectangle.
+        let card = BubbleView(frame: NSRect(x: 8, y: 38, width: W - 16, height: 68))
+        card.wantsLayer = true
+        bubbleBox = card
         root.addSubview(bubbleBox)
 
         bubble = NSTextField(wrappingLabelWithString: "")
-        bubble.frame = NSRect(x: 10, y: 7, width: W - 32, height: 48)
-        bubble.alignment = .center
-        bubble.font = .systemFont(ofSize: 11, weight: .regular)
-        bubble.textColor = NSColor(calibratedWhite: 0.92, alpha: 1)
+        bubble.frame = NSRect(x: 12, y: 14, width: W - 40, height: 48)
+        // Left, not centred. Centred text ragged on BOTH sides is harder to
+        // read every line after the first, and three lines of it looked like a
+        // fortune cookie rather than someone talking to you.
+        bubble.alignment = .left
+        bubble.font = App.rounded(11.5, .regular)
+        bubble.textColor = NSColor(calibratedWhite: 0.95, alpha: 1)
         bubble.drawsBackground = false
         bubble.isBezeled = false
         bubble.isEditable = false
@@ -888,20 +980,34 @@ final class App: NSObject, NSApplicationDelegate {
         bubble.cell?.isScrollable = false
         bubbleBox.addSubview(bubble)
 
-        yesBtn = button("Yes, fix it", x: 6, w: 72)
+        let bf = App.rounded(11.5, .semibold)
+        // Two rows share the same strip; each is laid out to fill the width
+        // with equal gaps, so nothing is ever clipped and nothing floats.
+        let offerRow = ["Yes", "Not now"], ctrlRow = ["Talk", "Ask"]
+        _ = offerRow; _ = ctrlRow
+        // The fleet switch never moves. It is the one control present in BOTH
+        // rows, so laying each row out independently put it underneath "Not
+        // now" — two layouts disagreeing about the same button. Pin it right,
+        // then fill the space to its left.
+        let fleetW = App.widthFor("Stop 88", font: bf)
+        let fleetXPos = W - 8 - fleetW
+        let leftWidth = fleetXPos - 4
+        let offerX = App.rowX(["Yes", "Not now"], font: bf, width: leftWidth)
+        let ctrlX  = App.rowX(["Hearing", "Ask"], font: bf, width: leftWidth)
+
+        yesBtn = button("Yes", x: offerX[0].0, w: offerX[0].1)
         yesBtn.target = self; yesBtn.action = #selector(sayYes)
         yesBtn.keyEquivalent = "\r"                 // the obvious answer is the default
-        style(yesBtn, title: "Yes, fix it", accent: true)
-        noBtn = button("Not now", x: 82, w: 48)
+        noBtn = button("Not now", x: offerX[1].0, w: offerX[1].1)
         noBtn.target = self; noBtn.action = #selector(sayNo)
-        askBtn = button("Ask", x: 136, w: 58)
+        askBtn = button("Ask", x: ctrlX[1].0, w: ctrlX[1].1)
         askBtn.target = self; askBtn.action = #selector(askSomething)
-        fleetBtn = button("Start fleet", x: 68, w: 64)
+        fleetBtn = button("Start", x: fleetXPos, w: fleetW)
         fleetBtn.target = self; fleetBtn.action = #selector(toggleFleet)
-        tinted(fleetBtn, title: "Start fleet", tint: .green)
+        tinted(fleetBtn, title: "Start", tint: .green)
         root.addSubview(fleetBtn)
 
-        micBtn = button("Talk", x: 6, w: 58)
+        micBtn = button("Talk", x: ctrlX[0].0, w: ctrlX[0].1)
         micBtn.target = self; micBtn.action = #selector(toggleMic)
         [yesBtn, noBtn, askBtn, micBtn].forEach { root.addSubview($0!) }
         showOffer(false)
@@ -960,6 +1066,7 @@ final class App: NSObject, NSApplicationDelegate {
         ghost.onClick = { [weak self] in self?.armForOneTurn() }
 
         if micEnabled {
+            if shotMode { return }
             Ear.requestAccess { [weak self] ok, why in
                 guard let self = self else { return }
                 self.earStatus = ok ? "listening" : why
@@ -982,6 +1089,16 @@ final class App: NSObject, NSApplicationDelegate {
         Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { _ in self.check() }
         // the switch tracks reality on its own clock: a 20s lag on "is work
         // running" is long enough to press start on something already running
+        // While he is working, say WHAT he is working on. A companion that
+        // goes quiet for forty seconds has, from your side of the screen,
+        // hung — and a spinner only tells you something you had assumed.
+        Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in
+            guard self.busy, !self.mouth.speaking else { return }
+            let step = Meditate.thinkingStep()
+            guard !step.isEmpty, step != self.lastStep else { return }
+            self.lastStep = step
+            self.setBubble(step + "\u{2026}")
+        }
         Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { _ in
             DispatchQueue.global().async {
                 guard let b = Meditate.briefFromServer() else { return }
@@ -1004,7 +1121,13 @@ final class App: NSObject, NSApplicationDelegate {
         b.frame = NSRect(x: x, y: 8, width: w, height: 26)
         b.isBordered = false
         b.wantsLayer = true
-        b.layer?.cornerRadius = 8
+        b.layer?.cornerRadius = 9
+        // Controls need to sit ON something. Flat pills on a transparent
+        // window read as stickers; one soft shadow grounds the whole strip.
+        b.layer?.shadowColor = NSColor.black.cgColor
+        b.layer?.shadowOpacity = 0.32
+        b.layer?.shadowRadius = 3
+        b.layer?.shadowOffset = CGSize(width: 0, height: -1)
         b.layer?.backgroundColor = NSColor(calibratedWhite: 0.13, alpha: 0.92).cgColor
         style(b, title: title, accent: false)
         return b
@@ -1019,17 +1142,50 @@ final class App: NSObject, NSApplicationDelegate {
         let bg: NSColor
         var fg = NSColor(calibratedWhite: 0.97, alpha: 1)
         switch tint {
-        case .green:   bg = NSColor(srgbRed: 0.18, green: 0.68, blue: 0.34, alpha: 1)
-        case .red:     bg = NSColor(srgbRed: 0.84, green: 0.26, blue: 0.24, alpha: 1)
+        case .green:   bg = NSColor(srgbRed: 0.29, green: 0.64, blue: 0.36, alpha: 1)
+        case .red:     bg = NSColor(srgbRed: 0.80, green: 0.29, blue: 0.26, alpha: 1)
         case .amber:   bg = NSColor(srgbRed: 0.91, green: 0.71, blue: 0.25, alpha: 1)
                        fg = NSColor(calibratedWhite: 0.10, alpha: 1)
         case .neutral: bg = NSColor(calibratedWhite: 0.13, alpha: 0.92)
         }
         b.attributedTitle = NSAttributedString(string: title, attributes: [
             .foregroundColor: fg,
-            .font: NSFont.systemFont(ofSize: 11, weight: .semibold),
+            .font: App.rounded(11.5, .semibold),
         ])
         b.layer?.backgroundColor = bg.cgColor
+    }
+
+    /// SF Rounded. The stock system font is a control font — correct, cold,
+    /// and at odds with a face that has blush on it. Rounded costs nothing and
+    /// makes the whole panel read as the same object as the mascot.
+    static func rounded(_ size: CGFloat, _ weight: NSFont.Weight) -> NSFont {
+        let base = NSFont.systemFont(ofSize: size, weight: weight)
+        if let d = base.fontDescriptor.withDesign(.rounded) {
+            return NSFont(descriptor: d, size: size) ?? base
+        }
+        return base
+    }
+
+    /// Lay a row of labels across `width` with equal gaps, each pill sized to
+    /// its own text. Returns (x, width) per item.
+    static func rowX(_ titles: [String], font: NSFont, width: CGFloat,
+                     margin: CGFloat = 8) -> [(CGFloat, CGFloat)] {
+        let ws = titles.map { widthFor($0, font: font) }
+        let total = ws.reduce(0, +)
+        let gaps = max(1, titles.count - 1)
+        let gap = max(4, (width - margin * 2 - total) / CGFloat(gaps))
+        var out: [(CGFloat, CGFloat)] = []
+        var x = margin
+        for w in ws { out.append((x, w)); x += w + gap }
+        return out
+    }
+
+    /// Wide enough for its own label, always. "Talk to me" in a 58pt button
+    /// was clipped on both sides — a button whose text does not fit is the
+    /// loudest possible signal that nobody looked at it.
+    static func widthFor(_ title: String, font: NSFont, min: CGFloat = 46) -> CGFloat {
+        let w = (title as NSString).size(withAttributes: [.font: font]).width
+        return Swift.max(min, ceil(w) + 20)      // 10pt of air each side
     }
 
     func style(_ b: NSButton, title: String, accent: Bool) {
@@ -1037,7 +1193,7 @@ final class App: NSObject, NSApplicationDelegate {
                         : NSColor(calibratedWhite: 0.93, alpha: 1)
         b.attributedTitle = NSAttributedString(string: title, attributes: [
             .foregroundColor: fg,
-            .font: NSFont.systemFont(ofSize: 11.5, weight: .medium),
+            .font: App.rounded(11.5, .semibold),
         ])
         b.layer?.backgroundColor = accent
             ? NSColor(srgbRed: 0.91, green: 0.71, blue: 0.25, alpha: 1).cgColor
@@ -1070,9 +1226,37 @@ final class App: NSObject, NSApplicationDelegate {
         fleetBtn.isHidden = false
     }
 
+    /// The delivery ledger. Two one-line files that EVERY mouth writes and
+    /// every gate reads:
+    ///   last-spoke        mtime = when he last said anything (patience decay,
+    ///                     the greeting gap)
+    ///   .casper-last.txt  the last delivered line (dedup across mascot,
+    ///                     heartbeat notification, page and CLI)
+    /// Before this, the mascot spoke through its own Mouth and never stamped
+    /// either — so the patience gate read a clock his mouth never set, decayed
+    /// to "held for hours", and licensed him to interrupt at any 5s pause.
+    static let medDir = ("~/.claude/meditation" as NSString).expandingTildeInPath
+
+    func markDelivered(_ line: String) {
+        try? String(Int(Date().timeIntervalSince1970))
+            .write(toFile: App.medDir + "/last-spoke", atomically: true,
+                   encoding: .utf8)
+        try? line.trimmingCharacters(in: .whitespacesAndNewlines)
+            .write(toFile: App.medDir + "/.casper-last.txt", atomically: true,
+                   encoding: .utf8)
+    }
+
+    func alreadyDelivered(_ line: String) -> Bool {
+        (try? String(contentsOfFile: App.medDir + "/.casper-last.txt",
+                     encoding: .utf8))?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            == line.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     func say(_ text: String) {
         setBubble(text)
         ear.muted = true                 // never answer his own last sentence
+        markDelivered(text)
         mouth.say(text)
     }
 
@@ -1105,6 +1289,12 @@ final class App: NSObject, NSApplicationDelegate {
             showOffer(true)
         }
         say(line)
+        // The offer covered the same ground as the briefing headline. Mark
+        // that headline delivered, or the 25s check re-says item one in
+        // different words right after the introduction.
+        if let b = Meditate.brief(), !b.headline.isEmpty {
+            markDelivered(b.headline)
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + 25) { self.check() }
     }
 
@@ -1139,13 +1329,22 @@ final class App: NSObject, NSApplicationDelegate {
                 self.refreshFleetButton(b.fleetRunning)
                 let hasSomething = !b.headline.isEmpty && b.kind != "clear"
                 self.ghost.glow = hasSomething ? 1.0 : 0.25
-                guard hasSomething, b.canInterrupt, b.headline != self.lastSpoken,
+                // An offer on screen is a question already asked — a background
+                // poll must never talk over it or swap what "Yes" means.
+                guard self.pendingKind.isEmpty, self.yesBtn.isHidden else { return }
+                // Never speak while being spoken to: keyboard idle says nothing
+                // about a VOICE conversation, so the ear gets its own veto.
+                if self.armed { return }
+                if self.ear.running && self.ear.quietFor < 4 { return }
+                guard hasSomething, b.canInterrupt,
+                      !self.alreadyDelivered(b.headline),
                       !self.mouth.speaking else { return }
                 self.lastSpoken = b.headline
                 self.pendingAction = b.action
                 self.ghost.startle()      // notice it before saying it
                 let offer = b.action.isEmpty ? "" :
                     "  Want me to \(b.action.contains("fix") ? "fix it" : "get someone on it")?"
+                if !b.action.isEmpty { self.pendingKind = "run" }
                 self.say(b.headline + offer)
                 self.showOffer(!b.action.isEmpty)
             }
@@ -1228,6 +1427,34 @@ final class App: NSObject, NSApplicationDelegate {
         guard let question = addressedQuestion(raw, armed: armed) else {
             return          // heard, not for him — and silence is the answer
         }
+        route(question)
+    }
+
+    /// The split that keeps the mascot safe AND conversational:
+    /// CODE decides what is allowed and what runs; the LLM only decides words.
+    ///
+    /// The no-ship line and the command lane used to live only in converse.py
+    /// — the page's route. The mascot sent everything to the advisor, so its
+    /// hard line was a sentence in a prompt, and "run the fleet" got a
+    /// description instead of an offer. Same sentence, two behaviours,
+    /// depending on which mouth heard it.
+    func route(_ question: String) {
+        switch routeDecision(question) {
+        case .refuse(let line):
+            say(line)
+            return
+        case .offer(let verb, let line):
+            pendingAction = "meditate " + verb
+            pendingKind = "run"
+            style(yesBtn, title: "Yes, do it", accent: true)
+            showOffer(true)
+            say(line)
+            return
+        case .advise:
+            break
+        }
+
+        // open question: the LLM phrases an answer over verified facts
         busy = true
         setBubble("\u{201C}" + question + "\u{201D}")
         DispatchQueue.global().async {
@@ -1322,7 +1549,7 @@ final class App: NSObject, NSApplicationDelegate {
 
     func refreshMicButton() {
         let on = ear.running
-        style(micBtn, title: on ? "I'm listening" : "Talk to me", accent: on)
+        style(micBtn, title: on ? "Hearing" : "Talk", accent: on)
         micBtn.toolTip = on ? "Click to stop listening"
                             : "Click to let Casper hear you"
     }
@@ -1355,13 +1582,15 @@ final class App: NSObject, NSApplicationDelegate {
         if n > 0 {
             tinted(fleetBtn, title: "Stop \(n)", tint: .red)
         } else {
-            tinted(fleetBtn, title: "Start fleet", tint: .green)
+            tinted(fleetBtn, title: "Start", tint: .green)
         }
     }
 
     @objc func sayNo() {
+        pendingKind = ""
+        pendingAction = ""
         showOffer(false)
-        say("Alright — I'll leave it.")
+        say("Alright \u{2014} I'll leave it.")
     }
 
     /// Type a question; Casper reasons over the graded facts and answers.
