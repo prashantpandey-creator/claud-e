@@ -96,9 +96,17 @@ def test_deploy_variants_all_fire():
 
 
 def test_git_variants_all_fire():
+    """That the ship rule FIRES — not what it currently says.
+
+    This used to assert the exact phrase "LOCAL branch". Someone reworded the
+    rule to "commit LOCAL and STOP" and this went red while the hook was
+    working perfectly, which is a test pinning prose instead of behaviour.
+    """
     for cmd in ["git commit -m x", "git push origin main", "GIT PUSH origin main"]:
         _, out, _ = fire(bash(cmd))
-        assert "LOCAL branch" in context_of(out), f"git rule did not fire for: {cmd}"
+        ctx = context_of(out)
+        assert "git commit/push" in ctx, f"git rule did not fire for: {cmd}"
+        assert "push" in ctx.lower(), f"ship rule said nothing about pushing: {cmd}"
 
 
 def _iso_env(tmp):
@@ -164,11 +172,38 @@ def test_hook_serves_graded_fact_once():
 
 # ---- SessionStart must never lose the rules -------------------------------
 
-def test_session_start_carries_all_seven_rules():
-    _, out, _ = fire({"hook_event_name": "SessionStart"})
+def test_session_start_carries_the_shipped_rules():
+    """Six generic rules, not seven.
+
+    This asserted seven until the hook was de-personalised: two of the
+    originals were the AUTHOR's — instructions about his production boxes and
+    iOS app, and a ban on a named LLM provider — and every stranger who
+    installed inherited them in every session with no way to remove them. The
+    test went stale in the direction that matters, so a fresh install reported
+    "installed with test failures" as its very first output.
+    """
+    # point at a file that cannot exist, so this exercises what SHIPS rather
+    # than whatever the person running the suite has configured for themselves
+    _, out, _ = fire({"hook_event_name": "SessionStart"},
+                     env={"MEDITATE_RULES_FILE": "/nonexistent/rules.md"})
     ctx = context_of(out)
-    for n in range(1, 8):
+    for n in range(1, 7):
         assert f"\n{n}. " in ctx, f"rule {n} missing from SessionStart output"
+    assert "\n7. " not in ctx, "a seventh rule is back — is it the author's?"
+
+
+def test_session_start_ships_nobody_elses_opinions():
+    """The falsifier for the de-personalisation: a stranger must not inherit
+    the author's infrastructure or his provider preferences."""
+    _, out, _ = fire({"hook_event_name": "SessionStart"},
+                     env={"MEDITATE_RULES_FILE": "/nonexistent/rules.md"})
+    ctx = context_of(out).lower()
+    for leak in ("groq", "prod corpus", "shared infra", "ios work near main",
+                 "handoff before writes"):
+        assert leak not in ctx, f"the author's own rule leaked to a stranger: {leak}"
+    # and the file that replaces them is named, or nobody knows they can
+    assert "rules.md" in ctx or "RULES_FILE" in context_of(out), \
+        "the shipped list must say how to replace it"
 
 
 def test_session_start_survives_missing_projects_dir():

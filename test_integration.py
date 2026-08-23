@@ -96,6 +96,40 @@ def test_edge_heartbeat_captures_every_stage():
         assert stage in inner, "%s is outside the redirected block" % stage
 
 
+def test_edge_install_preserves_a_tuned_heartbeat_interval():
+    """install.sh must not stomp cadence.py's tuned StartInterval.
+
+    Measured 2026-08-23: a re-install silently reset the live heartbeat from
+    the tuned 3600s back to the hardcoded 21600s default. cadence.py derives
+    that interval from real churn; install.sh throwing it away means the
+    tuning quietly stops applying every time anyone re-runs the installer.
+    """
+    import re
+    src = open(os.path.join(SKILL, "install.sh")).read()
+    block = src[src.find("PYPLIST"):src.find("PYPLIST", src.find("PYPLIST") + 1)]
+    assert "StartInterval" in block, "plist generator not found"
+    assert re.search(r"existing|prior|keep|preserve", block), \
+        "install.sh hardcodes StartInterval with no attempt to preserve a tuned value"
+
+
+def test_edge_installer_refuses_launchctl_under_a_fake_home():
+    """A test that runs install.sh must not hijack the REAL heartbeat.
+
+    Measured 2026-08-23: launchd's registration for com.meditate.grade pointed
+    at /private/var/folders/.../T/tmp.E9vntUA5b6/Library/LaunchAgents/ — a
+    temp dir that no longer exists. A suite ran install.sh with HOME set to a
+    tmpdir, install.sh loaded the plist from there, and that replaced the live
+    registration. Every heartbeat since exited 1 with nothing written to the
+    log. The tool's own tests killed the thing the tool exists to run.
+    """
+    src = open(os.path.join(SKILL, "install.sh")).read()
+    i = src.find("launchctl load")
+    assert i > 0, "no launchctl load found"
+    guard = src[max(0, i - 1200):i]
+    assert "REAL_HOME" in guard or "looks_like_a_home" in guard, \
+        "install.sh calls launchctl load with no guard that $HOME is a real home"
+
+
 def test_edge_queue_consistency():
     """repair queue exists IFF drift report has failing/flagged items."""
     from coordination import drift_report

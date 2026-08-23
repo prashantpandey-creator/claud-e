@@ -247,12 +247,39 @@ cmd = "{ " + "; ".join('python3 "%s/%s" %s' % (skill, s, a) for s, a in
                        [("nidra_bridge.py", "--sleep"), ("archive.py", "--apply"),
                         ("dashboard.py", ""), ("voice.py", "--notify --quiet")]
                        ) + '; } >> "%s" 2>&1' % log
+# Keep any interval cadence.py already tuned. Hardcoding the default here
+# meant every re-install silently reset the live heartbeat from a tuned 3600s
+# back to 21600s — the tuning was real, and re-running the installer threw it
+# away with no output. Preserve the existing value; 21600 is only the value
+# for a machine that has never had one.
+interval = 21600
+try:
+    with open(plist, "rb") as fh:
+        interval = int(plistlib.load(fh).get("StartInterval") or interval)
+except (OSError, ValueError, plistlib.InvalidFileException):
+    pass
 plistlib.dump({"Label": "com.meditate.grade",
                "ProgramArguments": ["/bin/bash", "-lc", cmd],
-               "StartInterval": 21600, "RunAtLoad": False},
+               "StartInterval": interval, "RunAtLoad": False},
               open(plist, "wb"))
+print("  [ok]  heartbeat interval: %ds%s" % (
+    interval, "" if interval == 21600 else " (preserved from cadence tuning)"))
 PYPLIST
-if command -v launchctl >/dev/null 2>&1; then
+# Only register with launchd from a REAL home. A suite that runs this script
+# with HOME pointed at a tmpdir used to load the plist from there — and that
+# registration REPLACES the live one, system-wide. Measured 2026-08-23:
+# launchd was holding com.meditate.grade at a since-deleted
+# /private/var/folders/.../T/tmp.XXXX/Library/LaunchAgents/ path, so every
+# heartbeat exited 1 and wrote nothing to the log, silently, until someone
+# looked. The tool's own tests had killed the thing the tool exists to run.
+case "$HOME" in
+    /Users/*|/home/*) REAL_HOME=1 ;;
+    *)                REAL_HOME=0 ;;
+esac
+if [ "$REAL_HOME" = "0" ] || [ -n "${MEDITATE_NO_LAUNCHCTL:-}" ]; then
+    echo "  [skip]  launchd registration — HOME=$HOME is not a real home."
+    echo "          Plist written but NOT loaded: a test must never replace the live agent."
+elif command -v launchctl >/dev/null 2>&1; then
     launchctl unload "$PLIST" 2>/dev/null || true
     if launchctl load -w "$PLIST" 2>/dev/null; then
         echo "  [ok]  heartbeat loaded — self-check every 6h (meditate cadence tunes it)"

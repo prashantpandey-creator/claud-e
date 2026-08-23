@@ -116,7 +116,7 @@ case "$EV" in
 3. Subtract, never add — fix by removal, not another layer.
 4. Plain words — stats/evals in workshop language, not jargon verdicts.
 5. Verify the world — external facts are research questions (curl/read/benchmark), don't guess; take the owner's facts about their own domain as given.
-6. Ship discipline — commit to a LOCAL branch and STOP; push only on explicit go.
+6. Ship discipline — OWN TOOLING (meditate, nidra, and their tests/docs): commit AND PUSH when green, no asking (owner standing go, 2026-08-23). EVERYTHING ELSE — prod, deploys, shared corpus/DB, purangpt web+iOS, another session's uncommitted work — commit LOCAL and STOP; push only on explicit go. Green means the repo's own suite passes.
 Add your own in $RULES_FILE — that file replaces this list entirely."
     fi
 
@@ -201,7 +201,7 @@ $CHECKPOINT"
   PreToolUse)
     shopt -s nocasematch
     if [[ "$CMD" =~ $GIT_PAT ]]; then
-      MSG="RULE (fires at git commit/push): commit to a LOCAL branch first and STOP. Do not push/deploy without the owner's explicit go."
+      MSG="RULE (fires at git commit/push): own tooling (meditate/nidra) — push when the suite is green, no need to ask. Anything else (prod, deploy, shared data, purangpt web/iOS) — commit LOCAL and STOP, push only on the owner's explicit go."
     elif [[ "$CMD" =~ $DEPLOY_PAT ]]; then
       MSG="RULE (fires at deploy): verify the artifact by duration + live output, never trust a GREEN report. Prod corpus/DB is shared infrastructure — a write under a live experiment needs a HANDOFF."
     fi

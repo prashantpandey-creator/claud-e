@@ -374,7 +374,12 @@ final class Mouth: NSObject, AVSpeechSynthesizerDelegate {
         // 0.52 with pitch 1.06 — faster and brighter, which is the register of
         // a hold message, not of someone thinking about your work.
         u.rate = 0.46
-        u.pitchMultiplier = 0.97
+        // Younger, not squeaky. macOS ships no child voice, so the young
+        // register comes from lifting the pitch of a male voice — past about
+        // 1.35 it stops sounding like a boy and starts sounding like a
+        // chipmunk. MEDITATE_VOICE_PITCH overrides for taste.
+        let envPitch = ProcessInfo.processInfo.environment["MEDITATE_VOICE_PITCH"]
+        u.pitchMultiplier = Float(envPitch ?? "") ?? 1.28
         // volume stays at 1.0: how loud he is, is the system volume's job,
         // and turning it down here quietly halved the mouth animation too
         u.voice = Mouth.bestVoice()
@@ -532,8 +537,11 @@ final class Mouth: NSObject, AVSpeechSynthesizerDelegate {
 
     /// Calm and measured first, bright and chirpy last. Order is the taste
     /// call; quality tier still outranks all of it.
-    static let shortlist = ["Serena", "Daniel", "Samantha", "Ava", "Moira",
-                            "Karen", "Tessa", "Fiona", "Allison", "Susan"]
+    // Male voices first. Quality still outranks the shortlist, so a premium
+    // voice wins over a compact one of the preferred name — a good voice of
+    // the wrong sort beats a robot of the right one.
+    static let shortlist = ["Daniel", "Oliver", "Alex", "Tom", "Fred",
+                            "Rishi", "Aaron", "Arthur", "Serena", "Samantha"]
 
     static func rank(_ v: AVSpeechSynthesisVoice) -> (Int, Int) {
         let idx = shortlist.firstIndex(where: { v.name.contains($0) }) ?? shortlist.count

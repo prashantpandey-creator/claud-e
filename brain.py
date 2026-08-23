@@ -26,6 +26,7 @@ from typing import Any, Dict, List, Optional
 SKILL_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SKILL_DIR)
 
+import paths
 from coordination import last_file as _last_file
 from projects import rollup as _pj_rollup
 from casper_page import CASPER_PAGE          # the mascot's face
@@ -585,9 +586,106 @@ async function act(action, arg, value){
 }
 function esc(s){return String(s||"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
 function bar(p){return `<span style="display:inline-block;width:180px;height:8px;background:#1d1a14;border-radius:4px;vertical-align:middle"><span style="display:block;width:${Math.min(100,p)}%;height:8px;background:${G};border-radius:4px"></span></span>`}
+
+// The organs that move on their own. Driven by tick() AND by the push stream,
+// so a dispatched agent's first line of progress does not wait for the next
+// 4-second poll to be seen.
+function renderLive(s){
+  if (s.live_sessions) document.getElementById("live").innerHTML = s.live_sessions.map(x=>{
+    // the beat IS the recency: <60s -> ~1.1s fast pulse; slows with age;
+    // >30 min -> a still ember (no animation, dim)
+    const beat = Math.min(6, Math.max(1.1, x.age_s/45));
+    const ember = x.age_s > 1800;
+    const glow = ember ? "animation:none;opacity:.35;filter:saturate(.5)"
+                       : `animation-duration:${beat.toFixed(1)}s`;
+    return `<div style="width:140px;text-align:center">
+      <div class="orb" style="${glow}" title="session ${esc(x.sid)} · ${esc(x.cwd)}"></div>
+      <div style="font-size:12.5px;color:${G};overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(x.label)}</div>
+      <div style="font-size:11px;color:${DIM};overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(x.last_file)}</div>
+      <div style="font-size:10px;color:#4a463c">${x.age_s<60?x.age_s+"s":Math.round(x.age_s/60)+"m"} ago
+        · <a href="#" class="j-name" data-sid="${esc(x.sid)}" data-label="${esc(x.label)}" style="color:${DIM}" title="Rename this session in your own words.">name</a>
+        · <a href="#" class="j-stop" data-sid="${esc(x.sid)}" data-label="${esc(x.label)}" style="color:${DIM}" title="End this session — same as closing its window.">stop</a></div>
+    </div>`}).join("") || `<div style="color:${DIM};font-size:13px">no living sessions — the field is still</div>`;
+  const ml = s.milestones||{looks_done:[],stale_wording:[]};
+  const mparts = (ml.looks_done||[]).map(m=>
+      `<div style="color:${G}">✓ looks already done: ${esc(m.milestone)} <span style="color:${DIM}">— ${esc(m.evidence)}</span></div>`)
+    .concat((ml.stale_wording||[]).map(m=>
+      `<div style="color:${DIM}">status frozen in the text ${esc(m.phrase)} — ${esc(m.milestone)}</div>`));
+  document.getElementById("mile").innerHTML = mparts.join("");
+  const onGoal = {};
+  (s.fleet||[]).forEach(f=>{ if(f.goal) onGoal[f.goal] = f; });
+  if (s.goals) document.getElementById("goals").innerHTML = s.goals.map(g=>{
+    const f = onGoal[g.name];
+    const working = f
+      ? `<span style="color:${G}" title="agent live on this goal${f.last_file?` — last touched ${esc(f.last_file)}`:""}">⟳ agent on it · ${Math.round(f.dispatched_min)}m${f.milestone_ticked?` · milestone ✓`:""}</span>`
+      : `<button class="b j-go" data-goal="${esc(g.name)}" style="padding:2px 9px;font-size:11px" title="Opens ONE Terminal agent working only this goal's next milestone: ${esc(g.next||'')}">dispatch</button>`;
+    return `<div style="margin:8px 0"><div style="display:flex;gap:12px;align-items:center">
+      <button class="j-open goaltitle" data-goal="${esc(g.name)}"
+              title="open this goal">${esc(g.title.slice(0,42))}</button>${bar(g.pct)}
+      <span style="color:${G}">${Math.round(g.pct)}%</span>
+      <span style="color:${DIM}">${g.done}/${g.total}</span>
+      ${g.stalled?`<span style="color:${G}" title="${esc(g.idle_basis||'')}">stuck ${g.idle_days}d</span>`:""}
+      ${g.scope_delta>0?`<span style="color:${G}">scope +${g.scope_delta}</span>`:""}
+      ${working}</div>
+      <div style="margin-left:262px;font-size:12px;color:${DIM}">next: ${esc(g.next||"—")}</div>
+      <div data-goalbox="${esc(g.name)}" style="margin-left:262px"></div></div>`;
+  }).join("");
+  restoreOpenGoals();
+  if (s.fleet) document.getElementById("fleet").innerHTML = s.fleet.map(f=>{
+    const status = f.says
+      ? `<span style="color:${f.says_done?G:'#d8d2c4'}">${f.says_done?'✓ ':'▸ '}${esc(f.says)}</span> <span style="color:#4a463c">(${esc(f.says_ts||'')})</span>`
+      : (f.milestone_ticked?`<span style="color:${G}">milestone done ✓</span>`
+         : (f.live_session?`working — ${esc(f.last_file||'')}`:`<span style="color:${DIM}">launched, no report yet</span>`));
+    const stale = f.milestone_ticked || f.dispatched_min >= 15;
+    const btn = stale
+      ? `<button class="b j-clear" data-goal="${esc(f.goal)}" style="padding:1px 8px;font-size:11px"
+          title="Removes this row from the dispatch ledger. It does NOT stop a running agent — that window is yours to close.">clear</button>`
+      : "";
+    return `<div style="margin:5px 0"><span style="color:${G}">${esc(f.goal)}</span>
+      <span style="color:#4a463c">· sent ${f.dispatched_min}m ago ·</span> ${status} ${btn}</div>`;
+  }).join("") || `<div style="color:${DIM}">nothing dispatched — press a goal's <b>dispatch</b>, or <code style="color:${G}">meditate go</code></div>`;
+  if ((s.fleet||[]).some(f=>f.milestone_ticked))
+    document.getElementById("fleet").insertAdjacentHTML("beforeend",
+      `<div style="margin-top:6px"><button class="b j-clearall" style="padding:1px 8px;font-size:11px"
+        title="Drops every finished row at once.">clear finished</button></div>`);
+  if (s.repair) document.getElementById("repair").innerHTML = s.repair.map((m,i)=>
+    `<div style="margin:4px 0"><span style="color:${G}">${i+1}.</span> ${esc(m.statement)}
+     <button class="b j-fix" data-n="${i+1}" style="padding:1px 8px;font-size:11px" title="Opens ONE Terminal agent scoped to only this memory: it checks reality, fixes the .md, and re-grades.">fix this</button>
+     ${m.fails.map(f=>`<div style="margin-left:18px;color:${DIM};font-size:12px">FAILS ${esc(f)}</div>`).join("")}</div>`
+  ).join("") || `<div style="color:${DIM}">clean — nothing failed verification</div>`;
+  const tot = (s.projects||[]).reduce((a,p)=>a+p.messages,0)||1;
+  document.getElementById("brief").innerHTML =
+    (s.brief||[]).map(x=>esc(x)).join(" ") ||
+    `<span style="color:${DIM}">reading the room…</span>`;
+  const wd = s.projects_window_days||0;
+  if (wd) document.getElementById("projlabel").textContent =
+    `\u2014 % is share of the last ${wd} days of chats; commits are the whole history`
+    + (s.facts_unattributed ? `; ${s.facts_unattributed} facts name no project` : "");
+  document.getElementById("projects").innerHTML = (s.projects||[]).map(p=>{
+    const share = 100*p.messages/tot;
+    const hist = p.commits ? `${p.commits} commits since ${(p.since||"").slice(0,7)}`
+                           + (p.commits_recent?` · ${p.commits_recent} this month`:"")
+                           : "no repo";
+    return `<div style="margin:7px 0">
+      <div style="display:flex;gap:12px;align-items:center">
+        <span style="width:140px;color:${G}">${esc(p.project)}</span>
+        ${bar(share,140)}
+        <span style="color:${DIM};width:150px">${share.toFixed(0)}% · ${p.messages} msgs · ${p.sessions} chats</span>
+        <span style="color:${DIM};width:230px">${esc(hist)}</span>
+        <span style="color:${DIM}">${p.facts} facts${p.repair_items?` · <span style="color:${G}">${p.repair_items} to fix</span>`:""}</span>
+      </div>
+      ${(p.open_tasks||[]).map(t=>`<div style="margin-left:152px;font-size:11.5px;color:${DIM}">↳ ${esc(t.task)}</div>`).join("")}
+    </div>`}).join("") || `<div style="color:${DIM}">no project data yet</div>`;
+  document.getElementById("activity").innerHTML = (s.activity||[]).map(a=>
+    `<div>${esc(a.ts)} · ${esc(a.type)} · ${esc(a.what)}</div>`).join("") ||
+    "<div>no recorded activity yet</div>";
+}
+
 async function tick(){
   let s; try{ s = await (await fetch("/api/state")).json() }catch(e){ return }
-  document.getElementById("meta").textContent =
+  // once the push stream is live it owns this line — otherwise the 4s poll
+  // overwrites "live" with "refreshed" and the page understates itself
+  if (!STREAMED) document.getElementById("meta").textContent =
     `refreshed ${s.generated} · every number from the graded store, not recall`;
   document.getElementById("next").textContent = "next: " + s.next;
   const ins = s.insights||{headline:"",needs_you:[],moving:[]};
@@ -630,94 +728,7 @@ async function tick(){
       "Empty or finished sessions moved out of your session list — reversible, nothing is ever deleted.")+
     stat((s.heartbeat_h==null?"—":s.heartbeat_h+" h"),"since last self-check",
       "Every 6 hours the system re-checks all facts, learns from new commits, and tidies up — without being asked.");
-  document.getElementById("live").innerHTML = s.live_sessions.map(x=>{
-    // the beat IS the recency: <60s -> ~1.1s fast pulse; slows with age;
-    // >30 min -> a still ember (no animation, dim)
-    const beat = Math.min(6, Math.max(1.1, x.age_s/45));
-    const ember = x.age_s > 1800;
-    const glow = ember ? "animation:none;opacity:.35;filter:saturate(.5)"
-                       : `animation-duration:${beat.toFixed(1)}s`;
-    return `<div style="width:140px;text-align:center">
-      <div class="orb" style="${glow}" title="session ${esc(x.sid)} · ${esc(x.cwd)}"></div>
-      <div style="font-size:12.5px;color:${G};overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(x.label)}</div>
-      <div style="font-size:11px;color:${DIM};overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(x.last_file)}</div>
-      <div style="font-size:10px;color:#4a463c">${x.age_s<60?x.age_s+"s":Math.round(x.age_s/60)+"m"} ago
-        · <a href="#" class="j-name" data-sid="${esc(x.sid)}" data-label="${esc(x.label)}" style="color:${DIM}" title="Rename this session in your own words.">name</a>
-        · <a href="#" class="j-stop" data-sid="${esc(x.sid)}" data-label="${esc(x.label)}" style="color:${DIM}" title="End this session — same as closing its window.">stop</a></div>
-    </div>`}).join("") || `<div style="color:${DIM};font-size:13px">no living sessions — the field is still</div>`;
-  const ml = s.milestones||{looks_done:[],stale_wording:[]};
-  const mparts = (ml.looks_done||[]).map(m=>
-      `<div style="color:${G}">✓ looks already done: ${esc(m.milestone)} <span style="color:${DIM}">— ${esc(m.evidence)}</span></div>`)
-    .concat((ml.stale_wording||[]).map(m=>
-      `<div style="color:${DIM}">status frozen in the text ${esc(m.phrase)} — ${esc(m.milestone)}</div>`));
-  document.getElementById("mile").innerHTML = mparts.join("");
-  const onGoal = {};
-  (s.fleet||[]).forEach(f=>{ if(f.goal) onGoal[f.goal] = f; });
-  document.getElementById("goals").innerHTML = s.goals.map(g=>{
-    const f = onGoal[g.name];
-    const working = f
-      ? `<span style="color:${G}" title="agent live on this goal${f.last_file?` — last touched ${esc(f.last_file)}`:""}">⟳ agent on it · ${Math.round(f.dispatched_min)}m${f.milestone_ticked?` · milestone ✓`:""}</span>`
-      : `<button class="b j-go" data-goal="${esc(g.name)}" style="padding:2px 9px;font-size:11px" title="Opens ONE Terminal agent working only this goal's next milestone: ${esc(g.next||'')}">dispatch</button>`;
-    return `<div style="margin:8px 0"><div style="display:flex;gap:12px;align-items:center">
-      <button class="j-open goaltitle" data-goal="${esc(g.name)}"
-              title="open this goal">${esc(g.title.slice(0,42))}</button>${bar(g.pct)}
-      <span style="color:${G}">${Math.round(g.pct)}%</span>
-      <span style="color:${DIM}">${g.done}/${g.total}</span>
-      ${g.stalled?`<span style="color:${G}" title="${esc(g.idle_basis||'')}">stuck ${g.idle_days}d</span>`:""}
-      ${g.scope_delta>0?`<span style="color:${G}">scope +${g.scope_delta}</span>`:""}
-      ${working}</div>
-      <div style="margin-left:262px;font-size:12px;color:${DIM}">next: ${esc(g.next||"—")}</div>
-      <div data-goalbox="${esc(g.name)}" style="margin-left:262px"></div></div>`;
-  }).join("");
-  restoreOpenGoals();
-  document.getElementById("fleet").innerHTML = s.fleet.map(f=>{
-    const status = f.says
-      ? `<span style="color:${f.says_done?G:'#d8d2c4'}">${f.says_done?'✓ ':'▸ '}${esc(f.says)}</span> <span style="color:#4a463c">(${esc(f.says_ts||'')})</span>`
-      : (f.milestone_ticked?`<span style="color:${G}">milestone done ✓</span>`
-         : (f.live_session?`working — ${esc(f.last_file||'')}`:`<span style="color:${DIM}">launched, no report yet</span>`));
-    const stale = f.milestone_ticked || f.dispatched_min >= 15;
-    const btn = stale
-      ? `<button class="b j-clear" data-goal="${esc(f.goal)}" style="padding:1px 8px;font-size:11px"
-          title="Removes this row from the dispatch ledger. It does NOT stop a running agent — that window is yours to close.">clear</button>`
-      : "";
-    return `<div style="margin:5px 0"><span style="color:${G}">${esc(f.goal)}</span>
-      <span style="color:#4a463c">· sent ${f.dispatched_min}m ago ·</span> ${status} ${btn}</div>`;
-  }).join("") || `<div style="color:${DIM}">nothing dispatched — press a goal's <b>dispatch</b>, or <code style="color:${G}">meditate go</code></div>`;
-  if ((s.fleet||[]).some(f=>f.milestone_ticked))
-    document.getElementById("fleet").insertAdjacentHTML("beforeend",
-      `<div style="margin-top:6px"><button class="b j-clearall" style="padding:1px 8px;font-size:11px"
-        title="Drops every finished row at once.">clear finished</button></div>`);
-  document.getElementById("repair").innerHTML = s.repair.map((m,i)=>
-    `<div style="margin:4px 0"><span style="color:${G}">${i+1}.</span> ${esc(m.statement)}
-     <button class="b j-fix" data-n="${i+1}" style="padding:1px 8px;font-size:11px" title="Opens ONE Terminal agent scoped to only this memory: it checks reality, fixes the .md, and re-grades.">fix this</button>
-     ${m.fails.map(f=>`<div style="margin-left:18px;color:${DIM};font-size:12px">FAILS ${esc(f)}</div>`).join("")}</div>`
-  ).join("") || `<div style="color:${DIM}">clean — nothing failed verification</div>`;
-  const tot = (s.projects||[]).reduce((a,p)=>a+p.messages,0)||1;
-  document.getElementById("brief").innerHTML =
-    (s.brief||[]).map(x=>esc(x)).join(" ") ||
-    `<span style="color:${DIM}">reading the room…</span>`;
-  const wd = s.projects_window_days||0;
-  if (wd) document.getElementById("projlabel").textContent =
-    `\u2014 % is share of the last ${wd} days of chats; commits are the whole history`
-    + (s.facts_unattributed ? `; ${s.facts_unattributed} facts name no project` : "");
-  document.getElementById("projects").innerHTML = (s.projects||[]).map(p=>{
-    const share = 100*p.messages/tot;
-    const hist = p.commits ? `${p.commits} commits since ${(p.since||"").slice(0,7)}`
-                           + (p.commits_recent?` · ${p.commits_recent} this month`:"")
-                           : "no repo";
-    return `<div style="margin:7px 0">
-      <div style="display:flex;gap:12px;align-items:center">
-        <span style="width:140px;color:${G}">${esc(p.project)}</span>
-        ${bar(share,140)}
-        <span style="color:${DIM};width:150px">${share.toFixed(0)}% · ${p.messages} msgs · ${p.sessions} chats</span>
-        <span style="color:${DIM};width:230px">${esc(hist)}</span>
-        <span style="color:${DIM}">${p.facts} facts${p.repair_items?` · <span style="color:${G}">${p.repair_items} to fix</span>`:""}</span>
-      </div>
-      ${(p.open_tasks||[]).map(t=>`<div style="margin-left:152px;font-size:11.5px;color:${DIM}">↳ ${esc(t.task)}</div>`).join("")}
-    </div>`}).join("") || `<div style="color:${DIM}">no project data yet</div>`;
-  document.getElementById("activity").innerHTML = (s.activity||[]).map(a=>
-    `<div>${esc(a.ts)} · ${esc(a.type)} · ${esc(a.what)}</div>`).join("") ||
-    "<div>no recorded activity yet</div>";
+  renderLive(s);
   document.getElementById("digest").textContent = s.digest || "";
 }
 // Clicking a goal opens it. The bar could only say "37%, next: X"; every
@@ -802,6 +813,27 @@ document.addEventListener("click", e=>{
   else if(t.classList.contains("j-clearall")){act("clear", "");}
 });
 tick(); setInterval(tick, 4000);
+
+// Push, not poll, for the fleet. The server watches the beacon and event
+// files and sends only when they actually change; the fingerprint check costs
+// nothing, so it can look three times a second.
+let LAST = null, ES = null, STREAMED = false;
+function connectStream(){
+  try { if (ES) ES.close(); } catch(e){}
+  ES = new EventSource("/api/stream");
+  ES.onmessage = ev => {
+    let d; try { d = JSON.parse(ev.data); } catch(e){ return; }
+    LAST = Object.assign(LAST || {}, d);
+    const meta = document.getElementById("meta");
+    try { renderLive(LAST); } catch(e){}
+    if (meta && d.at) meta.textContent =
+      "live \u00b7 pushed " + d.at + " \u00b7 every number from the graded store, not recall";
+    STREAMED = true;
+  };
+  // a dropped stream is not a dead page: come back
+  ES.onerror = () => { try { ES.close(); } catch(e){} setTimeout(connectStream, 3000); };
+}
+connectStream();
 </script></body>"""
 
 
@@ -894,6 +926,32 @@ class _Handler(BaseHTTPRequestHandler):
             if self.path == "/api/state":
                 body = json.dumps(state()).encode()
                 ctype = "application/json"
+            elif self.path == "/api/stream":
+                # Server-sent events: the fleet moves when an AGENT moves, not
+                # when a timer says so. Polling every 4s meant a dispatched
+                # agent's first line of progress could sit unseen for most of
+                # those 4 seconds, which is what "not live enough" looks like.
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("Connection", "keep-alive")
+                self.end_headers()
+                last = ""
+                try:
+                    for _ in range(4000):        # ~20 min, then the page reconnects
+                        fp = _live_fingerprint()
+                        if fp != last:
+                            last = fp
+                            body = json.dumps(_live_payload())
+                            self.wfile.write(b"data: " + body.encode() + b"\n\n")
+                            self.wfile.flush()
+                        else:
+                            self.wfile.write(b": keep-alive\n\n")
+                            self.wfile.flush()
+                        time.sleep(0.3)
+                except (BrokenPipeError, ConnectionResetError, OSError):
+                    pass
+                return
             elif self.path.startswith("/api/goal"):
                 from urllib.parse import urlparse, parse_qs
                 q = parse_qs(urlparse(self.path).query)
@@ -935,6 +993,60 @@ class _Handler(BaseHTTPRequestHandler):
 
     def log_message(self, *a):                       # quiet server
         pass
+
+
+LIVE_FILES = [
+    os.path.expanduser("~/.claude/coordination/fleet-beacons.jsonl"),
+    os.path.expanduser("~/.claude/coordination/events.jsonl"),
+    os.path.expanduser("~/.claude/coordination/sessions"),
+    # Resolved, not hardcoded: this owner's goals happen to live in
+    # ~/claude-sync/goals, nobody else's do. test_packaging catches it.
+    paths.goals_dir(),
+]
+
+
+def _live_fingerprint() -> str:
+    """Cheap stamp of everything that changes minute to minute."""
+    parts = []
+    for p in LIVE_FILES:
+        try:
+            st = os.stat(p)
+            parts.append("%s:%d:%d" % (os.path.basename(p), st.st_mtime_ns,
+                                       getattr(st, "st_size", 0)))
+        except OSError:
+            parts.append(os.path.basename(p) + ":-")
+    return "|".join(parts)
+
+
+def _live_payload() -> Dict[str, Any]:
+    """Only the fast-moving organs. Rebuilding all of state() 3x a second
+    would cost more than it shows."""
+    out: Dict[str, Any] = {}
+    try:
+        from drive import fleet_status
+        from beacon import latest as _beacons
+        f = fleet_status()
+        bs = _beacons()
+        for r in f["dispatched"]:
+            bd = bs.get(r.get("goal"))
+            if bd:
+                r["says"] = bd.get("message", "")
+                r["says_done"] = bd.get("done", False)
+                r["says_ts"] = bd.get("ts", "")[11:19]
+        out["fleet"] = f["dispatched"]
+    except Exception:
+        out["fleet"] = []
+    try:
+        out["activity"] = _recent_events()
+    except Exception:
+        out["activity"] = []
+    try:
+        from coordination import live_sessions
+        out["live_sessions"] = live_sessions()
+    except Exception:
+        out["live_sessions"] = []
+    out["at"] = time.strftime("%H:%M:%S")
+    return out
 
 
 def make_server(port: int = DEFAULT_PORT) -> ThreadingHTTPServer:

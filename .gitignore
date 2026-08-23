@@ -7,3 +7,6 @@ __pycache__/
 # signature made on one machine means nothing on another
 mascot/casper
 mascot/Casper.app/
+
+# built mascot signature stamp — local build state, not source
+mascot/.last-signature
