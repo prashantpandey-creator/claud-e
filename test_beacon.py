@@ -57,6 +57,29 @@ def test_cli_envelope():
         assert d["success"] and d["data"]["message"] == "doing the thing"
 
 
+def test_a_test_report_never_reaches_the_owners_notifications():
+    """This file reports done for a goal called "g" into a temp file. doctor
+    runs it, several sessions run doctor, and each one posted a real macOS
+    notification saying "G is done" — to a person who never started anything
+    called g. A side effect must honour the path its data went to."""
+    fired = []
+    real = bc.notify_done
+    bc.notify_done = lambda g, m: fired.append(g) or True
+    try:
+        with tempfile.TemporaryDirectory() as t:
+            bc.report("g", "milestone ticked", done=True,
+                      beacon_path=os.path.join(t, "b.jsonl"))
+        assert fired == [], "a test report escaped into the notification centre"
+    finally:
+        bc.notify_done = real
+
+
+def test_a_goal_nobody_has_is_never_announced():
+    """Second guard: even down the live path, a name that matches no goal on
+    disk is noise, not news."""
+    assert bc._known_goal("definitely-not-a-real-goal-xyz") is False
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

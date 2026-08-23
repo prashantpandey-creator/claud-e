@@ -430,6 +430,8 @@ def agenda(meditation_dir: str = MEDITATION_DIR, store_dir: str = STORE_DIR,
 
 
 def _speak(text: str) -> bool:
+    if os.environ.get("MEDITATE_TESTING"):
+        return False
     try:
         subprocess.Popen(["say", text[:400]], stdout=subprocess.DEVNULL,
                          stderr=subprocess.DEVNULL)

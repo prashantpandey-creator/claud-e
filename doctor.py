@@ -69,7 +69,13 @@ def _run_one(tf: str) -> Dict[str, Any]:
     if not os.path.exists(path):
         return {"file": tf, "ok": False, "detail": "file missing"}
     try:
-        r = subprocess.run([sys.executable, path], capture_output=True,
+        # Tests must not touch the world. Marking the run is the ONE guard that
+        # covers every module at once — the alternative is auditing each new
+        # side effect forever, and that has now failed four times: the activity
+        # log, the console event trail, the dispatch ledger, and a notification
+        # saying "G is done" for a goal called g that only exists in a test.
+        env = dict(os.environ, MEDITATE_TESTING="1")
+        r = subprocess.run([sys.executable, path], capture_output=True, env=env,
                            text=True, timeout=180, cwd=SKILL_DIR)
         return {"file": tf, "ok": r.returncode == 0,
                 "detail": "green" if r.returncode == 0

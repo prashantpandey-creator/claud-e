@@ -40,8 +40,35 @@ def report(goal: str, message: str, done: bool = False,
             }) + "\n")
     except OSError:
         pass
-    if done:
+    # Only the LIVE beacon may reach the owner's notification centre.
+    #
+    # test_beacon reports done="g" into a temp file; doctor runs it, several
+    # sessions run doctor, and every one of those posted a real notification
+    # saying "G is done" to a person who never started anything called g.
+    # Fourth time this session that test traffic has reached a live surface,
+    # after the activity log, the console event trail and the dispatch ledger.
+    # The rule is the same one every time: a side effect must honour the path
+    # its data went to.
+    if done and _is_live(beacon_path):
         notify_done(goal, message)
+
+
+def _known_goal(goal: str) -> bool:
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import goals as gl
+        names = {g.get("name", "") for g in gl.scan()}
+        return (not names) or goal in names
+    except Exception:
+        return True          # never let a broken check silence real news
+
+
+def _is_live(beacon_path: str) -> bool:
+    """Is this the real beacon, or a test's temp file?"""
+    try:
+        return os.path.realpath(beacon_path) == os.path.realpath(BEACON_PATH)
+    except Exception:
+        return False
 
 
 def notify_done(goal: str, message: str) -> bool:
@@ -56,7 +83,14 @@ def notify_done(goal: str, message: str) -> bool:
     the companion closed. Fail-open like the rest of this file: a notification
     that cannot be posted must never break an agent's real work.
     """
+    if os.environ.get("MEDITATE_TESTING"):
+        return False
     if os.environ.get("MEDITATE_NO_NOTIFY"):
+        return False
+    if not _known_goal(goal):
+        # "G is done" named nothing the owner recognised. A completion notice
+        # for a goal that does not exist is noise however it got here, so the
+        # name is checked against the goals on disk before anyone is told.
         return False
     if _casper_running():
         # Casper posts a notice you can CLICK — its action opens the dashboard.
