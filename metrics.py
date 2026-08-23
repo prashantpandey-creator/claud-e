@@ -153,6 +153,7 @@ def compute_metrics() -> Dict[str, Any]:
     # --- Coverage ---
     try:
         sys.path.insert(0, SKILL_DIR)
+import paths
         from sessions import scan_all_projects
         scan = scan_all_projects(cap=20)
         total_sessions = scan["data"]["total_sessions"] if scan["success"] else 0
@@ -166,7 +167,7 @@ def compute_metrics() -> Dict[str, Any]:
     # single store made coverage read a flattering 100% while 28 files in the
     # other stores were never graded at all — the metric hid the gap it exists
     # to expose.
-    MEMORY_ROOT = os.path.expanduser("~/claude-sync/memory")
+    MEMORY_ROOT = paths.memory_root()
     total_md_files = 0
     if os.path.isdir(MEMORY_ROOT):
         for entry in os.listdir(MEMORY_ROOT):

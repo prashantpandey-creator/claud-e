@@ -36,13 +36,14 @@ from typing import Any, Dict, List, Optional
 
 SKILL_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SKILL_DIR)
-NIDRA_ROOT = os.path.expanduser("~/projects/nidra")
+import paths
+NIDRA_ROOT = paths.nidra_root() or ""
 sys.path.insert(0, NIDRA_ROOT)
 
 STORE_DIR = os.environ.get("MEDITATE_STORE_DIR") or os.path.expanduser(
     "~/.claude/meditation/nidra_store")
 LEDGER_PATH = os.path.expanduser("~/.claude/meditation/distilled.jsonl")
-MEMORY_ROOT = os.path.expanduser("~/claude-sync/memory")
+MEMORY_ROOT = paths.memory_root()
 SUBSTANTIVE_USER_MSGS = 15
 
 # git commit stdout: "[branch abc1234] subject"
@@ -190,7 +191,9 @@ def distill_kickoff(sid: str, sessions: List[Dict[str, Any]],
     for s in sessions:
         if s.get("session_id") != sid:
             continue
-        slug = s.get("_project_slug", "-Users-badenath-projects-vedic-puran")
+        # A missing slug used to default to the AUTHOR's project, so every
+        # machine that failed detection silently wrote into his directory.
+        slug = s.get("_project_slug") or paths.project_slug()
         mem_dir = os.path.join(memory_root, slug)
         prompt = (
             "Distill session %s ('%s', transcript: %s) into durable memory.\n"

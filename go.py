@@ -23,6 +23,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 SKILL_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SKILL_DIR)
+import paths
 
 MEDITATION_DIR = os.path.expanduser("~/.claude/meditation")
 STORE_DIR = os.environ.get("MEDITATE_STORE_DIR") or os.path.expanduser(
@@ -56,7 +57,7 @@ def _resolve_claim(claim: str):
         target = claim[11:-2]
         if target.endswith(".md"):
             target = target[:-3]
-        roots = [os.path.expanduser("~/claude-sync/memory")]
+        roots = [paths.memory_root()]
         for root in roots:
             if not os.path.isdir(root):
                 continue

@@ -42,11 +42,11 @@ import json
 import os
 import re
 import sys
+import paths
 import time
 from typing import Any, Dict, List, Optional, Optional
 
-GOALS_DIR = os.environ.get("MEDITATE_GOALS_DIR") or os.path.expanduser(
-    "~/claude-sync/goals")
+GOALS_DIR = paths.goals_dir()
 HISTORY_PATH = os.path.expanduser("~/.claude/meditation/goals-history.jsonl")
 
 _BOX = re.compile(r"^\s*-\s*\[( |x|X)\]\s*(.+?)\s*$")

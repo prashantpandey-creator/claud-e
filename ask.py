@@ -25,10 +25,11 @@ import argparse
 import json
 import os
 import sys
+import paths
 from typing import Any, Dict, List, Optional
 
 SKILL_DIR = os.path.dirname(os.path.abspath(__file__))
-NIDRA_ROOT = os.path.expanduser("~/projects/nidra")
+NIDRA_ROOT = paths.nidra_root() or ""
 sys.path.insert(0, NIDRA_ROOT)
 
 STORE_DIR = os.environ.get("MEDITATE_STORE_DIR") or os.path.expanduser(

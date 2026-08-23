@@ -16,11 +16,13 @@ import sys
 from typing import Dict, List
 
 SKILL_DIR = os.path.dirname(os.path.abspath(__file__))
-NIDRA_ROOT = os.path.expanduser("~/projects/nidra")
+NIDRA_ROOT = paths.nidra_root() or ""
 STORE_DIR = os.path.expanduser("~/.claude/meditation/nidra_store")
 
 sys.path.insert(0, SKILL_DIR)
-sys.path.insert(0, NIDRA_ROOT)
+import paths
+if NIDRA_ROOT:
+    sys.path.insert(0, NIDRA_ROOT)
 
 
 def _envelope(success, data, errors=None, store_dir=None):
@@ -36,8 +38,8 @@ def _envelope(success, data, errors=None, store_dir=None):
 # All curated .md memory stores, not just the vedic-puran one. Every cwd-slug
 # directory under claude-sync/memory is real knowledge; grading only the first
 # one made coverage read 100% while other stores went ungraded.
-MEMORY_ROOT = os.path.expanduser("~/claude-sync/memory")
-MEMORY_DIR = os.path.join(MEMORY_ROOT, "-Users-badenath-projects-vedic-puran")
+MEMORY_ROOT = paths.memory_root()
+MEMORY_DIR = os.path.join(MEMORY_ROOT, paths.project_slug())
 
 
 def _memory_dirs(root=None):

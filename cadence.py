@@ -27,10 +27,11 @@ import json
 import os
 import subprocess
 import sys
+import paths
 import time
 from typing import Any, Dict, List, Optional
 
-MEMORY_ROOT = os.path.expanduser("~/claude-sync/memory")
+MEMORY_ROOT = paths.memory_root()
 PROJECTS_DIR = os.path.expanduser("~/.claude/projects")
 PLIST = os.path.expanduser("~/Library/LaunchAgents/com.meditate.grade.plist")
 
