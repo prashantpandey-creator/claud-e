@@ -271,11 +271,15 @@ elif command -v crontab >/dev/null 2>&1; then
     # Command substitution blocks until crontab -l fully completes, so
     # capture it first and write in a wholly separate, later crontab - call.
     EXISTING="$(crontab -l 2>/dev/null | grep -v "meditate-heartbeat" || true)"
+    echo "  [DEBUG] whoami=$(whoami) id=$(id)"
+    echo "  [DEBUG] crontab binary: $(ls -la "$(command -v crontab)" 2>&1)"
     echo "  [DEBUG] EXISTING=[$EXISTING]"
     if { printf '%s\n' "$EXISTING"; echo "0 */6 * * * $HEARTBEAT_CMD # meditate-heartbeat"; } | crontab - 2>/tmp/crontab_stderr.log; then
         echo "  [ok]  heartbeat installed via cron — self-check every 6h"
         echo "  [DEBUG] crontab stderr: [$(cat /tmp/crontab_stderr.log)]"
         echo "  [DEBUG] crontab -l immediately after: [$(crontab -l 2>&1)]"
+        echo "  [DEBUG] spool file directly: [$(sudo cat /var/spool/cron/crontabs/runner 2>&1)]"
+        echo "  [DEBUG] spool file stat: $(stat /var/spool/cron/crontabs/runner 2>&1)"
     else
         echo "  [warn]  no launchd and cron refused; run the heartbeat yourself: meditate grade"
         echo "  [DEBUG] crontab stderr: [$(cat /tmp/crontab_stderr.log)]"
