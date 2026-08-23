@@ -23,14 +23,37 @@ the other end to log into. Your memory, your sessions, your work — yours.
 ## Install
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/prashantpandey-creator/meditate/main/get.sh | bash
+```
+
+Or clone it yourself, if you would rather read the code first — same result:
+
+```bash
 git clone https://github.com/prashantpandey-creator/meditate ~/.claude/skills/meditate
 bash ~/.claude/skills/meditate/install.sh
 ```
 
-One command. It fetches its own grading engine, wires the hooks, grades your
-memory, installs a background self-check tuned to how fast your work changes,
-runs the tests, and opens the dashboard. No sudo, no account, nothing leaves
-your machine. Safe to re-run.
+The path matters and is not cosmetic: Claude Code only discovers skills under
+`~/.claude/skills`, so a clone one directory off installs fine and is never
+found. That is the whole reason the one-liner exists.
+
+It fetches its own grading engine, wires the hooks, grades your memory,
+installs a background self-check tuned to how fast your work changes, runs the
+tests, and opens the dashboard. No sudo, no account, nothing leaves your
+machine. Safe to re-run.
+
+### Uninstall
+
+```bash
+meditate uninstall             # remove the wiring, keep everything you built
+meditate uninstall --dry-run   # show exactly what that would touch, change nothing
+meditate uninstall --purge     # also delete the data (asks first)
+```
+
+It edits `settings.json` as JSON, matched on its own hook path, so your other
+tools' hooks survive. Your graded memory, goals and session splits are kept
+unless you ask for `--purge` — re-running the installer picks up where you
+left off.
 
 *(The engine is a small internal library — installed automatically, you never
 touch it. It lives in its own repo only so it can be tested in isolation.)*
@@ -54,12 +77,51 @@ meditate fleet       # live progress of dispatched agents
 meditate report      # wins: drift caught/repaired, stilling, efficacy
 meditate distill     # sessions awaiting distillation into memory
 meditate archive     # tidy finished sessions away (reversible)
-meditate doctor      # health: prereqs, 21 test suites, hooks, heartbeat
+meditate doctor      # health: prereqs, 37 test suites, hooks, heartbeat
+meditate where       # every path it resolved on this machine
 meditate help        # everything
 ```
 
 Intent aliases work too — `what`/`search`/`find`/`recall` = ask,
 `run`/`work` = go, `repair` = fix, `where` = status, `live`/`brain` = pulse.
+
+## Casper — it talks to you
+
+```bash
+meditate casper      # a small ghost, bottom-right, floating over your work
+```
+
+He reads the same graded data everything else does, and says the one thing
+worth saying. Click him and talk — or say "Casper, ..." and he answers from
+what he actually knows about your projects.
+
+```
+you:    "Casper, what should I focus on today?"
+Casper: "Payments. The Razorpay key is missing from the right environment,
+         so the flow is broken in production until it is found and verified
+         live — that is the one thing today that is fully in your hands.
+         Want me to go track down where that key needs to live?"
+```
+
+**He is on your side of the line.** Speech is recognised on this Mac, on
+device, and never leaves it — the tool has no server to send it to. He listens
+only when you click him or use his name, and never while a meeting app is in
+front.
+
+**He asks; he does not decide.** Commands become offers with a visible Yes:
+"run the fleet" gets you *"I can put agents on the open work. Yes?"*, never a
+silent launch. Push and deploy are refused outright, in code, on every lane —
+those stay in the terminal with you.
+
+**He is quiet by default about being quiet.** The full introduction happens
+once, ever; after that a launch is a bubble, not a speech. `Stop` appears the
+moment he starts talking. Right-click him for About, "Stay quiet (only answer
+when asked)", or Quit.
+
+The voice is [Kokoro-82M](https://github.com/thewh1teagle/kokoro-onnx) running
+locally when it is installed, and macOS speech otherwise — measured on an
+M-series Mac at 4.9s of audio rendered in 1.67s, warm. Nothing is sent
+anywhere either way.
 
 ## What "a memory" means here
 
@@ -340,15 +402,22 @@ with `meditate metrics --json` and `meditate doctor --json`.
 ```
 ~/.claude/skills/meditate/
 ├── README.md              this file
-├── VERSION                0.7.0
+├── VERSION                0.12.0
 ├── CHANGELOG.md           history
 ├── SKILL.md               /meditate slash command definition
 ├── INTERNALS.md           developer docs (vritti/antaraya/nirodha formulas)
 ├── meditate               CLI wrapper (symlinked to ~/.local/bin/ by install.sh)
+├── get.sh                 the curl-able bootstrap (clones, then installs)
 ├── install.sh             one-command setup
+├── uninstall.sh           takes it back out; keeps your data unless --purge
+├── paths.py               where everything lives, decided once, for any machine
 ├── hooks/
 │   └── meditate-hook.sh   the hook — repo is the source of truth, install copies it
 ├── doctor.py              self-diagnostic
+├── mascot/                Casper: the desktop companion (Swift, built locally)
+├── tts.py                 the local voice — Kokoro, warm on loopback
+├── voice.py               what to say, and whether now is the moment
+├── advisor.py             his reasoning over the graded facts
 ├── metrics.py             health, drift, coverage dashboard
 ├── coordination.py        sangama: presence, collisions, fact serving, drift CLI
 ├── sessions.py            transcript miner

@@ -181,6 +181,38 @@ def test_uninstall_spares_other_tools_hooks():
     assert cfg.get("model") == "opus", "unrelated settings must survive"
 
 
+def test_readme_documents_only_commands_that_exist():
+    """A landing page that promises a verb the CLI does not have is the first
+    thing a new user hits. Checked both ways."""
+    import re as _re
+    readme = open(os.path.join(SKILL, "README.md")).read()
+    cli = open(os.path.join(SKILL, "meditate")).read()
+    documented = set(_re.findall(r"^meditate ([a-z]+)", readme, _re.M))
+    # a case arm is `  verb)` or `  a|verb|b)` — alternatives on either side,
+    # and the arm may carry flags like `help|--help|-h)`
+    missing = [v for v in sorted(documented)
+               if not _re.search(r"^\s*[\w|.-]*\b%s\b[\w|.-]*\)" % v, cli, _re.M)]
+    assert not missing, "README promises verbs the CLI lacks: %s" % missing
+
+
+def test_readme_install_points_at_the_path_claude_code_searches():
+    """Claude Code only discovers skills under ~/.claude/skills — a clone one
+    directory off installs cleanly and is never found."""
+    readme = open(os.path.join(SKILL, "README.md")).read()
+    assert ".claude/skills/meditate" in readme
+    assert "get.sh" in readme, "the one-liner is the easiest path; document it"
+    boot = open(os.path.join(SKILL, "get.sh")).read()
+    assert ".claude/skills/meditate" in boot
+    assert "status --porcelain" in boot, \
+        "the bootstrap must refuse to clobber local edits"
+
+
+def test_readme_version_matches_VERSION():
+    v = open(os.path.join(SKILL, "VERSION")).read().strip()
+    readme = open(os.path.join(SKILL, "README.md")).read()
+    assert v in readme, "README's file tree still claims an older version"
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]
