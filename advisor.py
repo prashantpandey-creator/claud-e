@@ -63,9 +63,18 @@ SYSTEM = (
 )
 
 
+def _say_doing(step: str, detail: str = "") -> None:
+    try:
+        import thinking
+        thinking.note(step, detail)
+    except Exception:
+        pass
+
+
 def _facts(limit_projects: int = 4) -> str:
     """Everything Casper is allowed to reason over, compact and verified."""
     lines: List[str] = []
+    _say_doing("reading what I know")
     try:
         import status as st
         d = st.gather()
@@ -85,6 +94,7 @@ def _facts(limit_projects: int = 4) -> str:
                                      for x in d["dispatchable"][:4]))
     except Exception as e:
         lines.append("STATUS UNAVAILABLE: %s" % e)
+    _say_doing("checking your projects")
     try:
         from projects import rollup
         for r in rollup()[:limit_projects]:
@@ -98,6 +108,7 @@ def _facts(limit_projects: int = 4) -> str:
                             if r["last_touched_days"] is not None else ""))
     except Exception:
         pass
+    _say_doing("looking at what broke")
     try:
         from go import repair_items
         import voice as vc
@@ -130,9 +141,11 @@ def advise(question: str, timeout_s: int = TIMEOUT_S,
         return {"speech": "Say that again?", "source": "guard", "ok": False}
 
     facts = _facts()
+    _say_doing("searching my memory", q[:60])
     mem = _relevant_memory(q)
     prompt = ("%s\n\nFACTS (the only ground truth you have):\n%s\n%s\n\n"
               "The user asks: %s" % (SYSTEM, facts, mem, q))
+    _say_doing("thinking it through")
     try:
         r = subprocess.run(["claude", "-p", "--model", model],
                            input=prompt, capture_output=True, text=True,
@@ -142,6 +155,7 @@ def advise(question: str, timeout_s: int = TIMEOUT_S,
             # spoken text: collapse any stray markdown the model emitted
             out = out.replace("**", "").replace("`", "").replace("#", "")
             out = " ".join(out.split())
+            _say_doing("")
             return {"speech": out[:700], "source": "reasoned", "ok": True}
         err = (r.stderr or "").strip()[:120]
     except subprocess.TimeoutExpired:

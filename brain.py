@@ -43,12 +43,22 @@ ACTIONS = {
 }
 
 
+def _note(step: str) -> None:
+    try:
+        import thinking
+        thinking.note(step)
+    except Exception:
+        pass
+
+
 def _default_runner(action: str, arg: str) -> Dict[str, Any]:
     """Run the same code the CLI runs and RETURN ITS REAL OUTPUT — a click
     that hides what it did is the opposite of intuitive. go/fix finish in a
     couple seconds (they open Terminal agents and report); grade is slow, so
     it detaches and says so. Never push/deploy: those gates stay with the
     owner in the terminal."""
+    _note({"go": "starting the fleet", "fix": "repairing what broke",
+           "grade": "re-checking every memory"}.get(action, "running " + action))
     cmd = ACTIONS[action](arg)
     if action == "grade":
         subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
@@ -60,6 +70,7 @@ def _default_runner(action: str, arg: str) -> Dict[str, Any]:
         out = (r.stdout or r.stderr or "").strip() or "(no output)"
     except subprocess.TimeoutExpired:
         out = "still running after 25s — check `meditate fleet`"
+    _note("")
     return {"started": True, "output": out[:600]}
 
 
