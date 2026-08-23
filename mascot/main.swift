@@ -180,6 +180,42 @@ if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--hear" {
 // `casper --saycancel` starts an utterance and stops it MID-RENDER. Nothing
 // may reach the speakers: pressing Mute while a render is running used to
 // leave the render to land and speak anyway.
+// `casper --bored` shows what he says as boredom climbs, and how long he
+// waits between grumbles. Verifying this by sitting still for twenty minutes
+// is not verification, it is waiting.
+if CommandLine.arguments.count > 1, CommandLine.arguments[1] == "--bored" {
+    _ = NSApplication.shared
+    let d = App()
+    d.shotMode = true
+    d.applicationDidFinishLaunching(Notification(name: Notification.Name("bored")))
+    d.canInterruptNow = true
+    d.lastInteractionAt = Date().addingTimeInterval(-600)   // ten minutes ignored
+    var spoken: [String] = []
+    d.onSpeakForTest = { spoken.append($0) }
+    for _ in 0..<6 {
+        d.nextGrumbleAt = Date().addingTimeInterval(-1)     // due now
+        d.grumble()
+    }
+    print("he grumbles, in order:")
+    for (i, l) in spoken.enumerated() { print("  \(i + 1). \(l)") }
+    print("\nand then goes quiet for \(Int(d.nextGrumbleAt.timeIntervalSinceNow / 60))m")
+    // the gates
+    d.noticedYou()
+    d.nextGrumbleAt = Date().addingTimeInterval(-1)
+    d.canInterruptNow = false
+    let before = spoken.count
+    d.grumble()
+    print("while you are typing:      \(spoken.count == before ? "silent (correct)" : "SPOKE — wrong")")
+    d.canInterruptNow = true
+    d.voiceOff = true
+    d.lastInteractionAt = Date().addingTimeInterval(-600)
+    d.nextGrumbleAt = Date().addingTimeInterval(-1)
+    d.grumble()
+    print("while muted:               \(spoken.count == before ? "silent (correct)" : "SPOKE — wrong")")
+    d.voiceOff = false
+    exit(0)
+}
+
 if CommandLine.arguments.count > 1, CommandLine.arguments[1] == "--saycancel" {
     _ = NSApplication.shared
     let m = Mouth()

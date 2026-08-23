@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import time
 import sys
 from typing import Any, Dict, List, Optional
 
@@ -158,6 +159,88 @@ def _relevant_memory(question: str, k: int = 3) -> str:
         return ""
 
 
+LOCAL_MODEL = os.environ.get("MEDITATE_LOCAL_MODEL",
+                             "qwen3:4b-instruct-2507-q4_K_M")
+LOCAL_URL = "http://127.0.0.1:11434/api/generate"
+
+
+def _local_up(timeout_s: float = 1.0) -> bool:
+    import urllib.request
+    try:
+        urllib.request.urlopen("http://127.0.0.1:11434/api/tags", timeout=timeout_s)
+        return True
+    except Exception:
+        return False
+
+
+def _start_local() -> None:
+    """Bring ollama up. Once."""
+    global _STARTED
+    if _STARTED:
+        return
+    _STARTED = True
+    try:
+        subprocess.Popen(["ollama", "serve"], stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True)
+    except Exception:
+        pass
+
+
+_STARTED = False
+
+
+def ask_local(question: str, facts: str, mem: str = "",
+              model: str = LOCAL_MODEL, timeout_s: float = 25.0):
+    """Answer on THIS machine, streaming.
+
+    `claude -p` is an agent harness, not an inference endpoint: it loads
+    CLAUDE.md, skills, hooks and MCP servers on every question. Measured here
+    at 8.7-10.7s for one sentence, and one run past 300s. Stripping MCP and
+    every tool made no difference.
+
+    A 4B model held warm on this laptop answers the same question with FIRST
+    TOKEN AT 0.18s and the whole sentence in 0.63s — about fifty times faster
+    to first sound, with no key, no network, and without breaking the promise
+    this tool already makes about the microphone.
+
+    Yields text as it arrives, so the caller can start SPEAKING the first
+    sentence while the rest is still being written.
+    """
+    import urllib.request
+    if not _local_up():
+        _start_local()
+        for _ in range(20):
+            if _local_up(0.5):
+                break
+            time.sleep(0.5)
+        else:
+            return None
+    prompt = ("%s\n\nFACTS (the only ground truth you have):\n%s\n%s\n\n"
+              "The user asks: %s" % (SYSTEM, facts, mem, question))
+    body = json.dumps({"model": model, "prompt": prompt, "stream": True,
+                       "keep_alive": "30m",
+                       "options": {"num_predict": 120, "temperature": 0.4}}).encode()
+    req = urllib.request.Request(LOCAL_URL, data=body,
+                                 headers={"Content-Type": "application/json"})
+    out = []
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_s) as r:
+            for line in r:
+                try:
+                    d = json.loads(line)
+                except Exception:
+                    continue
+                piece = d.get("response", "")
+                if piece:
+                    out.append(piece)
+                if d.get("done"):
+                    break
+    except Exception:
+        return None
+    text = "".join(out).strip()
+    return text or None
+
+
 def advise(question: str, timeout_s: int = TIMEOUT_S,
            model: str = MODEL) -> Dict[str, Any]:
     """Reason over the graded facts. Returns {speech, source, ok}."""
@@ -168,6 +251,14 @@ def advise(question: str, timeout_s: int = TIMEOUT_S,
     facts = _facts()
     _say_doing("searching my memory", q[:60])
     mem = _relevant_memory(q)
+
+    # This machine first. It is ~50x faster to first token than the harness,
+    # and it is the only lane that keeps his answers on the laptop.
+    _say_doing("thinking")
+    local = ask_local(q, facts, mem)
+    if local:
+        _say_doing("")
+        return {"speech": local[:700], "source": "local", "ok": True}
     try:
         import address as _addr
         system = SYSTEM.replace("ADDRESS_TERM", _addr.term())

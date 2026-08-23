@@ -1239,6 +1239,17 @@ final class App: NSObject, NSApplicationDelegate {
     var fleetRunning = 0
     var lastStep = ""
     var lastBubbleAt = Date()
+    /// The last time anything happened between the two of you.
+    var lastInteractionAt = Date()
+    /// How many times he has grumbled since you last said something. Resets
+    /// on any interaction, and the lines get less patient as it climbs.
+    var boredomLevel = 0
+    var nextGrumbleAt = Date().addingTimeInterval(240)
+    /// From the timing layer: false while you are actually typing. He is
+    /// bored, not rude.
+    var canInterruptNow = false
+    /// Test seam: --bored captures lines instead of playing them.
+    var onSpeakForTest: ((String) -> Void)?
     var shotMode = false        // rendering the UI for review: no mic, no polling
     var micBtn: NSButton!
     var closeBtn: NSButton!
@@ -1506,7 +1517,10 @@ final class App: NSObject, NSApplicationDelegate {
             self.lastStep = step
             self.setBubble(step + "\u{2026}")
         }
-        Timer.scheduledTimer(withTimeInterval: 6, repeats: true) { _ in self.idleHint() }
+        Timer.scheduledTimer(withTimeInterval: 6, repeats: true) { _ in
+            self.idleHint()
+            self.grumble()
+        }
         Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { _ in
             DispatchQueue.global().async {
                 guard let b = Meditate.briefFromServer() else { return }
@@ -1677,6 +1691,7 @@ final class App: NSObject, NSApplicationDelegate {
     }
 
     func say(_ text: String) {
+        if let t = onSpeakForTest { t(text); setBubble(text); return }
         setBubble(text)
         markDelivered(text)
         if voiceOff {
@@ -1783,6 +1798,7 @@ final class App: NSObject, NSApplicationDelegate {
             guard let b = viaServer ?? Meditate.brief() else { return }
             DispatchQueue.main.async {
                 self.refreshFleetButton(b.fleetRunning)
+                self.canInterruptNow = b.canInterrupt
                 let hasSomething = !b.headline.isEmpty && b.kind != "clear"
                 self.ghost.glow = hasSomething ? 1.0 : 0.25
                 // Quiet mode: he may glow, he may not speak or offer.
@@ -1841,6 +1857,7 @@ final class App: NSObject, NSApplicationDelegate {
     }
 
     @objc func sayYes() {
+        noticedYou()
         if pendingKind == "agenda" {          // "Yes, tell me" — read the list
             pendingKind = ""
             showOffer(false)
@@ -1886,6 +1903,7 @@ final class App: NSObject, NSApplicationDelegate {
     /// toggle you can look at is the difference between talking to him and
     /// performing for him.
     func armForOneTurn() {
+        noticedYou()
         if mouth.speaking { mouth.shutUp(); ear.muted = false; return }
         if armed {
             armed = false
@@ -1922,6 +1940,7 @@ final class App: NSObject, NSApplicationDelegate {
 
     /// One finished utterance. Decide whether it was aimed at him at all.
     func heard(_ raw: String) {
+        noticedYou()
         // One word followed by a pause is not somebody addressing you. The
         // end-of-turn gap is 1.1s, so "Also" counts as a complete utterance
         // unless there is a floor on what a turn even is.
@@ -2084,6 +2103,7 @@ final class App: NSObject, NSApplicationDelegate {
     /// state, so there is never a moment where you can press start on
     /// something already running.
     @objc func toggleFleet() {
+        noticedYou()
         let stopping = fleetRunning > 0
         setBubble(stopping ? "Stopping…" : "Starting the fleet…")
         busy = true
@@ -2331,6 +2351,57 @@ final class App: NSObject, NSApplicationDelegate {
         setBubble(pretty(r.goal) + " — brought its window to the front.")
     }
 
+    /// He gets bored.
+    ///
+    /// Not a feature that does anything — a companion that sits in perfect
+    /// silence for an hour is furniture. Short, funny, and increasingly
+    /// unimpressed the longer you ignore him.
+    ///
+    /// It will NOT fire while you are typing (the timing layer says flow), in
+    /// a meeting, muted, in quiet mode, mid-sentence, or with a question of
+    /// his own on screen. Boredom that interrupts is just noise.
+    func grumble() {
+        guard window != nil, window.isVisible else { return }
+        guard !voiceOff, !quiet, !mouth.speaking, !busy else { return }
+        guard yesBtn.isHidden, !armed else { return }
+        guard canInterruptNow else { return }          // never over your typing
+        guard Date() >= nextGrumbleAt else { return }
+
+        let idle = Date().timeIntervalSince(lastInteractionAt)
+        guard idle > 180 else { return }
+
+        let lines: [[String]] = [
+            ["Hellooo?", "Psst.", "Still here.", "Boop."],
+            ["I'm so bored.", "Anybody?", "Is this thing on?", "La la la."],
+            ["I have counted all the pixels. Twice.",
+             "I could be helping, you know.",
+             "I'm going to start singing soon.",
+             "This is my bored face. You can't tell, can you."],
+        ]
+        let tier = min(boredomLevel, lines.count - 1)
+        // Seed on the COUNT, not just the tier — at the top tier the seed
+        // stopped changing and he said the same sentence forever, which is
+        // the one thing a bored companion must not do.
+        let line = vary(lines[tier], "\(tier)-\(boredomLevel)-\(Int(idle) / 60)")
+        boredomLevel += 1
+
+        // Longer each time, so he never becomes a metronome. 4-7 min, then
+        // 7-12, then 12-20.
+        let base = [240.0, 420.0, 720.0][min(boredomLevel, 2)]
+        nextGrumbleAt = Date().addingTimeInterval(base + Double.random(in: 0...base * 0.6))
+
+        ghost.bounce()
+        if boredomLevel > 2 { ghost.feel(.happy, for: 1.2) }
+        say(line)
+    }
+
+    /// Anything passing between you resets his patience.
+    func noticedYou() {
+        lastInteractionAt = Date()
+        boredomLevel = 0
+        nextGrumbleAt = Date().addingTimeInterval(240)
+    }
+
     @objc func toggleVisible() {
         guard window != nil else { return }
         if window.isVisible {
@@ -2480,6 +2551,7 @@ final class App: NSObject, NSApplicationDelegate {
     }
 
     @objc func sayNo() {
+        noticedYou()
         pendingKind = ""
         pendingAction = ""
         showOffer(false)
@@ -2488,6 +2560,7 @@ final class App: NSObject, NSApplicationDelegate {
 
     /// Type a question; Casper reasons over the graded facts and answers.
     @objc func askSomething() {
+        noticedYou()
         let alert = NSAlert()
         alert.messageText = "Ask Casper"
         alert.informativeText = "He answers from what he actually knows about your work."
