@@ -282,7 +282,7 @@ if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--shot" {
     // real rows, so the review frame shows the real thing
     d.layoutFleet(Meditate.fleet().map {
         FleetView.Row(goal: d.pretty($0.goal), ticked: $0.ticked,
-                      mins: $0.mins, window: $0.window)
+                      mins: $0.mins, window: $0.window, alive: $0.alive)
     })
     for _ in 0..<120 { d.ghost.tick(dt: 1.0 / 60) }
     guard let root = d.window.contentView,

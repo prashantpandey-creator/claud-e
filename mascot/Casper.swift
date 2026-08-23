@@ -114,12 +114,12 @@ final class Meditate {
     }
 
     /// What the agents you started are doing. Same server, same trail.
-    static func fleet() -> [(goal: String, ticked: Bool, mins: Int, window: String)] {
+    static func fleet() -> [(goal: String, ticked: Bool, mins: Int, window: String, alive: Bool)] {
         guard let url = URL(string: "http://127.0.0.1:7711/api/state") else { return [] }
         var req = URLRequest(url: url)
         req.setValue("1", forHTTPHeaderField: "X-Meditate")
         req.timeoutInterval = 6
-        var out: [(String, Bool, Int, String)] = []
+        var out: [(String, Bool, Int, String, Bool)] = []
         let sem = DispatchSemaphore(value: 0)
         URLSession.shared.dataTask(with: req) { data, _, _ in
             defer { sem.signal() }
@@ -130,7 +130,8 @@ final class Meditate {
                 ((r["goal"] as? String) ?? "?",
                  (r["milestone_ticked"] as? Bool) ?? false,
                  (r["dispatched_min"] as? Int) ?? 0,
-                 (r["window_id"] as? String) ?? "")
+                 (r["window_id"] as? String) ?? "",
+                 (r["alive"] as? Bool) ?? false)
             }
         }.resume()
         _ = sem.wait(timeout: .now() + 8)
@@ -1118,7 +1119,8 @@ final class Hotkey {
 /// Clicking a row brings that agent's Terminal window to the front, because
 /// the next thing you want after "what did I launch" is "show me".
 final class FleetView: NSView {
-    struct Row { let goal: String; let ticked: Bool; let mins: Int; let window: String }
+    struct Row { let goal: String; let ticked: Bool; let mins: Int
+                 let window: String; let alive: Bool }
     var rows: [Row] = [] { didSet { needsDisplay = true } }
     var onPick: ((Row) -> Void)?
     static let rowH: CGFloat = 17
@@ -1149,11 +1151,16 @@ final class FleetView: NSView {
             let y = 3 + CGFloat(i) * FleetView.rowH
 
             // the dot IS the state, so the row reads before it is read
+            // Liveness comes from the PROCESS now. The dot used to be gold
+            // whenever a window id existed, so an agent that had finished
+            // hours ago still read "working" forever, while the button beside
+            // it — which asked running_agents() — said there was nothing to
+            // stop. Two surfaces, two answers, one of them always wrong.
             let colour: NSColor = r.ticked
                 ? NSColor(srgbRed: 0.29, green: 0.70, blue: 0.38, alpha: 1)   // done
-                : r.window.isEmpty
-                    ? NSColor(srgbRed: 0.55, green: 0.55, blue: 0.58, alpha: 1) // untracked
-                    : NSColor(srgbRed: 0.93, green: 0.72, blue: 0.24, alpha: 1) // working
+                : r.alive
+                    ? NSColor(srgbRed: 0.93, green: 0.72, blue: 0.24, alpha: 1) // working
+                    : NSColor(srgbRed: 0.52, green: 0.52, blue: 0.56, alpha: 1) // gone
             colour.setFill()
             NSBezierPath(ovalIn: NSRect(x: 2, y: y + 5, width: 6, height: 6)).fill()
 
@@ -1796,10 +1803,41 @@ final class App: NSObject, NSApplicationDelegate {
                 let offer = b.action.isEmpty ? "" :
                     "  Want me to \(b.action.contains("fix") ? "fix it" : "get someone on it")?"
                 if !b.action.isEmpty { self.pendingKind = "run" }
+                // Stamp the HEADLINE, which is what alreadyDelivered() checks.
+                // say() stamped "headline + offer", so the check never matched
+                // and every actionable briefing was "never said" — press Not
+                // now and the identical question returned 20 seconds later,
+                // forever.
+                self.markDelivered(b.headline)
                 self.say(b.headline + offer)
+                // ...and label the button for THIS question. check() was the
+                // only offer site that never styled it, so Yes kept whatever
+                // the last offer wrote — a dispatch question under a button
+                // reading "Stop tracking".
+                self.style(self.yesBtn,
+                           title: b.action.contains("fix") ? "Yes, fix it" : "Yes",
+                           accent: true)
                 self.showOffer(!b.action.isEmpty)
             }
         }
+    }
+
+    /// Did that command actually DO anything?
+    ///
+    /// The old test was `contains("error") || contains("nothing to run")`.
+    /// go.py's "Nothing to move", fleet.py's "nothing to clear", brain's
+    /// 25-second timeout string and a dead server's "Couldn't reach" all
+    /// passed it — so he played the celebration, read the failure aloud as
+    /// good news, and wiped what he knew about the fleet.
+    static func didNothing(_ line: String) -> Bool {
+        let l = line.lowercased()
+        for phrase in ["error", "nothing to run", "nothing to move",
+                       "nothing to clear", "nothing of mine", "still running after",
+                       "couldn't reach", "could not", "failed", "no goals",
+                       "cannot", "unavailable"] where l.contains(phrase) {
+            return true
+        }
+        return false
     }
 
     @objc func sayYes() {
@@ -1820,8 +1858,7 @@ final class App: NSObject, NSApplicationDelegate {
             DispatchQueue.main.async {
                 // The one unprompted celebration he gets: a job you asked for,
                 // finished. Tying it to anything cheaper makes it worthless.
-                let failed = first.lowercased().contains("error")
-                    || first.lowercased().contains("nothing to run")
+                let failed = App.didNothing(first)
                 if !failed { self.ghost.celebrate() }
                 self.say(first)
                 // The voice gets the summary; the bubble keeps the detail —
@@ -2324,7 +2361,7 @@ final class App: NSObject, NSApplicationDelegate {
                 // changed, and even when there is nothing else to say.
                 self.layoutFleet(rows.map {
                     FleetView.Row(goal: self.pretty($0.goal), ticked: $0.ticked,
-                                  mins: $0.mins, window: $0.window)
+                                  mins: $0.mins, window: $0.window, alive: $0.alive)
                 })
             }
             guard !rows.isEmpty else { return }
@@ -2341,7 +2378,12 @@ final class App: NSObject, NSApplicationDelegate {
                     // job and return — no button, no way to say yes. Telling
                     // someone a thing is done and asking whether to clear the
                     // board, with nothing to press, is worse than not asking.
-                    if !self.quiet {
+                    //
+                    // Never while another question is unanswered: check() has
+                    // guarded this for a while, watchFleet did not, so a job
+                    // landing on the next 20s tick silently rewrote what Yes
+                    // meant under a dispatch question already on screen.
+                    if !self.quiet, self.pendingKind.isEmpty, self.yesBtn.isHidden {
                         self.pendingAction = "clear"       // every finished row
                         self.pendingKind = "run"
                         self.style(self.yesBtn,
@@ -2366,7 +2408,9 @@ final class App: NSObject, NSApplicationDelegate {
                 // seconds — which is how a helpful nudge becomes nagging.
                 let slow = rows.filter { !$0.ticked && $0.mins >= App.stallMinutes }
                 let fresh = slow.filter { !self.fleetToldStalled.contains($0.goal) }
-                guard !fresh.isEmpty, !self.quiet else { return }
+                // Same rule as above: do not re-aim a live question.
+                guard !fresh.isEmpty, !self.quiet,
+                      self.pendingKind.isEmpty, self.yesBtn.isHidden else { return }
                 fresh.forEach { self.fleetToldStalled.insert($0.goal) }
 
                 let longest = slow.max(by: { $0.mins < $1.mins })!
