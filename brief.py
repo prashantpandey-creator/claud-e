@@ -41,6 +41,10 @@ def _quote(s: str, n: int = 58) -> str:
     return (s[: n - 1] + "…") if len(s) > n else s
 
 
+def _close(line: str, addr) -> str:
+    return addr.close(line) if addr else line
+
+
 def compose(state: Dict[str, Any]) -> List[str]:
     """state -> a few short sentences. Pure function, so tests can feed
     worlds and read exactly what would be said."""
@@ -127,17 +131,23 @@ def compose(state: Dict[str, Any]) -> List[str]:
         if pct >= 99:
             out.append("Everything I know still checks out.")
 
-    # 4. one suggestion, never a menu
+    # 4. one suggestion, never a menu — and the one place he uses your name.
+    # Every sentence would be grovelling; once, where he hands the decision
+    # back, is a person talking.
+    try:
+        import address as _addr
+    except Exception:
+        _addr = None
     if replies:
-        out.append("I'd answer the waiting chats first.")
+        out.append(_close("I'd answer the waiting chats first.", _addr))
     elif broken:
-        out.append("I'd let the repair pass run.")
+        out.append(_close("I'd let the repair pass run.", _addr))
     else:
         nxt = (state.get("next") or "").split("(")[0].strip()
         if nxt and "nothing owed" not in nxt:
-            out.append("Next when you're ready: %s." % nxt)
+            out.append(_close("Next when you're ready: %s." % nxt, _addr))
         else:
-            out.append("Nothing needs you right now.")
+            out.append(_close("Nothing needs you right now.", _addr))
     return out
 
 

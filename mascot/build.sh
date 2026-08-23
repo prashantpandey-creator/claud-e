@@ -13,10 +13,25 @@ cd "$(dirname "$0")"
 APP="Casper.app"
 BIN="$APP/Contents/MacOS/casper"
 
-rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+# Build somewhere else and SWAP it in, under a lock.
+#
+# This script used to open with `rm -rf Casper.app`, so for the whole length of
+# a build the app did not exist. With more than one session working here that
+# window is not theoretical: launches failed with "no such file or directory",
+# a running Casper had its bundle deleted underneath it, and the resulting
+# "app exits immediately with no crash report" cost a long time to chase —
+# it was never the app, it was the other build.
+LOCK="/tmp/meditate-casper-build.lock"
+for _ in $(seq 1 120); do
+    if mkdir "$LOCK" 2>/dev/null; then break; fi
+    sleep 1
+done
+trap 'rmdir "$LOCK" 2>/dev/null || true; rm -rf "$STAGE" 2>/dev/null || true' EXIT
 
-cat > "$APP/Contents/Info.plist" <<'PLIST'
+STAGE="$(mktemp -d "${TMPDIR:-/tmp}/casper-build.XXXXXX")/Casper.app"
+mkdir -p "$STAGE/Contents/MacOS" "$STAGE/Contents/Resources"
+
+cat > "$STAGE/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -35,14 +50,23 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>NSMicrophoneUsageDescription</key>
   <string>Casper listens so you can talk to him instead of typing. Audio is
   recognised on this Mac and never leaves it.</string>
+  <!-- Casper shells out to its own python helpers, and some of those ask the
+       system which app is in front (to know whether you are mid-meeting) or
+       post a notice. Those are Apple Events, and macOS attributes them to
+       CASPER. Without this string TCC does not deny the event — it KILLS the
+       app: __TCC_CRASHING_DUE_TO_PRIVACY_VIOLATION__ at launch, no stderr,
+       exits before it can draw. -->
+  <key>NSAppleEventsUsageDescription</key>
+  <string>Casper checks which app is in front, so it stays quiet while you are
+  in a meeting, and opens your dashboard when you ask.</string>
   <key>NSSpeechRecognitionUsageDescription</key>
   <string>Casper turns what you say into text on this Mac, on-device, so he can
   answer questions about your own work.</string>
 </dict>
 PLIST
-echo '</plist>' >> "$APP/Contents/Info.plist"
+echo '</plist>' >> "$STAGE/Contents/Info.plist"
 
-swiftc -O -o "$BIN" main.swift Casper.swift Voice.swift \
+swiftc -O -o "$STAGE/Contents/MacOS/casper" main.swift Casper.swift Voice.swift \
     -framework Cocoa -framework AVFoundation -framework Speech
 
 # Sign with a REAL identity when the machine has one.
@@ -59,14 +83,21 @@ if [ -z "$SIGN_ID" ]; then
 fi
 if [ -n "$SIGN_ID" ]; then
   codesign --force --sign "$SIGN_ID" --identifier com.meditate.casper \
-           --options runtime --entitlements Casper.entitlements "$APP" \
+           --options runtime --entitlements Casper.entitlements "$STAGE" \
     && echo "signed as: $SIGN_ID"
 else
   echo "no developer certificate — signing ad-hoc (macOS will re-ask for the"
   echo "microphone after every rebuild; that is the cost of no identity)"
   codesign --force --sign - --identifier com.meditate.casper \
-           --options runtime --entitlements Casper.entitlements "$APP"
+           --options runtime --entitlements Casper.entitlements "$STAGE"
 fi
+
+# The swap: the old bundle only disappears once the new one is ready, and the
+# gap is a rename rather than a compile.
+OLD="$(mktemp -d "${TMPDIR:-/tmp}/casper-old.XXXXXX")"
+[ -d "$APP" ] && mv "$APP" "$OLD/" 2>/dev/null || true
+mv "$STAGE" "$APP"
+rm -rf "$OLD" 2>/dev/null || true
 
 # TCC binds its decision to a bundle's code signature. Changing the signing
 # identity (ad-hoc -> a developer certificate, say) leaves a STALE record, and
@@ -76,7 +107,11 @@ fi
 # before that was clear. If the signature changed since the last build, clear
 # the decisions so the next launch re-reads the plist instead of dying.
 SIGFILE="$APP/../.last-signature"
-NOWSIG=$(codesign -dvvv "$APP" 2>&1 | awk -F= '/^Authority=/{print $2; exit}')
+# `set -e` is on: codesign returns non-zero on a bundle it cannot read, which
+# is exactly the state this line runs in on a first build. Never let a probe
+# abort the build it is only observing.
+NOWSIG=$( (codesign -dvvv "$APP" 2>&1 || true) | awk -F= '/^Authority=/{print $2; exit}' )
+NOWSIG="${NOWSIG:-unsigned}"
 if [ -f "$SIGFILE" ] && [ "$(cat "$SIGFILE")" != "$NOWSIG" ]; then
   echo "signing identity changed — clearing stale privacy decisions"
   tccutil reset SpeechRecognition com.meditate.casper >/dev/null 2>&1 || true

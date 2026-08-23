@@ -59,7 +59,9 @@ SYSTEM = (
     "still missing' beats 'repair_items=23'. If a number IS the point, say it "
     "in words a person would speak.\n"
     "6. If they're asking about something stalled, say what is actually "
-    "blocking it — not that it is stalled. They can see that."
+    "blocking it — not that it is stalled. They can see that.\n"
+    "7. Address them as ADDRESS_TERM, at most ONCE, and only where you hand "
+    "the decision back. Every sentence is grovelling; once is a person."
 )
 
 
@@ -143,8 +145,13 @@ def advise(question: str, timeout_s: int = TIMEOUT_S,
     facts = _facts()
     _say_doing("searching my memory", q[:60])
     mem = _relevant_memory(q)
+    try:
+        import address as _addr
+        system = SYSTEM.replace("ADDRESS_TERM", _addr.term())
+    except Exception:
+        system = SYSTEM.replace("ADDRESS_TERM", "sir")
     prompt = ("%s\n\nFACTS (the only ground truth you have):\n%s\n%s\n\n"
-              "The user asks: %s" % (SYSTEM, facts, mem, q))
+              "The user asks: %s" % (system, facts, mem, q))
     _say_doing("thinking it through")
     try:
         r = subprocess.run(["claude", "-p", "--model", model],

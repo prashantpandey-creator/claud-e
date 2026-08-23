@@ -13,6 +13,7 @@ import Cocoa
 import AVFoundation
 import Speech
 import UserNotifications
+import Carbon.HIToolbox
 
 // MARK: - talking to meditate (the same commands the terminal runs)
 
@@ -222,7 +223,10 @@ func soundsLikeHisName(_ token: String) -> Bool {
     if t.contains("asper") || t.contains("aspar") || t.contains("caspe") {
         return true
     }
-    return editDistance(t, "casper") <= 2
+    // ONE edit, not two. At two, "faster" is his name — measured: "faster
+    // please" woke him up. The substring rules above already cover the
+    // mishearings that actually happen, and they are specific.
+    return editDistance(t, "casper") <= 1
 }
 
 func addressedQuestion(_ raw: String, armed: Bool) -> String? {
@@ -1044,6 +1048,63 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     }
 }
 
+
+// MARK: - a key that reaches him from anywhere
+
+/// One key combination, live in every app, that turns Casper on and points him
+/// at you.
+///
+/// The fn key was the ask, and fn is the one key this cannot be: it is a raw
+/// modifier, so catching a double-tap means a system-wide keyboard monitor,
+/// which means Accessibility permission and Casper reading every keystroke you
+/// make. For a tool whose whole promise is that your work stays on your
+/// machine, that is the wrong trade for a shortcut. A registered hot key
+/// reaches him just as fast and the system only ever hands over this one combo.
+///
+/// The combos are tried in order and the FIRST FREE one wins — registration
+/// fails outright when something else already owns it, so a silent clash with
+/// Spotlight or a launcher is not possible.
+final class Hotkey {
+    static let shared = Hotkey()
+    var onFire: (() -> Void)?
+    private(set) var describe = "none"
+    /// How many times the system has actually handed us the key. Without this
+    /// there is no way to tell "the handler never ran" from "it ran and the
+    /// action did nothing", and those need opposite fixes.
+    fileprivate(set) var fires = 0
+    private var ref: EventHotKeyRef?
+
+    private static let candidates: [(String, UInt32, UInt32)] = [
+        ("\u{2325}Space", UInt32(kVK_Space), UInt32(optionKey)),
+        ("\u{2303}\u{2325}Space", UInt32(kVK_Space), UInt32(optionKey | controlKey)),
+        ("\u{2303}\u{2325}C", UInt32(kVK_ANSI_C), UInt32(optionKey | controlKey)),
+    ]
+
+    func install() {
+        var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
+                                 eventKind: UInt32(kEventHotKeyPressed))
+        InstallEventHandler(GetApplicationEventTarget(), { _, _, _ -> OSStatus in
+            DispatchQueue.main.async {
+                Hotkey.shared.fires += 1
+                Hotkey.shared.onFire?()
+            }
+            return noErr
+        }, 1, &spec, nil, nil)
+
+        for (label, key, mods) in Hotkey.candidates {
+            var id = EventHotKeyID(signature: OSType(0x43535052), id: 1)  // 'CSPR'
+            var r: EventHotKeyRef?
+            if RegisterEventHotKey(key, mods, id, GetApplicationEventTarget(),
+                                   0, &r) == noErr, r != nil {
+                ref = r
+                describe = label
+                return
+            }
+            _ = id
+        }
+    }
+}
+
 // MARK: - the window
 
 final class CasperWindow: NSWindow {
@@ -1219,6 +1280,8 @@ final class App: NSObject, NSApplicationDelegate {
             ghost.materialize()
         }
 
+        Hotkey.shared.onFire = { [weak self] in self?.summoned() }
+        Hotkey.shared.install()
         Notifier.shared.start()
         window.makeKeyAndOrderFront(nil)
         NSApp.setActivationPolicy(.accessory)       // menubar-less companion
@@ -1786,6 +1849,7 @@ final class App: NSObject, NSApplicationDelegate {
             }.joined(separator: ",")
         parts.append("btns=" + vis)
         parts.append("root=" + String(Int(window.contentView?.bounds.height ?? 0)))
+        parts.append("hotkey=" + Hotkey.shared.describe + ":" + String(Hotkey.shared.fires))
         parts.append("said=" + String(bubble.stringValue.prefix(70)))
         let line: String = parts.joined(separator: "  ")
         try? line.write(toFile: "/tmp/casper-status.txt", atomically: true,
@@ -1893,6 +1957,15 @@ final class App: NSObject, NSApplicationDelegate {
 
     /// The dashboard is the place you decide what is next. Reaching it should
     /// not require remembering a port number.
+    /// The hot key was pressed. Come forward, and start listening — pressing
+    /// it again while listening stops, so one key is the whole conversation.
+    func summoned() {
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+        ghost.bounce()
+        armForOneTurn()
+    }
+
     @objc func openDashboard() {
         if let u = URL(string: Notifier.dashboard) { NSWorkspace.shared.open(u) }
     }
