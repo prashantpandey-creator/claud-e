@@ -92,11 +92,12 @@ case "${1:-}" in
     # fallback listed six verbs that no longer existed.
     # A few organs were renamed over time; keep the old names working.
     case "$1" in
-      grade)   shift; exec python3 "$DIR/nidra_bridge.py" --sleep "$@" ;;
-      distill) shift; exec python3 "$DIR/formation.py" "$@" ;;
-      drift)   shift; exec python3 "$DIR/coordination.py" drift "$@" ;;
-      who)     shift; exec python3 "$DIR/coordination.py" who "$@" ;;
-      where)   shift; exec python3 "$DIR/paths.py" "$@" ;;
+      grade)    shift; exec python3 "$DIR/nidra_bridge.py" --sleep "$@" ;;
+      distill)  shift; exec python3 "$DIR/formation.py" "$@" ;;
+      drift)    shift; exec python3 "$DIR/coordination.py" drift "$@" ;;
+      who)      shift; exec python3 "$DIR/coordination.py" who "$@" ;;
+      where)    shift; exec python3 "$DIR/paths.py" "$@" ;;
+      progress) shift; exec python3 "$DIR/beacon.py" "$@" ;;
     esac
     if [ -f "$DIR/$1.py" ]; then
       cmd="$1"; shift
