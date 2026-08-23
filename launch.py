@@ -38,7 +38,10 @@ def find_session_cwd(short_session_id: str) -> str:
                         return o["cwd"]
         except OSError:
             continue
-    print(f"  ⚠️  no cwd found for session {short_session_id}, falling back to {FALLBACK_CWD}")
+    # stderr, not stdout: this is diagnostic noise and it was corrupting the
+    # plan output and every --json consumer downstream.
+    print(f"  ⚠️  no cwd found for session {short_session_id}, falling back to "
+          f"{FALLBACK_CWD}", file=sys.stderr)
     return FALLBACK_CWD
 
 

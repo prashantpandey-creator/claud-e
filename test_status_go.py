@@ -316,6 +316,113 @@ def test_launch_report_carries_title_milestone_and_place():
         assert d.get("cwd"), "where it runs is part of the report"
 
 
+def test_continuation_threads_are_DISPATCHABLE_not_pasteable():
+    """The whole point, and the thing that was missing.
+
+    /meditate splits a tangled session into per-thread continuation chats,
+    each carrying a ready kickoff prompt. `go` dispatched goals and the repair
+    queue and had never heard of those chats — two parallel systems that never
+    met, so every split ended in "here is a prompt, paste it somewhere". That
+    is the manual system, wearing an automation costume.
+
+    A live thread with a kickoff is work the fleet can start on its own."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        sess = os.path.join(d, "sessions", "aaa-thing")
+        os.makedirs(sess)
+        with open(os.path.join(sess, "INDEX.md"), "w") as f:
+            f.write("| # | Thread | vrtti | Status | Memory |\n"
+                    "|---|---|---|---|---|\n"
+                    "| 1 | Finish the thing | x | 🟢 live | → **finish.md** |\n"
+                    "| 2 | Already done | x | ✅ settled | — |\n")
+        with open(os.path.join(sess, "finish.md"), "w") as f:
+            f.write("# Finish the thing\n\n## Start a fresh chat with\n\n"
+                    "```\ncd /tmp\n```\n\nDo the remaining work on the thing.\n")
+        got = go.thread_work(os.path.join(d, "sessions"), cwd_for=lambda s: d)
+        assert len(got) == 1, got                      # settled row excluded
+        assert "remaining work" in got[0]["prompt"], got[0]
+        assert got[0]["cwd"], "a thread must carry its own cwd"
+
+
+def test_a_thread_without_a_kickoff_is_not_dispatched():
+    """Half a chat is not work. Dispatching an agent with no instruction
+    burns ~35k boot tokens to accomplish nothing."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        sess = os.path.join(d, "sessions", "bbb-empty")
+        os.makedirs(sess)
+        with open(os.path.join(sess, "INDEX.md"), "w") as f:
+            f.write("| # | Thread | v | Status | Memory |\n|---|---|---|---|---|\n"
+                    "| 1 | No chat here | x | 🟢 live | [[some-memory]] |\n")
+        assert go.thread_work(os.path.join(d, "sessions")) == []
+
+
+def test_the_same_thread_is_not_dispatched_twice():
+    """Without this the heartbeat re-opens the same agent every hour."""
+    import tempfile, json as _j, time as _t
+    with tempfile.TemporaryDirectory() as d:
+        sess = os.path.join(d, "sessions", "ccc-x")
+        os.makedirs(sess)
+        with open(os.path.join(sess, "INDEX.md"), "w") as f:
+            f.write("| # | Thread | v | Status | Memory |\n|---|---|---|---|---|\n"
+                    "| 1 | Do it | x | 🟢 live | → **c.md** |\n")
+        with open(os.path.join(sess, "c.md"), "w") as f:
+            f.write("## Start a fresh chat with\n\ncd /tmp\n\nDo the work.\n")
+        led = os.path.join(d, "dispatch.jsonl")
+        with open(led, "w") as f:
+            f.write(_j.dumps({"name": "thread-ccc-x-c", "ts": _t.time()}) + "\n")
+        got = go.thread_work(os.path.join(d, "sessions"), ledger_path=led,
+                             cwd_for=lambda s: d)
+        assert got == [], "re-dispatched a thread already sent: %s" % got
+
+
+def test_a_thread_whose_cwd_cannot_be_resolved_is_not_dispatched():
+    """Unknown is not a guess — the same rule the grader learned.
+
+    Eight live threads come from July sessions whose transcripts are gone, so
+    find_session_cwd cannot resolve them and falls back to a default. Under
+    automation that means eight agents opening in a directory nobody chose,
+    on threads from a month ago. A thread the tool cannot place is one it must
+    not start."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        sess = os.path.join(d, "sessions", "ffffffff-ghost")
+        os.makedirs(sess)
+        with open(os.path.join(sess, "INDEX.md"), "w") as f:
+            f.write("| # | Thread | v | Status | Memory |\n|---|---|---|---|---|\n"
+                    "| 1 | Old thread | x | 🟢 live | → **g.md** |\n")
+        with open(os.path.join(sess, "g.md"), "w") as f:
+            f.write("## Start a fresh chat with\n\ncd /tmp\n\nDo the old work.\n")
+        got = go.thread_work(os.path.join(d, "sessions"),
+                             ledger_path=os.path.join(d, "l.jsonl"))
+        assert got == [], "dispatched a thread with an unresolvable cwd: %s" % got
+
+
+def test_auto_holds_while_someone_is_at_the_keyboard():
+    """Automation must not start agents into files under a live hand.
+
+    The whole tool exists to stop two writers colliding; an unattended fleet
+    that dispatches while the owner is typing is that collision, scheduled.
+    Idle time comes from attention.py (HIDIdleTime, exact), and if it cannot
+    be read we assume PRESENT — unknown is not away."""
+    assert go.auto_should_run(idle_s=5.0)["run"] is False
+    assert go.auto_should_run(idle_s=None)["run"] is False, "unknown treated as away"
+    assert go.auto_should_run(idle_s=3600.0)["run"] is True
+
+
+def test_auto_caps_the_fleet():
+    """A dispatched agent boots at ~35k tokens before reading its first
+    instruction. Unbounded overnight dispatch is a bill, not momentum."""
+    d = go.auto_should_run(idle_s=3600.0)
+    assert 0 < d["budget"] <= go.AUTO_MAX_AGENTS
+
+
+def test_auto_reports_when_it_holds():
+    """A gate that declines silently reads as 'there was nothing to do'."""
+    d = go.auto_should_run(idle_s=5.0)
+    assert d["why"] and "here" in d["why"].lower(), d
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

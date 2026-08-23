@@ -150,6 +150,109 @@ def _repair_kickoff(meditation_dir: str, store_dir: str = STORE_DIR,
     return {"cwd": os.path.expanduser("~"), "prompt": prompt, "name": name}
 
 
+
+
+# Away = no key or mouse for this long. Below it you catch someone reading,
+# and an agent editing files under a reader's hands is exactly the collision
+# the sangama layer spends its life preventing.
+AUTO_AWAY_AFTER_S = 20 * 60
+AUTO_MAX_AGENTS = 3          # ~35k boot tokens each before any work happens
+
+
+def auto_should_run(idle_s: Optional[float] = None) -> Dict[str, Any]:
+    """Should the heartbeat dispatch right now, and how many agents may it use?
+
+    Deterministic and side-effect free so it can be tested without a Mac, a
+    fleet, or a night. Fails CLOSED: if idle time cannot be read we assume the
+    owner is present. Unknown is not away — the same three-valued rule the
+    grader had to learn, applied to a person.
+    """
+    if idle_s is None:
+        try:
+            import attention
+            idle_s = attention.signals().get("idle_s")
+        except Exception:
+            idle_s = None
+    if idle_s is None:
+        return {"run": False, "budget": 0,
+                "why": "cannot tell whether you are here, so assuming you are"}
+    if idle_s < AUTO_AWAY_AFTER_S:
+        return {"run": False, "budget": 0,
+                "why": "someone is here (idle %d min)" % int(idle_s / 60)}
+    return {"run": True, "budget": AUTO_MAX_AGENTS,
+            "why": "away %d min" % int(idle_s / 60)}
+
+
+def thread_work(sessions_dir: Optional[str] = None,
+                ledger_path: Optional[str] = None,
+                cwd_for: Optional[Callable[[str], str]] = None) -> List[Dict[str, str]]:
+    """Live continuation threads the fleet can start on its own.
+
+    /meditate splits a tangled session into per-thread chats, each carrying a
+    ready kickoff prompt and its own cwd. `go` dispatched goals and the repair
+    queue and had never heard of them — two parallel systems that never met,
+    so every split ended in "here is a prompt, paste it somewhere". That is a
+    manual system wearing an automation costume.
+
+    A live thread WITH a kickoff is work. A live thread without one is half a
+    chat, and dispatching an agent with no instruction burns ~35k boot tokens
+    to accomplish nothing, so it is skipped. Anything already sent (the
+    dispatch ledger) is skipped too, or the heartbeat re-opens the same agent
+    every hour.
+    """
+    import launch as lp
+    base = sessions_dir or lp.MEDITATION_DIR
+    try:
+        threads = lp.find_threads(base)
+    except Exception:
+        return []
+    sent = set()
+    led = ledger_path
+    if led is None:
+        try:
+            import drive as dv
+            led = dv.LEDGER_PATH
+        except Exception:
+            led = None
+    if led and os.path.exists(led):
+        try:
+            with open(led) as fh:
+                for line in fh:
+                    try:
+                        sent.add(json.loads(line).get("name"))
+                    except ValueError:
+                        continue
+        except OSError:
+            pass
+    out = []
+    for th in threads:
+        if th.get("status") != "live" or not th.get("kickoff"):
+            continue
+        stem = os.path.splitext(os.path.basename(th.get("path") or ""))[0]
+        name = ("thread-%s-%s" % (th.get("session", ""), stem))[:60]
+        if name in sent:
+            continue
+        sent.add(name)          # two INDEX rows may name the same chat file;
+                                # dispatching it twice is two agents on one job
+        # Unknown cwd is not a guess. Eight live threads come from July
+        # sessions whose transcripts are gone, so find_session_cwd falls back
+        # to a default — under automation that is eight agents opening in a
+        # directory nobody chose, on month-old threads. A thread the tool
+        # cannot place is one it must not start.
+        resolve = cwd_for or lp.find_session_cwd
+        try:
+            cwd = resolve(str(th.get("session", "")).split("-")[0])
+        except Exception:
+            continue
+        if not cwd or os.path.realpath(cwd) == os.path.realpath(lp.FALLBACK_CWD):
+            continue
+        if not os.path.isdir(cwd):
+            continue
+        out.append({"name": name, "title": th.get("thread", "")[:70],
+                    "cwd": cwd, "prompt": th["kickoff"]})
+    return out
+
+
 def run(n: Optional[int] = None, repair_only: bool = False,
         only_goal: Optional[str] = None, repair_select: Optional[str] = None,
         meditation_dir: str = MEDITATION_DIR, store_dir: str = STORE_DIR,
@@ -177,6 +280,10 @@ def run(n: Optional[int] = None, repair_only: bool = False,
     if repair:
         would.append("repair: " + os.path.join(meditation_dir, "repair-queue.md"))
     would += ["goal: %s -> %s" % (g["name"], g["next"]) for g in cands]
+    # Threads belong in the plan, not only in the launch loop: `go 0` is the
+    # dry run, and a dry run that omits half the work is a lie about the plan.
+    _threads = thread_work() if not only_goal else []
+    would += ["thread: %s" % th["title"] for th in _threads]
 
     result: Dict[str, Any] = {"would": would, "repair_launched": False,
                               "goals_launched": 0, "sent": [], "errors": [],
@@ -206,6 +313,7 @@ def run(n: Optional[int] = None, repair_only: bool = False,
             # Terminal) hid a real break for commits behind "0 launched".
             result["errors"].append("repair launch failed: %s" % e)
 
+    taken: Dict[str, str] = {}
     if repair_only:
         budget = 0
     if budget > 0:
@@ -226,7 +334,6 @@ def run(n: Optional[int] = None, repair_only: bool = False,
         #
         # Different repos still run in parallel; the same repo queues. The
         # deferred ones are named, never silently dropped.
-        taken: Dict[str, str] = {}
         # dispatchable rows carry the slug, not the human title — without this
         # join the launch report reads "goal-production-stable" instead of
         # "Production stable", which is exactly the report nobody can use.
@@ -287,6 +394,50 @@ def run(n: Optional[int] = None, repair_only: bool = False,
                                         }) + "\n")
             except OSError:
                 pass
+            budget -= 1
+
+    # ---- continuation threads --------------------------------------------
+    # The split writes per-thread chats with a ready kickoff and its own cwd.
+    # Without this loop each one ended as "here is a prompt, paste it" — a
+    # manual system wearing an automation costume. One agent per working
+    # directory still holds, so a thread whose cwd is already taken waits.
+    if budget > 0:
+        for th in _threads:
+            if budget <= 0:
+                break
+            here = os.path.abspath(th["cwd"])
+            if here in taken:
+                result.setdefault("deferred", []).append(
+                    {"goal": th["title"], "waiting_on": taken[here],
+                     "cwd": th["cwd"],
+                     "why": "another agent is already working in this repo"})
+                continue
+            taken[here] = th["name"]
+            ok = False
+            try:
+                ok = bool(launcher(th["cwd"], th["prompt"], th["name"][:40]))
+            except Exception as e:
+                result["errors"].append("launch %s failed: %s" % (th["name"], e))
+            if not ok:
+                continue
+            result["threads_launched"] = result.get("threads_launched", 0) + 1
+            result["sent"].append(th["name"])
+            result.setdefault("launched", []).append(
+                {"kind": "thread", "title": th["title"],
+                 "doing": "the next step of a split thread", "cwd": th["cwd"]})
+            budget -= 1
+            try:
+                os.makedirs(os.path.dirname(lp), exist_ok=True)
+                with open(lp, "a") as f:
+                    f.write(json.dumps({"name": th["name"], "kind": "thread",
+                                        "ts_epoch": time.time(),
+                                        "ts": time.strftime("%Y-%m-%dT%H:%M:%S+00:00",
+                                                            time.gmtime()),
+                                        "window_id": getattr(launcher,
+                                                             "last_window_id", ""),
+                                        }) + "\n")
+            except OSError:
+                pass
     return result
 
 
@@ -294,12 +445,33 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(prog="meditate go", description="Move everything forward")
     ap.add_argument("sel", nargs="?", default=None,
                     help="cap (int), goal name, or repair item # / mem_id")
+    ap.add_argument("--auto", action="store_true",
+                    help="heartbeat mode: dispatch ONLY while the owner is away")
     ap.add_argument("--repair-only", action="store_true",
                     help="only the repair agent (this is `meditate fix`)")
     ap.add_argument("--list", action="store_true",
                     help="with --repair-only: numbered repair items")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
+
+    if args.auto:
+        # The heartbeat's entry point. Everything unattended in this tool was
+        # read-only — grade, archive, dashboard, voice — so nothing ever ACTED
+        # on its own, and every split ended as a prompt for a human to paste.
+        # This is the connection: gated on absence, capped, and honest when it
+        # declines, because a gate that holds silently reads as "there was
+        # nothing to do".
+        gate = auto_should_run()
+        if not gate["run"]:
+            print("holding — %s" % gate["why"])
+            return 0
+        res = run(n=gate["budget"])
+        launched = (res.get("goals_launched", 0) + res.get("threads_launched", 0)
+                    + (1 if res.get("repair_launched") else 0))
+        print("dispatched %d (%s)" % (launched, gate["why"]))
+        for row in res.get("launched", []):
+            print("  %-7s %s" % (row.get("kind", ""), row.get("title", "")[:64]))
+        return 0
 
     if args.repair_only and args.list:
         items = repair_items()

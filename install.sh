@@ -269,7 +269,16 @@ cmd = "{ " + "; ".join('python3 "%s/%s" %s' % (skill, s, a) for s, a in
                        # needing judgement is left alone and reported.
                        [("repair.py", "--apply"),
                         ("nidra_bridge.py", "--sleep"), ("archive.py", "--apply"),
-                        ("dashboard.py", ""), ("voice.py", "--notify --quiet")]
+                        ("dashboard.py", ""),
+                        # The only stage that ACTS. Every other one here is
+                        # read-only, so nothing this tool did unattended ever
+                        # moved work forward — a split ended as a prompt for
+                        # someone to paste, and the goals and the continuation
+                        # threads were two systems that never met. `go --auto`
+                        # holds while the owner is at the keyboard, caps the
+                        # fleet, and says so when it declines.
+                        ("go.py", "--auto"),
+                        ("voice.py", "--notify --quiet")]
                        ) + '; } >> "%s" 2>&1' % log
 # Keep any interval cadence.py already tuned. Hardcoding the default here
 # meant every re-install silently reset the live heartbeat from a tuned 3600s
