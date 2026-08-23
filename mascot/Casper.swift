@@ -1149,9 +1149,11 @@ final class App: NSObject, NSApplicationDelegate {
     static let introducedKey = "casper.introduced"
     var fleetRunning = 0
     var lastStep = ""
+    var lastBubbleAt = Date()
     var shotMode = false        // rendering the UI for review: no mic, no polling
     var micBtn: NSButton!
     var closeBtn: NSButton!
+    var statusItem: NSStatusItem!
     let mouth = Mouth()
     let ear = Ear()
     var armed = false          // click him = one turn without his name
@@ -1279,7 +1281,7 @@ final class App: NSObject, NSApplicationDelegate {
         closeBtn.attributedTitle = NSAttributedString(string: "\u{00D7}", attributes: [
             .foregroundColor: NSColor(calibratedWhite: 0.85, alpha: 1),
             .font: NSFont.systemFont(ofSize: 12, weight: .medium)])
-        closeBtn.toolTip = "Close Casper (meditate casper brings him back)"
+        closeBtn.toolTip = "Hide Casper — the ghost in the menu bar brings him back"
         [yesBtn, noBtn, askBtn, micBtn, closeBtn].forEach { root.addSubview($0!) }
         refreshMuteButton()
         showOffer(false)
@@ -1304,7 +1306,12 @@ final class App: NSObject, NSApplicationDelegate {
         Hotkey.shared.install()
         Notifier.shared.start()
         window.makeKeyAndOrderFront(nil)
-        NSApp.setActivationPolicy(.accessory)       // menubar-less companion
+        // Policy FIRST, then the status item. Changing the activation policy
+        // tears down the app's connection to the status bar, so an item made
+        // before this line is created and then silently discarded — the
+        // menu-bar ghost simply never appeared.
+        NSApp.setActivationPolicy(.accessory)       // no Dock icon; lives in the menu bar
+        installMenuBar()
 
         Timer.scheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) { _ in
             // one place decides the mood, so the face never argues with itself
@@ -1404,6 +1411,7 @@ final class App: NSObject, NSApplicationDelegate {
             self.lastStep = step
             self.setBubble(step + "\u{2026}")
         }
+        Timer.scheduledTimer(withTimeInterval: 6, repeats: true) { _ in self.idleHint() }
         Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { _ in
             DispatchQueue.global().async {
                 guard let b = Meditate.briefFromServer() else { return }
@@ -1521,6 +1529,7 @@ final class App: NSObject, NSApplicationDelegate {
     /// An empty bubble is a grey slab taking up half the window. Hide it, and
     /// when there is nothing to say he is just a small ghost on your desktop.
     func setBubble(_ text: String) {
+        lastBubbleAt = Date()
         bubble.stringValue = text
         bubbleBox.isHidden = text.isEmpty
         guard !text.isEmpty else { return }
@@ -1858,6 +1867,9 @@ final class App: NSObject, NSApplicationDelegate {
         // voice is the switch you press to stop him making noise at all.
         parts.append("earMuted=" + (ear.muted ? "yes" : "no"))
         parts.append("voice=" + (voiceOff ? "OFF" : "on"))
+        parts.append("bar=" + (statusItem == nil ? "none"
+                     : (statusItem.button == nil ? "no-button" : "ok")))
+        parts.append("winVisible=" + ((window?.isVisible ?? false) ? "yes" : "no"))
         parts.append(String(format: "taskAge=%.0f", ear.taskAge))
         parts.append("earErr=" + (ear.lastError.isEmpty ? "-"
                      : String(ear.lastError.prefix(48))
@@ -1982,21 +1994,7 @@ final class App: NSObject, NSApplicationDelegate {
     }
 
     func showMenu(_ e: NSEvent) {
-        let m = NSMenu()
-        m.addItem(withTitle: "Open dashboard", action: #selector(openDashboard),
-                  keyEquivalent: "").target = self
-        m.addItem(NSMenuItem.separator())
-        m.addItem(withTitle: "About Casper", action: #selector(showAbout),
-                  keyEquivalent: "").target = self
-        let q = NSMenuItem(title: "Stay quiet (only answer when asked)",
-                           action: #selector(toggleQuiet), keyEquivalent: "")
-        q.target = self
-        q.state = quiet ? .on : .off
-        m.addItem(q)
-        m.addItem(NSMenuItem.separator())
-        m.addItem(withTitle: "Quit Casper", action: #selector(quitCasper),
-                  keyEquivalent: "").target = self
-        NSMenu.popUpContextMenu(m, with: e, for: ghost)
+        NSMenu.popUpContextMenu(buildMenu(), with: e, for: ghost)
     }
 
     /// The dashboard is the place you decide what is next. Reaching it should
@@ -2061,6 +2059,120 @@ final class App: NSObject, NSApplicationDelegate {
         } else {
             setBubble("Back to normal — I'll mention things when they matter.")
         }
+    }
+
+    /// One menu, used by the menu bar and by right-clicking him. Two copies
+    /// would drift, and the bar's copy is the one that has to work when he is
+    /// nowhere on screen.
+    func buildMenu() -> NSMenu {
+        let m = NSMenu()
+        let showing = window != nil && window.isVisible
+        let show = NSMenuItem(title: showing ? "Hide Casper" : "Show Casper",
+                              action: #selector(toggleVisible), keyEquivalent: "")
+        show.target = self
+        m.addItem(show)
+        m.addItem(NSMenuItem.separator())
+        m.addItem(withTitle: "Open dashboard", action: #selector(openDashboard),
+                  keyEquivalent: "").target = self
+        m.addItem(withTitle: "About Casper", action: #selector(showAbout),
+                  keyEquivalent: "").target = self
+        m.addItem(NSMenuItem.separator())
+        let mute = NSMenuItem(title: "Mute (no voice, still writes)",
+                              action: #selector(toggleMute), keyEquivalent: "")
+        mute.target = self; mute.state = voiceOff ? .on : .off
+        m.addItem(mute)
+        let q = NSMenuItem(title: "Stay quiet (only answer when asked)",
+                           action: #selector(toggleQuiet), keyEquivalent: "")
+        q.target = self; q.state = quiet ? .on : .off
+        m.addItem(q)
+        m.addItem(NSMenuItem.separator())
+        m.addItem(withTitle: "Quit Casper", action: #selector(quitCasper),
+                  keyEquivalent: "q").target = self
+        return m
+    }
+
+    /// The menu bar is the only thing that survives closing him.
+    ///
+    /// He is LSUIElement, so there is no Dock icon either — closing the window
+    /// used to call NSApp.terminate and the only way back was typing
+    /// `meditate casper` in a terminal. A companion you cannot get back from
+    /// the screen you lost him on is a companion you stop using.
+    func installMenuBar() {
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        if let b = statusItem.button {
+            b.image = App.barIcon()
+            b.image?.isTemplate = true          // follows light/dark menu bars
+            b.toolTip = "Casper"
+        }
+        statusItem.menu = buildMenu()
+    }
+
+    /// His own face, small. Drawn rather than shipped as an asset so it can
+    /// never go missing from the bundle.
+    static func barIcon() -> NSImage {
+        let s = NSSize(width: 16, height: 16)
+        let img = NSImage(size: s)
+        img.lockFocus()
+        let p = NSBezierPath()
+        let w = s.width, h = s.height
+        p.move(to: NSPoint(x: 1.5, y: 2))
+        p.curve(to: NSPoint(x: w / 2, y: h - 1),
+                controlPoint1: NSPoint(x: 1.5, y: h * 0.75),
+                controlPoint2: NSPoint(x: w * 0.18, y: h - 1))
+        p.curve(to: NSPoint(x: w - 1.5, y: 2),
+                controlPoint1: NSPoint(x: w * 0.82, y: h - 1),
+                controlPoint2: NSPoint(x: w - 1.5, y: h * 0.75))
+        // three little hem lobes, same silhouette as the big one
+        p.curve(to: NSPoint(x: w / 2, y: 2.5),
+                controlPoint1: NSPoint(x: w - 1.5, y: 0.2),
+                controlPoint2: NSPoint(x: w * 0.68, y: 0.2))
+        p.curve(to: NSPoint(x: 1.5, y: 2),
+                controlPoint1: NSPoint(x: w * 0.32, y: 0.2),
+                controlPoint2: NSPoint(x: 1.5, y: 0.2))
+        p.close()
+        NSColor.black.setFill(); p.fill()
+        NSColor.white.setFill()
+        NSBezierPath(ovalIn: NSRect(x: w * 0.32, y: h * 0.52, width: 2.4, height: 3)).fill()
+        NSBezierPath(ovalIn: NSRect(x: w * 0.56, y: h * 0.52, width: 2.4, height: 3)).fill()
+        img.unlockFocus()
+        return img
+    }
+
+    /// When he has nothing to say, say what he is WAITING FOR.
+    ///
+    /// Three ways in already existed — click him, press the hotkey, or say his
+    /// name — and none of them were written anywhere on screen. "It is not
+    /// clear whether it will wait for my command or whether I have to click"
+    /// is the correct reading of a face that shows only the last thing it
+    /// said. An affordance nobody can see is not an affordance.
+    func idleHint() {
+        guard window != nil, window.isVisible else { return }
+        guard !mouth.speaking, !busy, yesBtn.isHidden else { return }
+        guard bubbleIsStale() else { return }
+        if !micEnabled {
+            setBubble("Ask me anything \u{2014} or turn my mic on to just talk.")
+        } else if armed {
+            setBubble("Listening. Say what you like \u{2014} click me to stop.")
+        } else {
+            setBubble("Say \u{201C}Casper\u{2026}\u{201D}, click me, or press "
+                      + Hotkey.shared.describe + " to talk.")
+        }
+    }
+
+    /// True when the bubble has been sitting on the same words long enough
+    /// that it is no longer news.
+    func bubbleIsStale() -> Bool {
+        Date().timeIntervalSince(lastBubbleAt) > 25
+    }
+
+    @objc func toggleVisible() {
+        guard window != nil else { return }
+        if window.isVisible {
+            window.orderOut(nil)
+        } else {
+            window.makeKeyAndOrderFront(nil)
+        }
+        statusItem?.menu = buildMenu()          // the label flips with the state
     }
 
     @objc func quitCasper() { NSApp.terminate(nil) }
@@ -2178,10 +2290,12 @@ final class App: NSObject, NSApplicationDelegate {
         style(yesBtn, title: "Yes, fix it", accent: true)
     }
 
+    /// The X hides him. It used to terminate, which — with no Dock icon and
+    /// no menu bar — meant the only way back was a terminal command.
     @objc func closeCasper() {
-        ear.stop()
         mouth.shutUp()
-        NSApp.terminate(nil)
+        window.orderOut(nil)
+        statusItem?.menu = buildMenu()
     }
 
     @objc func sayNo() {
