@@ -96,9 +96,17 @@ def test_deploy_variants_all_fire():
 
 
 def test_git_variants_all_fire():
+    """That the ship rule FIRES — not what it currently says.
+
+    This used to assert the exact phrase "LOCAL branch". Someone reworded the
+    rule to "commit LOCAL and STOP" and this went red while the hook was
+    working perfectly, which is a test pinning prose instead of behaviour.
+    """
     for cmd in ["git commit -m x", "git push origin main", "GIT PUSH origin main"]:
         _, out, _ = fire(bash(cmd))
-        assert "LOCAL branch" in context_of(out), f"git rule did not fire for: {cmd}"
+        ctx = context_of(out)
+        assert "git commit/push" in ctx, f"git rule did not fire for: {cmd}"
+        assert "push" in ctx.lower(), f"ship rule said nothing about pushing: {cmd}"
 
 
 def _iso_env(tmp):
