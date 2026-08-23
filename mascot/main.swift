@@ -61,8 +61,20 @@ if CommandLine.arguments.count > 1,
              + "Want me to go find where that key dropped?"
     var i = 0
     let m = Mouth()
+    // The audition must not CHANGE anything: it sets each candidate as the
+    // live voice to render the sample, so the prior preference has to be put
+    // back afterwards. Without this, whoever ran the audition last had pinned
+    // its final voice — compact Rishi — as the permanent preference.
+    let prior = UserDefaults.standard.string(forKey: Mouth.preferenceKey)
+    func restore() {
+        if let p = prior {
+            UserDefaults.standard.set(p, forKey: Mouth.preferenceKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: Mouth.preferenceKey)
+        }
+    }
     func next() {
-        guard i < top.count else { exit(0) }
+        guard i < top.count else { restore(); exit(0) }
         let v = top[i]; i += 1
         print("  \(i). \(v.name) (\(v.language)) — \(v.identifier)")
         UserDefaults.standard.set(v.identifier, forKey: Mouth.preferenceKey)

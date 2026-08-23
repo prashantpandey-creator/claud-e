@@ -113,6 +113,15 @@ case "${1:-}" in
     fi
     pkill -f "$DIR/mascot/Casper.app/Contents" 2>/dev/null || true
     pkill -x casper 2>/dev/null || true
+    # The good voice: a loopback server holding the Kokoro model warm. Cold,
+    # every line pays ~4s before the first sound; warm, ~2s. Skipped silently
+    # when the model or python3.10 is absent — Casper falls back to Apple.
+    if ! curl -s -m 1 http://127.0.0.1:7712/ping >/dev/null 2>&1; then
+      if python3.10 "$DIR/tts.py" --check >/dev/null 2>&1; then
+        (nohup python3.10 "$DIR/tts.py" --serve >>"$HOME/.claude/meditation/tts.log" 2>&1 &)
+        echo "  warming his voice (Kokoro, local)…"
+      fi
+    fi
     open "$DIR/mascot/Casper.app"
     echo "Casper is awake — bottom-right of your screen. Drag him anywhere."
     echo "Click him and talk, or say \"Casper, ...\" — he answers from what he"

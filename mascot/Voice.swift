@@ -226,6 +226,58 @@ final class Mouth: NSObject, AVSpeechSynthesizerDelegate {
         synth.delegate = self
     }
 
+    /// Which lane produced the last utterance — "kokoro" or "apple".
+    /// Observable so nobody has to guess whether the good voice is actually
+    /// the one talking.
+    private(set) var lane = "apple"
+
+    /// Ask the warm Kokoro server (tts.py --serve, loopback :7712) to render.
+    /// Returns the samples, or nil in one network timeout when it is down —
+    /// the fallback must be instant, not a stall.
+    private func kokoroRender(_ text: String) -> AVAudioPCMBuffer? {
+        guard let url = URL(string: "http://127.0.0.1:7712/tts") else { return nil }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.timeoutInterval = 12                    // render is ~2s warm
+        req.httpBody = try? JSONSerialization.data(withJSONObject: ["text": text])
+        var wavPath: String?
+        let sem = DispatchSemaphore(value: 0)
+        URLSession.shared.dataTask(with: req) { data, _, _ in
+            defer { sem.signal() }
+            guard let d = data,
+                  let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+                  j["ok"] as? Bool == true,
+                  let p = j["wav"] as? String else { return }
+            wavPath = p
+        }.resume()
+        _ = sem.wait(timeout: .now() + 13)
+        guard let p = wavPath else { return nil }
+        defer { try? FileManager.default.removeItem(atPath: p) }
+        guard let f = try? AVAudioFile(forReading: URL(fileURLWithPath: p)),
+              let buf = AVAudioPCMBuffer(pcmFormat: f.processingFormat,
+                                         frameCapacity: AVAudioFrameCount(f.length)),
+              (try? f.read(into: buf)) != nil, buf.frameLength > 0
+        else { return nil }
+        // Peak-normalise. Kokoro renders quieter than Apple (measured peak
+        // 0.356 vs 0.667 through the same tap), which both drops his volume
+        // when the lane switches and half-closes the mouth animation, since
+        // the mouth reads the amplitude of what is actually playing.
+        if let ch = buf.floatChannelData {
+            let n = Int(buf.frameLength)
+            var peak: Float = 0
+            for c in 0..<Int(buf.format.channelCount) {
+                for i in 0..<n { peak = max(peak, abs(ch[c][i])) }
+            }
+            if peak > 0.01, peak < 0.85 {
+                let g = 0.9 / peak
+                for c in 0..<Int(buf.format.channelCount) {
+                    for i in 0..<n { ch[c][i] *= g }
+                }
+            }
+        }
+        return buf
+    }
+
     /// Speak, one sentence at a time, with a real beat between them.
     ///
     /// Pacing is most of what "soothing" is. Said as one unbroken run, even a
@@ -236,7 +288,24 @@ final class Mouth: NSObject, AVSpeechSynthesizerDelegate {
     func say(_ text: String) {
         let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !clean.isEmpty else { return }
-        renderNext(Mouth.sentences(clean), 0, [])
+        // Kokoro first: rendered off the main thread, whole utterance in one
+        // call (it does its own prosody and pauses — our splicing is for the
+        // Apple lane). Falls back to Apple in one timeout when the server is
+        // down, so he is never mute, just less human for a while.
+        DispatchQueue.global().async { [weak self] in
+            guard let self = self else { return }
+            if let buf = self.kokoroRender(clean) {
+                DispatchQueue.main.async {
+                    self.lane = "kokoro"
+                    self.play([buf])
+                }
+            } else {
+                DispatchQueue.main.async {
+                    self.lane = "apple"
+                    self.renderNext(Mouth.sentences(clean), 0, [])
+                }
+            }
+        }
     }
 
     /// Split on sentence ends, keeping the punctuation — the synthesiser uses

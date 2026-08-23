@@ -1533,6 +1533,7 @@ final class App: NSObject, NSApplicationDelegate {
         parts.append("heard=" + String(ear.heardSoFar.prefix(40)))
         parts.append("speaking=" + (mouth.speaking ? "yes" : "no"))
         parts.append(String(format: "mouth=%.3f", Double(mouth.drive)))
+        parts.append("engine=" + mouth.lane)
         parts.append("armed=" + (armed ? "yes" : "no"))
         parts.append("quiet=" + (quiet ? "on" : "off"))
         parts.append("stop=" + (stopBtn.isHidden ? "hidden" : "shown"))
