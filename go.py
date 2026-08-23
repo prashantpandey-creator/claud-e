@@ -209,10 +209,31 @@ def run(n: Optional[int] = None, repair_only: bool = False,
             kw["goals_dir"] = goals_dir
         if history_path:
             kw["history_path"] = history_path
+        # ONE AGENT PER WORKING DIRECTORY.
+        #
+        # The machine is not the limit: a claude session measured 286 MB and
+        # ~6% CPU here, so six of them is 1.7 GB of 32 GB and a third of one
+        # core. What actually breaks is two agents editing the same checkout —
+        # 8 collisions warned in this workspace's own log, the latest on
+        # launch.py. Sessions also pile into the same place (15 in one project
+        # directory, 20 in home), so "all of them at once" means "all of them
+        # into the same repo".
+        #
+        # Different repos still run in parallel; the same repo queues. The
+        # deferred ones are named, never silently dropped.
+        taken: Dict[str, str] = {}
         for g in cands[:budget]:
             k = gl.kickoff(g["name"], **kw)
             if not k:
                 continue
+            here = os.path.realpath(k["cwd"])
+            if here in taken:
+                result.setdefault("deferred", []).append(
+                    {"goal": g["name"], "waiting_on": taken[here],
+                     "cwd": k["cwd"],
+                     "why": "another agent is already working in this repo"})
+                continue
+            taken[here] = g["name"]
             ok = False
             try:
                 ok = bool(launcher(k["cwd"], k["prompt"], "goal-" + g["name"][:20],

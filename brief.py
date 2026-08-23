@@ -92,6 +92,16 @@ def compose(state: Dict[str, Any]) -> List[str]:
                        % (build["project"], build["commits_recent"],
                           window or 21, talk["project"]))
 
+    # milestones the world already satisfied — the console asking for finished
+    # work is the most corrosive thing it can do
+    ml = state.get("milestones") or {}
+    done_already = ml.get("looks_done") or []
+    if done_already:
+        out.append("%d milestone%s look%s already done — %s."
+                   % (len(done_already), "" if len(done_already) == 1 else "s",
+                      "s" if len(done_already) == 1 else "",
+                      done_already[0].get("evidence", "worth a look")))
+
     # 3. the state of what it knows — one clause, only when it moves
     store = state.get("store") or {}
     # repair arrives as a LIST of failed facts from the console's state and as

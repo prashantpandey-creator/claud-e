@@ -69,28 +69,37 @@ def _drift(store_dir: str) -> Dict[str, Any]:
     caught = repaired = 0
     repair_hours: List[float] = []
     for e in (row for jp in _journals(store_dir) for row in _jsonl(jp)):
-        if e.get("event") != "sleep.regraded":
-            continue
+        event = e.get("event")
         d = e.get("detail", "")
         t = _ts(e.get("ts", ""))
         mid = e.get("id", "?")
-        if "-> unverified" in d:
+        # sleep.py logs a real drift catch as `sleep.demoted` — a plain
+        # `sleep.regraded ... -> unverified` only fires for the corruption
+        # path (sha256 mismatch). Both are catches; both must seed down_at
+        # or a drift repair can never pair with its catch and `repaired`
+        # stays 0 forever no matter how many drifts get fixed.
+        if event == "sleep.demoted":
             caught += 1
             if t:
                 down_at[mid] = t
-        elif "-> machine_checked" in d and mid in down_at:
-            repaired += 1
-            if t:
-                repair_hours.append((t - down_at.pop(mid)) / 3600)
-            else:
-                down_at.pop(mid, None)
+        elif event == "sleep.regraded":
+            if "-> unverified" in d:
+                caught += 1
+                if t:
+                    down_at[mid] = t
+            elif "-> machine_checked" in d and mid in down_at:
+                repaired += 1
+                if t:
+                    repair_hours.append((t - down_at.pop(mid)) / 3600)
+                else:
+                    down_at.pop(mid, None)
 
     open_real = open_ungradeable = 0
     for m in _jsonl(os.path.join(store_dir, "memories.jsonl")):
         if not m.get("active"):
             continue
-        if "drifted" in (m.get("flags") or []):
-            caught += 1                      # flagged at first verify, no event
+        if "drifted" in (m.get("flags") or []) and m.get("id") not in down_at:
+            caught += 1                      # flagged, no journal catch event
         if m.get("epistemic", {}).get("evidence_status") != "unverified":
             continue
         if m.get("evidence"):

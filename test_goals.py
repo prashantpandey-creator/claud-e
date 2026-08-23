@@ -133,6 +133,85 @@ def test_cli_envelope():
         assert k in env
 
 
+# ---- ranking and stall: order by need, not by filename --------------------
+
+def _goalfile(d, name, title, done, total):
+    body = ["---", "name: %s" % name, "title: %s" % title,
+            "project: p", "cwd: /tmp", "status: active", "---", "", "## Milestones"]
+    body += ["- [x] m%d" % i for i in range(done)]
+    body += ["- [ ] m%d" % i for i in range(done, total)]
+    p = os.path.join(d, name + ".md")
+    open(p, "w").write("\n".join(body) + "\n")
+    return p
+
+
+def test_goals_are_ordered_by_need_not_by_filename():
+    """They came back in sorted(os.listdir()) order, which put a 0% goal with
+    payments down beneath three goals that were merely further along."""
+    import tempfile, json, time
+    with tempfile.TemporaryDirectory() as d:
+        gdir = os.path.join(d, "goals"); os.makedirs(gdir)
+        _goalfile(gdir, "aaa-early", "Barely started", 1, 10)   # 10%
+        _goalfile(gdir, "zzz-nearly", "Nearly done", 9, 10)     # 90%
+        rows = gl.scan(goals_dir=gdir, history_path=os.path.join(d, "h.jsonl"))
+        assert [r["name"] for r in rows] == ["zzz-nearly", "aaa-early"], \
+            "closest to done must come first, not alphabetical"
+
+
+def test_a_goal_that_stopped_moving_outranks_one_that_is_further_along():
+    import tempfile, json, time
+    with tempfile.TemporaryDirectory() as d:
+        gdir = os.path.join(d, "goals"); os.makedirs(gdir)
+        _goalfile(gdir, "stuck", "Stuck goal", 2, 10)
+        _goalfile(gdir, "moving", "Moving goal", 9, 10)
+        hp = os.path.join(d, "h.jsonl")
+        old = time.strftime("%Y-%m-%dT%H:%M:%S",
+                            time.localtime(time.time() - 30 * 86400))
+        older = time.strftime("%Y-%m-%dT%H:%M:%S",
+                              time.localtime(time.time() - 31 * 86400))
+        with open(hp, "w") as f:
+            f.write(json.dumps({"name": "stuck", "done": 1, "total": 10, "ts": older}) + "\n")
+            f.write(json.dumps({"name": "stuck", "done": 2, "total": 10, "ts": old}) + "\n")
+        rows = gl.scan(goals_dir=gdir, history_path=hp)
+        stuck = [r for r in rows if r["name"] == "stuck"][0]
+        assert stuck["stalled"] is True, stuck
+        assert stuck["idle_days"] > 25, stuck["idle_days"]
+        assert rows[0]["name"] == "stuck", "a stuck goal must surface first"
+
+
+def test_a_goal_with_no_recorded_movement_is_not_accused_of_stalling():
+    """No history is not evidence of neglect."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        gdir = os.path.join(d, "goals"); os.makedirs(gdir)
+        _goalfile(gdir, "fresh", "Brand new", 0, 5)
+        rows = gl.scan(goals_dir=gdir, history_path=os.path.join(d, "h.jsonl"))
+        assert rows[0]["stalled"] is False
+        assert rows[0]["idle_days"] is None
+        assert "no movement recorded" in rows[0]["idle_basis"]
+
+
+def test_a_finished_goal_is_never_stuck():
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        gdir = os.path.join(d, "goals"); os.makedirs(gdir)
+        _goalfile(gdir, "done", "All done", 5, 5)
+        rows = gl.scan(goals_dir=gdir, history_path=os.path.join(d, "h.jsonl"))
+        assert rows[0]["stalled"] is False
+
+
+def test_the_kickoff_tells_an_agent_the_facts_exist():
+    """Agents were dispatched blind past 465 verified facts about the very
+    project they were sent to work on."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        gdir = os.path.join(d, "goals"); os.makedirs(gdir)
+        _goalfile(gdir, "g", "A goal", 0, 3)
+        k = gl.kickoff("g", goals_dir=gdir, history_path=os.path.join(d, "h.jsonl"))
+        assert "meditate recall" in k["prompt"]
+        assert "stale" in k["prompt"], "must say what to do when a fact is wrong"
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

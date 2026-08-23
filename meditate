@@ -74,16 +74,46 @@ case "${1:-}" in
   help|--help|-h)
     echo "meditate — evidence-graded memory + goal fleet"
     echo ""
-    echo "  meditate           where am I + the ONE next action"
-    echo "  meditate go [N]    move everything forward: repair agent if the"
-    echo "                     queue is open + one agent per open goal"
-    echo "                     (N caps it; 0 = dry-run)"
+    echo "EVERY DAY"
+    echo "  meditate            where am I + the ONE next action"
+    echo "  meditate brief      the catch-up, in sentences"
+    echo "  meditate go [N]     move everything forward: a repair agent if the"
+    echo "                      queue is open, plus one per open goal"
+    echo "                      (N caps it; 0 = dry run)"
+    echo "  meditate fix        repair failed memories only"
     echo ""
-    echo "  plumbing (when you need the specific organ):"
-    echo "    grade metrics report dashboard   measure + render"
-    echo "    ask drift distill archive        knowledge in, out, repaired, away"
-    echo "    goals drive who sessions launch  fleet + sessions detail"
-    echo "    doctor install                   health + setup"
+    echo "SEEING IT"
+    echo "  meditate pulse      the live console in your browser"
+    echo "  meditate casper     the desktop companion (talks, listens)"
+    echo "  meditate say ...    ask it something out loud"
+    echo "  meditate advise ... ask it to reason over what it knows"
+    echo ""
+    echo "CHATS"
+    echo "  meditate chats      which chats are waiting on you"
+    echo "  meditate sessions   every session, ranked by sprawl"
+    echo "  meditate tell ID .. send a message into another session"
+    echo "  meditate inbox      messages sent to this one"
+    echo "  meditate archive    put finished chats away (restorable)"
+    echo ""
+    echo "GOALS"
+    echo "  meditate goals      goals, stuck first then closest to done"
+    echo "  meditate milestones which milestones are already true"
+    echo "  meditate fleet      what the agents are doing right now"
+    echo "  meditate launch     open live threads in Terminal"
+    echo "  meditate progress   an agent reports in (agents call this)"
+    echo ""
+    echo "WHAT IT KNOWS"
+    echo "  meditate recall ... search the graded facts"
+    echo "  meditate grade      re-check every memory against reality"
+    echo "  meditate drift      memories that stopped matching"
+    echo "  meditate report     caught / repaired / time-to-repair"
+    echo "  meditate projects   where your attention actually went"
+    echo ""
+    echo "KEEPING IT HEALTHY"
+    echo "  meditate doctor     tests, hook, heartbeat, store"
+    echo "  meditate install    set it up on this machine"
+    echo "  meditate who        other sessions live in this repo"
+    echo "  meditate metrics    raw counters"
     echo ""
     echo "  Inside Claude Code: /meditate"
     ;;
@@ -158,9 +188,21 @@ else:
     shift
     python3 "$DIR/converse.py" "$@"
     ;;
-  voice|brief|whisper)
+  voice|whisper)
     shift
     python3 "$DIR/voice.py" "$@"
+    ;;
+  brief|catchup|"catch-up")
+    shift
+    python3 "$DIR/brief.py" "$@"
+    ;;
+  chats|triage|waiting)
+    shift
+    python3 "$DIR/triage.py" "$@"
+    ;;
+  milestones|check-goals|verify-goals)
+    shift
+    python3 "$DIR/milestones.py" "$@"
     ;;
   projects|proj|where)
     shift

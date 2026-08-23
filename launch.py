@@ -152,6 +152,63 @@ def find_archive_candidates(threads: list) -> list:
 FLEET_MODEL = os.environ.get("MEDITATE_FLEET_MODEL", "sonnet")
 
 
+FLEET_WINDOW_FILE = "/tmp/meditate-fleet-window"
+
+
+FLEET_SLOT_FILE = "/tmp/meditate-fleet-slot"
+
+
+def _window_slot(step: int = 26) -> tuple:
+    """Where this agent's window goes.
+
+    Only the position. Naming was tried and removed: Claude Code already
+    retitles its own window with what it is currently doing — "Locate and
+    verify Razorpay key for production payments" beats "goal-razorpay-key" —
+    and a static title just fights it.
+
+    Terminal on macOS opened a WINDOW however a tab was asked for: Cmd-T,
+    Shell > New Tab, and AppleWindowTabbingMode=always were each measured here
+    and each produced a window (13->14, 14->15, 15->16) with tabs in the target
+    window unchanged at 1. Rather than keep fighting it, name each window after
+    its agent and cascade them, so a fleet reads as a stack you can scan
+    instead of a pile you dig through.
+    """
+    n = 0
+    try:
+        with open(FLEET_SLOT_FILE) as f:
+            n = (int(f.read().strip() or 0) + 1) % 8
+    except Exception:
+        n = 0
+    try:
+        with open(FLEET_SLOT_FILE, "w") as f:
+            f.write(str(n))
+    except OSError:
+        pass
+    x, y = 60 + n * step, 60 + n * step
+    return (x, y, x + 900, y + 520)
+
+
+def _fleet_window() -> int:
+    """The Terminal window the fleet lives in, or 0 for 'make a new one'.
+
+    Agents used to each get their own window. Six windows is not something you
+    can look at; six tabs in one window is.
+    """
+    try:
+        with open(FLEET_WINDOW_FILE) as f:
+            return int(f.read().strip() or 0)
+    except Exception:
+        return 0
+
+
+def _remember_fleet_window(wid: int) -> None:
+    try:
+        with open(FLEET_WINDOW_FILE, "w") as f:
+            f.write(str(int(wid)))
+    except OSError:
+        pass
+
+
 def build_launch(cwd: str, kickoff: str, thread_name: str, model: str = ""):
     """Build (kickoff_file, shell_cmd, applescript) — separated so tests can
     verify the command without opening windows.
@@ -175,6 +232,8 @@ def build_launch(cwd: str, kickoff: str, thread_name: str, model: str = ""):
     if not all(c.isalnum() or c in "-._" for c in mdl):
         mdl = "sonnet"
     safe_cwd = cwd if os.path.isdir(cwd) else os.path.expanduser("~")
+    fleet_wid = _fleet_window()
+    slot = _window_slot()
     # Start a LIVE interactive session. Do NOT pass the prompt as an argument:
     # `claude "prompt"` answers once and EXITS, leaving a bare shell prompt —
     # that is exactly why dispatched agents looked like "only a terminal opened".
@@ -193,10 +252,35 @@ def build_launch(cwd: str, kickoff: str, thread_name: str, model: str = ""):
     # silently lost the kickoff whenever claude took longer to boot — the text
     # landed in the shell instead of the agent, which is exactly what "only a
     # terminal opened" looks like. Poll the tab until claude's TUI has painted.
+    # ONE window, one tab per agent. Six windows scattered across the desktop
+    # is not a fleet you can look at; six tabs in one window is.
+    #
+    # And the kickoff is submitted with a REAL Return, sent separately.
+    # `do script` delivers long text as a bracketed paste, and inside a paste
+    # a trailing newline is a NEWLINE, not Enter — which is exactly why short
+    # kickoffs started and long ones sat in the input box waiting. Measured:
+    # 40 chars submitted, 303 chars did not.
     script = ('tell application "Terminal"\n'
               '  activate\n'
-              '  set w to do script "%s"\n'
+              '  set reuse to false\n'
+              '  if %s is not 0 then\n'
+              '    try\n'
+              '      set fw to window id %s\n'
+              '      set index of fw to 1\n'
+              '      set reuse to true\n'
+              '    end try\n'
+              '  end if\n'
+              '  if reuse then\n'
+              '    tell application "System Events" to keystroke "t" using command down\n'
+              '    delay 0.5\n'
+              '    set w to do script "%s" in front window\n'
+              '  else\n'
+              '    set w to do script "%s"\n'
+              '  end if\n'
               '  set wid to id of (window 1 whose selected tab is w)\n'
+              '  try\n'
+              '    set bounds of (window id wid) to {%d, %d, %d, %d}\n'
+              '  end try\n'
               '  set ready to false\n'
               '  repeat 90 times\n'
               '    delay 0.5\n'
@@ -209,11 +293,17 @@ def build_launch(cwd: str, kickoff: str, thread_name: str, model: str = ""):
               '  if ready then\n'
               '    delay 0.8\n'
               '    do script "%s" in w\n'
-              '    return "ready:" & wid\n'
+              '    delay 0.6\n'
+              '    set index of (window id wid) to 1\n'
+              '    activate\n'
+              '    tell application "System Events" to key code 36\n'
+              '    return "ready:" & wid & ":" & (reuse as text)\n'
               '  else\n'
-              '    return "timeout:" & wid\n'
+              '    return "timeout:" & wid & ":" & (reuse as text)\n'
               '  end if\n'
-              'end tell' % (as_escaped, kick_escaped))
+              'end tell' % (fleet_wid, fleet_wid, as_escaped, as_escaped,
+                            slot[0], slot[1], slot[2], slot[3],
+                            kick_escaped))
     return kickoff_file, shell_cmd, script
 
 
@@ -227,6 +317,8 @@ def launch_claude(cwd: str, kickoff: str, thread_name: str, model: str = "") -> 
         out = (r.stdout or "").strip()
         state, _, wid = out.partition(":")
         launch_claude.last_window_id = wid.strip()
+        if wid.strip().isdigit():
+            _remember_fleet_window(int(wid.strip()))   # next agent joins as a tab
         if state == "timeout":
             # a window opened but claude never came up, so the kickoff was NOT
             # delivered. Saying "launched" here is how a dead agent gets

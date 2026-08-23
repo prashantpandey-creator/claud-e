@@ -118,6 +118,52 @@ def test_sangama_event_counts():
         assert d["sangama"]["collisions_warned"] == 1
 
 
+def test_drift_demotion_pairs_with_later_repair():
+    """sleep.py's actual drift path logs `sleep.demoted`, not a `sleep.regraded
+    ... -> unverified` event (that shape only fires for corruption). Before this
+    fix, a real drift catch could never pair with its later repair: caught came
+    from the store's `drifted` flag (no down_at entry), so `repaired` stayed 0
+    forever even after the memory re-verified clean."""
+    with tempfile.TemporaryDirectory() as t:
+        store, arch, coord, med = _world(t)
+        rows = [
+            {"event": "sleep.demoted", "id": "mem_d",
+             "detail": "evidence drift: excerpt no longer present in source",
+             "ts": "2026-08-19T10:00:00+00:00"},
+            {"event": "sleep.regraded", "id": "mem_d",
+             "detail": "unverified -> machine_checked (excerpt present in source)",
+             "ts": "2026-08-20T10:00:00+00:00"},
+        ]
+        with open(os.path.join(store, "journal.jsonl"), "w") as f:
+            for r in rows:
+                f.write(json.dumps(r) + "\n")
+        d = rp.compute(store_dir=store, archive_root=arch,
+                       coord_root=coord, meditation_dir=med)
+        assert d["drift"]["caught"] == 1
+        assert d["drift"]["repaired"] == 1, d["drift"]
+        assert abs(d["drift"]["median_repair_hours"] - 24.0) < 0.1
+
+
+def test_open_demotion_not_double_counted_with_store_flag():
+    """A still-open drift catch has BOTH a `sleep.demoted` journal event and a
+    live `drifted` flag in the store — the same catch, not two."""
+    with tempfile.TemporaryDirectory() as t:
+        store, arch, coord, med = _world(t)
+        with open(os.path.join(store, "journal.jsonl"), "w") as f:
+            f.write(json.dumps({"event": "sleep.demoted", "id": "mem_o",
+                "detail": "evidence drift: gone",
+                "ts": "2026-08-19T10:00:00+00:00"}) + "\n")
+        with open(os.path.join(store, "memories.jsonl"), "w") as f:
+            f.write(json.dumps({"id": "mem_o", "active": True,
+                "flags": ["drifted"],
+                "epistemic": {"evidence_status": "unverified"},
+                "evidence": [{"source": "/x"}]}) + "\n")
+        d = rp.compute(store_dir=store, archive_root=arch,
+                       coord_root=coord, meditation_dir=med)
+        assert d["drift"]["caught"] == 1, d["drift"]
+        assert d["drift"]["repaired"] == 0
+
+
 def test_repair_pairs_across_rotated_journals():
     """A downgrade in a rotated journal + repair in the current one must pair."""
     with tempfile.TemporaryDirectory() as t:

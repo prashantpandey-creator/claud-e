@@ -43,7 +43,7 @@ import os
 import re
 import sys
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Optional
 
 GOALS_DIR = os.environ.get("MEDITATE_GOALS_DIR") or os.path.expanduser(
     "~/claude-sync/goals")
@@ -103,6 +103,75 @@ def _last_snapshot(history_path: str) -> Dict[str, Dict[str, int]]:
     return last
 
 
+# Days without a milestone ticking before a goal counts as stuck.
+STALLED_DAYS = 5.0
+
+
+def _rank(g: Dict[str, Any]) -> tuple:
+    """Order goals by what they need, not by filename.
+
+    They came back in `sorted(os.listdir())` order — alphabetical by file,
+    which is no order at all. It put "Production stable — payments whole"
+    (0%, real money not moving) fifth, under three goals that were merely
+    further along.
+
+    Stuck first, then closest to done. Finishing something beats starting
+    something, but a goal that has not moved in days outranks both — that is
+    the one nobody is going to notice on their own.
+    """
+    return (0 if g.get("stalled") else 1, -(g.get("pct") or 0), g.get("title", ""))
+
+
+def _last_progress(name: str, history_path: str) -> Optional[float]:
+    """Epoch seconds when this goal's `done` count last went UP.
+
+    File mtime cannot answer this: ticking a box edits the file, so does
+    rewording a milestone, and so does adding one. Only the snapshot history
+    records movement, which is the thing that means someone is working on it.
+    """
+    prev = None
+    last = None
+    try:
+        with open(history_path, errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    r = json.loads(line)
+                except Exception:
+                    continue
+                if r.get("name") != name:
+                    continue
+                d = r.get("done")
+                if prev is not None and isinstance(d, int) and d > prev:
+                    last = r.get("ts")
+                prev = d if isinstance(d, int) else prev
+    except OSError:
+        return None
+    if not last:
+        return None
+    try:
+        return time.mktime(time.strptime(last[:19], "%Y-%m-%dT%H:%M:%S"))
+    except Exception:
+        return None
+
+
+def _stalled(g: Dict[str, Any], now: float, history_path: str) -> bool:
+    """Has this goal stopped moving? Says so only with evidence of movement
+    to compare against — a goal with no history yet is not accused."""
+    if g.get("done", 0) >= g.get("total", 0) > 0:
+        return False                     # finished is not stuck
+    moved = _last_progress(g.get("name", ""), history_path)
+    if moved is None:
+        g["idle_days"] = None
+        g["idle_basis"] = "no movement recorded yet"
+        return False
+    g["idle_days"] = round((now - moved) / 86400.0, 1)
+    g["idle_basis"] = "since a milestone last ticked"
+    return g["idle_days"] > STALLED_DAYS
+
+
 def scan(goals_dir: str = GOALS_DIR,
          history_path: str = HISTORY_PATH) -> List[Dict[str, Any]]:
     """Parse every goal; snapshot changes; annotate scope drift."""
@@ -125,6 +194,12 @@ def scan(goals_dir: str = GOALS_DIR,
                              "total": g["total"],
                              "ts": time.strftime("%Y-%m-%dT%H:%M:%S")})
         out.append(g)
+    now = time.time()
+    for g in out:
+        g["stalled"] = _stalled(g, now, history_path)
+        g.setdefault("idle_days", None)
+        g.setdefault("idle_basis", "")
+    out.sort(key=_rank)
     if new_rows:
         try:
             os.makedirs(os.path.dirname(history_path), exist_ok=True)
@@ -180,6 +255,12 @@ def kickoff(name: str, goals_dir: str = GOALS_DIR,
                   "run `meditate progress %s \"<one line: what you are doing now>\"` "
                   "when you start, at each real step, and `meditate progress %s "
                   "--done \"<result>\"` at the end.\n"
+                  "This workspace already holds verified facts about this "
+                  "project — ask before you rediscover: "
+                  "`meditate recall \"<your question>\"` returns graded "
+                  "memories with the file and line each came from. Prefer them "
+                  "over guessing; if one contradicts what you find, that fact "
+                  "is stale — say so in your progress line.\n"
                   "Ship discipline: commit to a LOCAL branch and stop — do NOT "
                   "push or deploy. ONE exception: if this milestone's own text "
                   "names a push/deploy, that exact push is pre-authorized by the "

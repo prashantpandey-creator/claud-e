@@ -111,6 +111,29 @@ final class Meditate {
         return detail.isEmpty ? step : step + " \u{2014} " + detail
     }
 
+    /// What the agents you started are doing. Same server, same trail.
+    static func fleet() -> [(goal: String, ticked: Bool, mins: Int)] {
+        guard let url = URL(string: "http://127.0.0.1:7711/api/state") else { return [] }
+        var req = URLRequest(url: url)
+        req.setValue("1", forHTTPHeaderField: "X-Meditate")
+        req.timeoutInterval = 6
+        var out: [(String, Bool, Int)] = []
+        let sem = DispatchSemaphore(value: 0)
+        URLSession.shared.dataTask(with: req) { data, _, _ in
+            defer { sem.signal() }
+            guard let d = data,
+                  let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+                  let rows = j["fleet"] as? [[String: Any]] else { return }
+            out = rows.map { r in
+                ((r["goal"] as? String) ?? "?",
+                 (r["milestone_ticked"] as? Bool) ?? false,
+                 (r["dispatched_min"] as? Int) ?? 0)
+            }
+        }.resume()
+        _ = sem.wait(timeout: .now() + 8)
+        return out
+    }
+
     /// Ask Casper's reasoning brain a real question (headless claude).
     static func advise(_ question: String) -> String {
         let out = run([skillDir + "/advisor.py", question], timeout: 90)
@@ -1111,7 +1134,10 @@ final class App: NSObject, NSApplicationDelegate {
         // he sees on his own screen.
         Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in self.writeStatus() }
 
-        Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { _ in self.check() }
+        Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { _ in
+            self.check()
+            self.watchFleet()
+        }
         // the switch tracks reality on its own clock: a 20s lag on "is work
         // running" is long enough to press start on something already running
         // While he is working, say WHAT he is working on. A companion that
@@ -1426,6 +1452,13 @@ final class App: NSObject, NSApplicationDelegate {
                     || first.lowercased().contains("nothing to run")
                 if !failed { self.ghost.celebrate() }
                 self.say(first)
+                // and now keep an eye on it, rather than starting something
+                // and never mentioning it again
+                if !failed {
+                    self.fleetTicked.removeAll()
+                    self.fleetToldStalled.removeAll()
+                    self.watchFleet()
+                }
             }
         }
     }
@@ -1693,6 +1726,50 @@ final class App: NSObject, NSApplicationDelegate {
     }
 
     @objc func quitCasper() { NSApp.terminate(nil) }
+
+    /// Starting an agent and then forgetting about it is the thing that makes
+    /// a fleet feel like shouting into a room. He watches what he started and
+    /// tells you once when it lands, or once when it clearly has not.
+    var fleetTicked: [String: Bool] = [:]
+    var fleetToldStalled: Set<String> = []
+    static let stallMinutes = 15
+
+    func watchFleet() {
+        DispatchQueue.global().async {
+            let rows = Meditate.fleet()
+            guard !rows.isEmpty else { return }
+            DispatchQueue.main.async {
+                for r in rows {
+                    let was = self.fleetTicked[r.goal]
+                    self.fleetTicked[r.goal] = r.ticked
+                    // landed: it was open last time we looked, now it is done
+                    if was == false && r.ticked {
+                        self.ghost.celebrate()
+                        self.say(self.pretty(r.goal) + " just landed.")
+                        return
+                    }
+                    // stalled: dispatched a while ago and still nothing ticked
+                    if !r.ticked, r.mins >= App.stallMinutes,
+                       !self.fleetToldStalled.contains(r.goal) {
+                        self.fleetToldStalled.insert(r.goal)
+                        self.say(self.pretty(r.goal) + " has been going "
+                                 + "\(r.mins) minutes without finishing its step. "
+                                 + "Worth a look.")
+                        return
+                    }
+                }
+            }
+        }
+    }
+
+    /// "goal-mila-unblocked" is a key. "Mila unblocked" is a thing you said.
+    func pretty(_ name: String) -> String {
+        var s = name
+        for p in ["goal-", "goal_"] where s.hasPrefix(p) { s = String(s.dropFirst(p.count)) }
+        s = s.replacingOccurrences(of: "-", with: " ")
+             .replacingOccurrences(of: "_", with: " ")
+        return s.prefix(1).uppercased() + s.dropFirst()
+    }
 
     @objc func sayNo() {
         pendingKind = ""

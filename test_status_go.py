@@ -261,6 +261,37 @@ def test_kickoff_carries_the_precheck_so_the_agent_need_not_look():
         assert "CONFIRMED GONE" in k["prompt"], k["prompt"][:400]
 
 
+def test_only_one_agent_per_repo_and_the_rest_are_named():
+    """Six agents into one checkout is how you get collisions — this workspace
+    logged 8. Different repos run in parallel; the same repo queues, and the
+    queued ones are reported rather than silently dropped."""
+    import go as g2
+    launched = []
+
+    def fake_launcher(cwd, prompt, name, model=""):
+        launched.append(cwd)
+        return True
+
+    with tempfile.TemporaryDirectory() as t:
+        gdir = os.path.join(t, "goals"); os.makedirs(gdir)
+        same = os.path.join(t, "repo-a"); os.makedirs(same)
+        other = os.path.join(t, "repo-b"); os.makedirs(other)
+        # three goals, two of them in the SAME checkout
+        for i, cwd in enumerate([same, same, other]):
+            with open(os.path.join(gdir, "g%d.md" % i), "w") as f:
+                f.write(GOAL.replace("g-a", "g-%d" % i)
+                        + "\n\ncwd: %s\n" % cwd)
+        res = g2.run(goals_dir=gdir, ledger_path=os.path.join(t, "d.jsonl"),
+                     history_path=os.path.join(t, "h.jsonl"),
+                     meditation_dir=os.path.join(t, "med"),
+                     launcher=fake_launcher)
+        # never two into one checkout
+        assert len(launched) == len(set(os.path.realpath(c) for c in launched)), \
+            launched
+        for d in res.get("deferred", []):
+            assert d["waiting_on"] and d["why"], d
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

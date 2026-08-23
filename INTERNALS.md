@@ -10,6 +10,13 @@ dumped into context).
   languages, docs). Tested by `test_scan.py`.
 - `still.py` — the **yogic diagnosis** over those facts: per-project vṛtti class,
   the antarāyas, and the nirodha / stillness index. Tested by `test_still.py`.
+  **NOT WIRED (audited 2026-08-23).** Nothing imports it, no CLI verb runs it,
+  it is not in the launchd heartbeat — only its own test executes it. It is
+  also the only thing here that knows the workspace holds **15,027 uncommitted
+  files across 88 repos** and **102 repos off main**, so it is worth reviving
+  rather than deleting; it costs 14.5s per run and would need caching. Until
+  then this file was claiming a live engine, which is the same defect the tool
+  exists to catch.
 
 The skill consumes only each tool's `data` field and runs both test suites first
 (Phase 0 self-heal); a reading built on a broken scanner is worse than none.

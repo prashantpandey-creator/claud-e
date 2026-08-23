@@ -261,6 +261,7 @@ def state() -> Dict[str, Any]:
                            "last_file": _last_file(s)}
                           for s in live_sessions()],
         "triage": _triage_cached(),
+        "milestones": _milestones_cached(),
         "fleet": fleet["dispatched"],
         "repair": [{"id": m["id"], "statement": m["statement"][:140],
                     "fails": [f["claim"] for f in m.get("failing", [])]}
@@ -367,6 +368,27 @@ def _window_days_cached(ttl_s: float = 600.0) -> int:
     return _WINDOW_CACHE["days"] or 0
 
 
+_MILE_CACHE: Dict[str, Any] = {"at": 0.0, "data": {}}
+
+
+def _milestones_cached(ttl_s: float = 300.0) -> Dict[str, Any]:
+    """Which milestones the world says are already done. Runs git per goal,
+    so it is cached — but it is the check that stops the console asking for
+    work that is finished."""
+    if time.time() - _MILE_CACHE["at"] < ttl_s and _MILE_CACHE["data"]:
+        return _MILE_CACHE["data"]
+    try:
+        from milestones import audit
+        d = audit()
+        out = {"looks_done": d.get("looks_done", [])[:5],
+               "stale_wording": d.get("stale_wording", [])[:5],
+               "unknown": d.get("unknown", 0)}
+    except Exception:
+        out = {"looks_done": [], "stale_wording": [], "unknown": 0}
+    _MILE_CACHE.update({"at": time.time(), "data": out})
+    return out
+
+
 def _projects_rollup(ttl_s: float = ROLLUP_TTL_S) -> List[Dict[str, Any]]:
     """Which projects have your attention.
 
@@ -460,7 +482,8 @@ PAGE = """<!doctype html><meta charset="utf-8">
 <div style="letter-spacing:.3em;font-size:11px;color:#6b6557;margin-top:26px">PROJECTS <span style="letter-spacing:0;color:#4a463c" id="projlabel">— recent attention vs the repo's whole history</span></div>
 <div id="projects" style="font-size:13px;margin-top:8px"></div>
 </details>
-<div style="letter-spacing:.3em;font-size:11px;color:#6b6557;margin-top:22px">GOALS</div>
+<div style="letter-spacing:.3em;font-size:11px;color:#6b6557;margin-top:22px">GOALS <span style="letter-spacing:0;color:#4a463c">— stuck first, then closest to done</span></div>
+<div id="mile" style="font-size:12px;margin:6px 0"></div>
 <div id="goals"></div>
 <div style="letter-spacing:.3em;font-size:11px;color:#6b6557;margin-top:22px">FLEET</div>
 <div id="fleet" style="font-size:13px"></div>
@@ -545,6 +568,12 @@ async function tick(){
         · <a href="#" class="j-name" data-sid="${esc(x.sid)}" data-label="${esc(x.label)}" style="color:${DIM}" title="Rename this session in your own words.">name</a>
         · <a href="#" class="j-stop" data-sid="${esc(x.sid)}" data-label="${esc(x.label)}" style="color:${DIM}" title="End this session — same as closing its window.">stop</a></div>
     </div>`}).join("") || `<div style="color:${DIM};font-size:13px">no living sessions — the field is still</div>`;
+  const ml = s.milestones||{looks_done:[],stale_wording:[]};
+  const mparts = (ml.looks_done||[]).map(m=>
+      `<div style="color:${G}">✓ looks already done: ${esc(m.milestone)} <span style="color:${DIM}">— ${esc(m.evidence)}</span></div>`)
+    .concat((ml.stale_wording||[]).map(m=>
+      `<div style="color:${DIM}">status frozen in the text ${esc(m.phrase)} — ${esc(m.milestone)}</div>`));
+  document.getElementById("mile").innerHTML = mparts.join("");
   const onGoal = {};
   (s.fleet||[]).forEach(f=>{ if(f.goal) onGoal[f.goal] = f; });
   document.getElementById("goals").innerHTML = s.goals.map(g=>{
@@ -556,6 +585,7 @@ async function tick(){
       <span style="width:250px">${esc(g.title.slice(0,42))}</span>${bar(g.pct)}
       <span style="color:${G}">${Math.round(g.pct)}%</span>
       <span style="color:${DIM}">${g.done}/${g.total}</span>
+      ${g.stalled?`<span style="color:${G}" title="${esc(g.idle_basis||'')}">stuck ${g.idle_days}d</span>`:""}
       ${g.scope_delta>0?`<span style="color:${G}">scope +${g.scope_delta}</span>`:""}
       ${working}</div>
       <div style="margin-left:262px;font-size:12px;color:${DIM}">next: ${esc(g.next||"—")}</div></div>`;
