@@ -320,6 +320,82 @@ def _save_seen(seen_path: str, seen: Dict[str, List[str]]) -> None:
         pass                                       # fail-open, always
 
 
+# ---- the TypeScript/JavaScript half of the squiggly ------------------------
+# NOT type checking. Type checking these files is not available: node_modules
+# is routinely absent, there is no global tsc or eslint, and `node --check`
+# flags `const x: number = 1` — valid TypeScript — because it parses the file
+# as JavaScript. It would be wrong on every typed line.
+#
+# Import resolution needs none of that. Pure filesystem, honours tsconfig path
+# aliases, and it is the same shape as F821: you referenced something that is
+# not there. Measured on the real frontend before building it: 0 of 756
+# relative/aliased imports across 416 files fail to resolve, so it is silent
+# on working code and any hit is a real broken import.
+_WEB_EXTS = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")
+_IMPORT_RE = re.compile(
+    r"""^\s*(?:import|export)[^'"\n]*?from\s*['"]([^'"]+)['"]"""
+    r"""|^\s*import\s*['"]([^'"]+)['"]""", re.M)
+_RESOLVE_EXTS = ("", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".json",
+                 ".d.ts", "/index.ts", "/index.tsx", "/index.js", "/index.jsx")
+
+
+def _tsconfig_aliases(start: str):
+    """(project_root, {alias_prefix: [target_prefix, ...]}) walking upward."""
+    d = os.path.dirname(os.path.abspath(start))
+    while True:
+        cfg = os.path.join(d, "tsconfig.json")
+        if os.path.isfile(cfg):
+            try:
+                with open(cfg, encoding="utf-8", errors="replace") as fh:
+                    raw = re.sub(r"//[^\n]*", "", fh.read())
+                raw = re.sub(r",(\s*[}\]])", r"\1", raw)   # tolerate trailing commas
+                opts = (json.loads(raw).get("compilerOptions") or {})
+                return d, (opts.get("paths") or {}), (opts.get("baseUrl") or ".")
+            except Exception:
+                return d, {}, "."
+        parent = os.path.dirname(d)
+        if parent == d or os.path.isdir(os.path.join(d, ".git")):
+            return None, {}, "."
+        d = parent
+
+
+def _unresolved_imports(path: str) -> List[str]:
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            src = fh.read()
+    except OSError:
+        return []
+    root, aliases, base = _tsconfig_aliases(path)
+    out = []
+    for m in _IMPORT_RE.finditer(src):
+        spec = m.group(1) or m.group(2)
+        if not spec:
+            continue
+        if spec.startswith("."):
+            cand = os.path.normpath(os.path.join(os.path.dirname(path), spec))
+        elif root:
+            cand = None
+            for alias, targets in aliases.items():
+                pre = alias.rstrip("*")
+                if alias.endswith("*") and spec.startswith(pre):
+                    for tgt in targets:
+                        cand = os.path.normpath(os.path.join(
+                            root, base, tgt.rstrip("*") + spec[len(pre):]))
+                        if any(os.path.exists(cand + e) for e in _RESOLVE_EXTS):
+                            cand = None
+                            break
+                    break
+            if cand is None:
+                continue                    # resolved, or a bare package
+        else:
+            continue                        # bare specifier, no project root
+        if not any(os.path.exists(cand + e) for e in _RESOLVE_EXTS):
+            line = src[:m.start()].count("\n") + 1
+            out.append("%s:%d import '%s' resolves to nothing on disk"
+                       % (os.path.basename(path), line, spec))
+    return out
+
+
 def check_edit(path: str, seen_path: Optional[str] = None) -> str:
     """The red squiggly: what is wrong with this file, right now. '' = fine.
 
@@ -343,11 +419,15 @@ def check_edit(path: str, seen_path: Optional[str] = None) -> str:
     shadowing, anything inside a function body — all skipped, because module
     scope is where "never bound anywhere" is decidable without inference.
     """
-    if not path.endswith(".py") or not os.path.isfile(path):
-        return ""                     # only Python; silence about the rest
+    if not os.path.isfile(path):
+        return ""
     norm = os.path.abspath(path).replace(os.sep, "/")
     if any(seg in norm for seg in _NOT_MY_CODE):
         return ""                     # not code anyone here wrote
+    if path.endswith(_WEB_EXTS):
+        return _only_new(path, _unresolved_imports(path), seen_path)
+    if not path.endswith(".py"):
+        return ""                     # nothing honest to say about the rest
 
     # ruff first when it is installed: it sees inside function bodies, where
     # the stdlib pass below cannot go and where most real undefined-name bugs

@@ -643,6 +643,93 @@ def test_seen_cache_is_bounded_and_survives_corruption():
             assert len(_j.load(fh)) <= co.SEEN_CAP + 1
 
 
+def _ts_project(d):
+    """A minimal but realistic TS project: tsconfig with a @/* alias."""
+    os.makedirs(os.path.join(d, "src", "lib"))
+    os.makedirs(os.path.join(d, "src", "components"))
+    with open(os.path.join(d, "tsconfig.json"), "w") as f:
+        f.write('{"compilerOptions":{"baseUrl":".","paths":{"@/*":["./src/*"]}}}')
+    with open(os.path.join(d, "src", "lib", "real.ts"), "w") as f:
+        f.write("export const ok = 1\n")
+    return d
+
+
+def test_ts_squiggle_catches_an_import_that_points_nowhere():
+    """The TypeScript half. Not type checking -- import resolution.
+
+    The .py-only gate left the squiggly silent on 51.5% of real code edits,
+    and the owner's largest codebase is 416 .ts/.tsx files. Type checking
+    them is not available: node_modules is absent, there is no global tsc or
+    eslint, and `node --check` flags `const x: number = 1` -- valid
+    TypeScript -- because it parses as JavaScript, so it would be wrong on
+    every typed line.
+
+    Import resolution needs none of that. It is pure filesystem, it honours
+    tsconfig path aliases, and it is the same shape as F821: you referenced
+    something that is not there. Measured on the real frontend: 0 of 756
+    relative/aliased imports across 416 files fail to resolve, so the checker
+    is silent on working code and any hit is a real broken import."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        _ts_project(d)
+        f = os.path.join(d, "src", "components", "W.tsx")
+        with open(f, "w") as fh:
+            fh.write("import { gone } from './Missing'\nexport const W = 1\n")
+        got = co.check_edit(f, seen_path=os.path.join(d, "s.json"))
+        assert "Missing" in got, got
+
+
+def test_ts_squiggle_silent_on_a_working_file():
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        _ts_project(d)
+        f = os.path.join(d, "src", "components", "W.tsx")
+        with open(f, "w") as fh:
+            fh.write("import { ok } from '@/lib/real'\n"        # alias
+                     "import React from 'react'\n"              # bare package
+                     "import { ok as o2 } from '../lib/real'\n" # relative
+                     "export const W = ok + o2\n")
+        assert co.check_edit(f, seen_path=os.path.join(d, "s.json")) == ""
+
+
+def test_ts_squiggle_never_judges_bare_packages():
+    """node_modules may not even be installed. A bare specifier is the
+    package manager's business, not ours -- guessing there would squiggle on
+    every correct file in a fresh clone."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        _ts_project(d)
+        f = os.path.join(d, "src", "lib", "x.ts")
+        with open(f, "w") as fh:
+            fh.write("import a from 'react'\nimport b from '@tanstack/query'\n"
+                     "export const z = 1\n")
+        assert co.check_edit(f, seen_path=os.path.join(d, "s.json")) == ""
+
+
+def test_ts_squiggle_resolves_directory_index_imports():
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        _ts_project(d)
+        os.makedirs(os.path.join(d, "src", "lib", "pkg"))
+        with open(os.path.join(d, "src", "lib", "pkg", "index.ts"), "w") as fh:
+            fh.write("export const p = 1\n")
+        f = os.path.join(d, "src", "lib", "y.ts")
+        with open(f, "w") as fh:
+            fh.write("import { p } from './pkg'\nexport const q = p\n")
+        assert co.check_edit(f, seen_path=os.path.join(d, "s.json")) == ""
+
+
+def test_ts_squiggle_works_without_a_tsconfig():
+    """Plain JS projects have no tsconfig; relative imports still resolve."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        f = os.path.join(d, "a.js")
+        with open(f, "w") as fh:
+            fh.write("import x from './nope'\nexport default x\n")
+        got = co.check_edit(f, seen_path=os.path.join(d, "s.json"))
+        assert "nope" in got, got
+
+
 def _post(payload):
     """Drive the REAL CLI entry point, crossing the hook boundary."""
     import subprocess, json as _j
