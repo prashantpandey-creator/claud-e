@@ -313,6 +313,60 @@ def test_never_checked_is_not_drift():
 
 
 
+def _usage_row(ctx):
+    import json as _j
+    return _j.dumps({"type": "assistant", "message": {"usage": {
+        "input_tokens": 2, "cache_read_input_tokens": ctx - 1002,
+        "cache_creation_input_tokens": 1000, "output_tokens": 50}}})
+
+
+def test_ceiling_silent_under_threshold_and_when_unmeasurable():
+    """Not-checkable is not over-ceiling — the three-valued rule again."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        tp = os.path.join(d, "s.jsonl")
+        open(tp, "w").write(_usage_row(300_000) + "\n")
+        me = {}
+        assert co.ceiling_check({"transcript_path": tp, "session_id": "s1"}, me) == ""
+        assert co.ceiling_check({"session_id": "s1"}, me) == ""            # no path
+        assert co.ceiling_check({"transcript_path": d + "/nope", "session_id": "s1"}, me) == ""
+
+
+def test_ceiling_warns_once_then_again_each_step():
+    """Measured: 24% of sessions ran to the 965,923 ceiling and compacted
+    (64 events) instead of splitting. The warning must fire at 700k, then
+    NOT nag every edit, then fire again each further 100k."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        tp = os.path.join(d, "s.jsonl")
+        me = {}
+        open(tp, "w").write(_usage_row(710_000) + "\n")
+        w1 = co.ceiling_check({"transcript_path": tp, "session_id": "abcd1234x"}, me)
+        assert "710k" in w1 and "meditate" in w1 and "abcd1234" in w1, w1
+        assert co.ceiling_check({"transcript_path": tp, "session_id": "abcd1234x"}, me) == ""
+        open(tp, "a").write(_usage_row(790_000) + "\n")
+        assert co.ceiling_check({"transcript_path": tp, "session_id": "abcd1234x"}, me) == ""
+        open(tp, "a").write(_usage_row(815_000) + "\n")
+        w2 = co.ceiling_check({"transcript_path": tp, "session_id": "abcd1234x"}, me)
+        assert "815k" in w2, w2
+
+
+def test_ceiling_reads_the_tail_of_a_fat_transcript():
+    """Transcripts reach 25MB; the check must stay O(tail), not O(file),
+    and the LAST usage row is the live context — not the first."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        tp = os.path.join(d, "s.jsonl")
+        with open(tp, "w") as f:
+            f.write(_usage_row(900_000) + "\n")          # stale old row
+            for _ in range(3000):
+                f.write('{"type": "user", "message": {"content": "' + "x" * 100 + '"}}\n')
+            f.write(_usage_row(720_000) + "\n")          # the live one
+        me = {}
+        w = co.ceiling_check({"transcript_path": tp, "session_id": "s1"}, me)
+        assert "720k" in w, w
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

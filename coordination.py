@@ -194,6 +194,64 @@ def facts_for(path: str, served: List[str], store_dir: str = STORE_DIR) -> List[
 
 # ---- the edit-event handler -------------------------------------------------
 
+# Measured 2026-08-23 across 89 real sessions: 24% ran to the context wall
+# and compacted (64 events; >=4 sessions bumped the identical 965,923 ceiling)
+# instead of splitting. A compaction summary loses thread fidelity; a split
+# does not. This is the ONE session-behavior signal that cleared the bar —
+# corrections (3.7%) and one-off tool errors (4.0%) are healthy and get no
+# harness. Baseline lives in memory `session-behavior-baseline`; KPI is the
+# compaction rate, re-measured against that file.
+CEILING_TOKENS = 966_000
+CEILING_WARN_AT = 700_000
+CEILING_RESTEP = 100_000
+_CEILING_TAIL = 262_144        # transcripts reach 25MB — read the tail only
+
+
+def ceiling_check(payload: Dict[str, Any], me: Dict[str, Any]) -> str:
+    """'' unless this session's live context crossed the warn line.
+
+    Reads the LAST usage row from the transcript tail — that is the context
+    the next turn will pay for. Debounced via the caller's presence record
+    (warn at 700k, again each further 100k, never in between). Unmeasurable
+    is silent: no transcript is not the same as over the ceiling.
+    """
+    tp = str(payload.get("transcript_path") or "")
+    if not tp or not os.path.isfile(tp):
+        return ""
+    try:
+        size = os.path.getsize(tp)
+        with open(tp, "rb") as fh:
+            if size > _CEILING_TAIL:
+                fh.seek(-_CEILING_TAIL, 2)
+            chunk = fh.read().decode("utf-8", "replace")
+    except OSError:
+        return ""
+    ctx = 0
+    for line in reversed(chunk.splitlines()):
+        if '"usage"' not in line:
+            continue
+        try:
+            u = (json.loads(line).get("message") or {}).get("usage") or {}
+        except Exception:
+            continue
+        c = (u.get("input_tokens", 0) + u.get("cache_read_input_tokens", 0)
+             + u.get("cache_creation_input_tokens", 0))
+        if c:
+            ctx = c
+            break
+    if ctx < CEILING_WARN_AT:
+        return ""
+    last = int(me.get("ceiling_warned") or 0)
+    if last and ctx < last + CEILING_RESTEP:
+        return ""
+    me["ceiling_warned"] = ctx
+    sid = str(payload.get("session_id") or "unknown")[:8]
+    return ("Context %dk of ~%dk ceiling (%d%%). This session will COMPACT soon; "
+            "a compaction summary loses threads, a split does not. Split now: "
+            "run /meditate %s — it writes per-thread continuation chats."
+            % (ctx // 1000, CEILING_TOKENS // 1000, 100 * ctx // CEILING_TOKENS, sid))
+
+
 def hook_edit(payload: Dict[str, Any],
               coord_dir: str = COORD_DIR, store_dir: str = STORE_DIR) -> str:
     """Record presence; return additionalContext text ('' = stay silent)."""
@@ -227,6 +285,13 @@ def hook_edit(payload: Dict[str, Any],
     me.setdefault("warned", [])
 
     lines: List[str] = []
+
+    # 0. context ceiling — the one measured session-behavior defect (24% of
+    # sessions compact instead of splitting). Piggybacks on the presence
+    # record `me` for its debounce; saved with everything else below.
+    cl = ceiling_check(payload, me)
+    if cl:
+        lines.append(cl)
 
     # 1. collision — another live session touched this exact file recently.
     # Warn ONCE per (peer, file) per session: a warning repeated on every edit
@@ -416,6 +481,11 @@ def session_start(payload: Dict[str, Any],
         try:
             p = load_presence(sid, coord_dir)
             p["cwd"] = cwd or p.get("cwd", "")
+            # A RESUMED fat session should hear the ceiling warning at open,
+            # not after its first edit — by then it may already be compacting.
+            cl = ceiling_check(payload, p)
+            if cl:
+                lines.append(cl)
             save_presence(p, coord_dir)
         except Exception:
             pass
