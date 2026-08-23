@@ -1564,6 +1564,11 @@ final class App: NSObject, NSApplicationDelegate {
         parts.append(String(format: "floor=%.3f", Double(ear.noiseFloor)))
         parts.append(String(format: "quiet=%.1f", ear.quietFor))
         parts.append("heard=" + String(ear.heardSoFar.prefix(40)))
+        parts.append("muted=" + (ear.muted ? "yes" : "no"))
+        parts.append(String(format: "taskAge=%.0f", ear.taskAge))
+        parts.append("earErr=" + (ear.lastError.isEmpty ? "-"
+                     : String(ear.lastError.prefix(48))
+                         .replacingOccurrences(of: " ", with: "_")))
         parts.append("speaking=" + (mouth.speaking ? "yes" : "no"))
         parts.append(String(format: "mouth=%.3f", Double(mouth.drive)))
         parts.append("engine=" + mouth.lane)

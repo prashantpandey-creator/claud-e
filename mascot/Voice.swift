@@ -43,6 +43,11 @@ final class Ear: NSObject {
     private var partial = ""
     private var lastLoudAt = Date()
     private var silenceTimer: Timer?
+    private var taskStartedAt = Date()
+    /// Age of the current recognition task — observable, because the failure
+    /// this guards against is invisible: on-device tasks die quietly after
+    /// about a minute of audio, and a dead task looks exactly like silence.
+    var taskAge: TimeInterval { Date().timeIntervalSince(taskStartedAt) }
     private let endOfTurnGap: TimeInterval = 1.1 // quiet this long = your turn ended
 
     /// The room's own noise, learned continuously. A FIXED threshold was the
@@ -153,6 +158,7 @@ final class Ear: NSObject {
         req.contextualStrings = Ear.vocabulary      // your words, not the world's
         request = req
         partial = ""
+        taskStartedAt = Date()
         task = rec.recognitionTask(with: req) { [weak self] result, error in
             guard let self = self else { return }
             if let r = result {
@@ -161,6 +167,13 @@ final class Ear: NSObject {
             }
             if let e = error as NSError?, e.code != 301 {   // 301 = we cancelled
                 self.lastError = "\(e.localizedDescription)"
+                // A dead task is not deafness-forever: give the recogniser a
+                // beat and start a fresh one. Without this, any error left him
+                // silently deaf until relaunch.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                    guard self.running, let r2 = self.recognizer else { return }
+                    self.beginTurn(r2)
+                }
             }
         }
     }
@@ -169,6 +182,15 @@ final class Ear: NSObject {
     /// for isFinal makes him feel deaf for seconds after you stop.
     private func checkEndOfTurn() {
         guard running, !muted else { return }
+        // Apple's on-device buffer recognition dies quietly at roughly one
+        // minute per task. A task was only recycled after a completed
+        // utterance — so a minute of you NOT talking killed the ear, and
+        // everything after that looked like you were never heard. Recycle
+        // any silent task well before the limit.
+        if taskAge > 45, partial.isEmpty, let rec = recognizer {
+            beginTurn(rec)
+            return
+        }
         let text = partial.trimmingCharacters(in: .whitespacesAndNewlines)
         guard text.count >= 2 else { return }
         guard quietFor > endOfTurnGap else { return }
