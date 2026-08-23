@@ -80,16 +80,24 @@ jobs:
     # GH-hosted runner host. Proved live: the bare runner host's own "runner"
     # user has a crontab that reports success while silently discarding every
     # entry it's given — a docker container with the identical image persists
-    # crontab writes correctly, both via `crontab -` and `crontab <file>`.
-    # A real Linux user's machine behaves like the container; this job tests
-    # against that, not against the runner host's own quirk.
+    # crontab writes correctly. A real Linux user's machine behaves like the
+    # container, not like that host, so this job tests against the container.
     container: ubuntu:24.04
     timeout-minutes: 25
+    env:
+      # install.sh (main, a22322e) only registers the heartbeat — launchd OR
+      # cron — when $HOME matches /Users/* or /home/*, specifically so a test
+      # run can never clobber a real user's live agent or crontab. A container
+      # job's default HOME (/github/home) doesn't match that and would skip
+      # heartbeat setup entirely; /home/citest does, honestly matching what a
+      # real Linux user's machine looks like.
+      HOME: /home/citest
     steps:
       - name: Install OS packages the bare image doesn't ship
         run: |
           apt-get update -qq
           apt-get install -y -qq python3 git cron >/dev/null
+          mkdir -p "$HOME"
 
       - uses: actions/checkout@v4
 
@@ -102,10 +110,6 @@ jobs:
 
       - name: Install into this runner's HOME
         run: bash install.sh || true
-
-      - name: DEBUG — crontab state right after install, before the test suite runs
-        run: |
-          echo "crontab -l: [$(crontab -l 2>&1)]"
 
       - name: The suite
         run: |
