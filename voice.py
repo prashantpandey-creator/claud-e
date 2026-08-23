@@ -378,6 +378,57 @@ def briefing(meditation_dir: str = MEDITATION_DIR, store_dir: str = STORE_DIR,
             "action": "", "kind": "clear", "next": ""}
 
 
+def agenda(meditation_dir: str = MEDITATION_DIR, store_dir: str = STORE_DIR,
+           goals_dir: Optional[str] = None,
+           history_path: Optional[str] = None) -> List[Dict[str, str]]:
+    """The two-to-four things worth someone's attention, as spoken sentences.
+
+    The briefing picks the single highest-leverage thing to interrupt with.
+    This is the other half: when a person ASKS what's on the list, they want
+    the list — short, ordered, and in words they would use themselves.
+    """
+    import status as st
+    d = st.gather(meditation_dir=meditation_dir, store_dir=store_dir,
+                  goals_dir=goals_dir, history_path=history_path)
+    items: List[Dict[str, str]] = []
+
+    if d.get("repair_open"):
+        it = _idea_of_broken(store_dir)
+        what = _as_idea(it["idea"]) if it else ""
+        n = ""
+        try:
+            if it and int(it["n"]) > 1:
+                n = " There are %d of them." % int(it["n"])
+        except (ValueError, TypeError, KeyError):
+            pass
+        items.append({
+            "say": ("Some of what you told me has stopped being true"
+                    + ((" — starting with: " + what) if len(what) > 20 else "")
+                    + "." + n),
+            "action": "meditate fix"})
+
+    for g in (d.get("dispatchable") or [])[:2]:
+        # Goal titles are written for a file: a short name, an em-dash, then
+        # the whole description. Said aloud in full they bury the actual point.
+        title = g.get("title", g.get("name", "a goal")).split("\u2014")[0].strip()
+        nxt = _as_idea((g.get("next") or "").strip()) or "the open milestone"
+        items.append({
+            "say": "On %s, the next step is %s." % (title, nxt),
+            "action": "meditate go"})
+
+    days = d.get("still_days")
+    if days is None or days > 3:
+        items.append({
+            "say": "We haven't cleared the decks in a while — the sessions "
+                   "are piling up.",
+            "action": "/meditate"})
+
+    if not items:
+        items.append({"say": "Nothing's broken and nothing's waiting on you.",
+                      "action": ""})
+    return items[:4]
+
+
 def _speak(text: str) -> bool:
     try:
         subprocess.Popen(["say", text[:400]], stdout=subprocess.DEVNULL,
@@ -433,8 +484,21 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="speak even if you're in flow (override the gate)")
     ap.add_argument("--quiet", action="store_true",
                     help="heartbeat mode: only deliver, print nothing")
+    ap.add_argument("--agenda", action="store_true",
+                    help="the short list of things worth attention, one a line")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
+
+    if args.agenda:
+        rows = agenda()
+        if args.json:
+            print(json.dumps({"tool_name": "meditate_agenda", "success": True,
+                              "data": {"items": rows}, "metadata": {},
+                              "errors": []}, indent=2))
+        else:
+            for r in rows:
+                print(r["say"] + "\t" + r["action"])
+        return 0
 
     b = briefing()
     t = interruptibility()

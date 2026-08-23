@@ -113,6 +113,50 @@ def test_cli_envelope():
     assert env["data"]["count"] > 0
 
 
+# ---- attribution: what was BUILT, not where it was launched ---------------
+
+def test_a_container_directory_is_not_a_project():
+    """The workspace holds several products in one folder. Counting them as
+    one said purangpt owned 96.3% of all attention; measured by what was
+    edited it is 30.5%, and this tool itself is the other 30.3%."""
+    game = "/Users/badenath/projects/vedic puran/AwakenerUnity/Assets/x.cs"
+    api = "/Users/badenath/projects/vedic puran/purangpt/backend/main.py"
+    assert pj.project_of_work([game]) == "awakenerunity"
+    assert pj.project_of_work([api]) == "purangpt"
+    assert pj.project_of_work([game]) != pj.project_of_work([api])
+
+
+def test_a_source_folder_is_not_a_project():
+    """'vedic puran/AwakenerUnity' is a game and 'job-copilot/src' is a source
+    folder — both are the second path segment, so position cannot tell them
+    apart. The repo root can."""
+    assert pj.project_of_work(
+        ["/Users/badenath/projects/job-copilot/src/a.ts"]) == "job-copilot"
+
+
+def test_sibling_apps_stay_separate():
+    assert pj.project_of_work(
+        ["/Users/badenath/projects/vedic puran/purangpt-next/src/app/p.tsx"]
+    ) == "purangpt-next"
+
+
+def test_the_memory_store_is_not_a_project():
+    """Every session writes memory. Counting that as work made 'memory' look
+    like a 21% project."""
+    assert pj.project_of_work(
+        ["/Users/badenath/.claude/projects/-Users-x/memory/a.md"]) is None
+
+
+def test_a_session_that_edited_nothing_falls_back_to_where_it_ran():
+    assert pj.project_of_work([]) is None
+    assert pj.project_of_work(None) is None
+
+
+def test_worktrees_are_not_their_own_projects():
+    assert pj._clean_project_name("wt-glyph-sweep") == "glyph-sweep"
+    assert pj._clean_project_name("mila-rustore-wt") == "mila-rustore"
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

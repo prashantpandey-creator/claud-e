@@ -475,6 +475,18 @@ final class GhostView: NSView {
         var bw = w * 0.66 * (1 - breath + springSquash)
         var bh = h * 0.70 * (1 + breath - springSquash)
         bw *= 1 + glow * 0.02; bh *= 1 + glow * 0.02
+
+        // arriving: swell out of nothing with an overshoot, so he lands rather
+        // than fades up. A linear scale reads as a slow render, not an entrance.
+        if appear < 1 {
+            // squared first, so he starts genuinely tiny. Feeding `appear`
+            // straight into easeOutBack put him at 61% size a quarter second
+            // in, which looks like a slow paint rather than an arrival.
+            let x = appear * appear
+            let c1: CGFloat = 1.9, c3 = c1 + 1
+            let pop = max(0.02, 1 + c3 * pow(x - 1, 3) + c1 * pow(x - 1, 2))
+            bw *= pop; bh *= pop
+        }
         let ty = h * 0.10 + bob
         let left = cx - bw / 2
 
@@ -517,6 +529,7 @@ final class GhostView: NSView {
         // everything from here tilts together, pivoting on where he meets the
         // ground — tilting about the centre makes a head look detached
         ctx.saveGState()
+        if appear < 1 { ctx.setAlpha(min(1, pow(appear, 0.7) * 1.5)) }
         if abs(tilt) > 0.0005 {
             ctx.translateBy(x: cx, y: ty + bh)
             ctx.rotate(by: tilt)
@@ -1155,11 +1168,20 @@ func renderFrames(to dir: String) {
         ("listening", .listening, 1.0), ("speaking", .speaking, 1.0),
         ("thinking", .thinking, 0.6), ("blink", .idle, 0.25),
         ("happy", .idle, 0.4), ("surprised", .idle, 0.4),
-        ("sleepy", .idle, 0.25), ("hop", .idle, 0.4)]
+        ("sleepy", .idle, 0.25), ("hop", .idle, 0.4),
+        ("arrive1", .idle, 0.4), ("arrive2", .idle, 0.4),
+        ("arrive3", .idle, 0.4), ("arrive4", .idle, 0.4)]
     for (name, mood, glow) in moods {
         v.mood = mood; v.glow = glow
         v.feel(.neutral, for: 0)       // a timed feeling would bleed into the next frame
-        for _ in 0..<90 { v.tick(dt: 1.0 / 60) }
+        if name.hasPrefix("arrive") {
+            // the entrance, sampled at four points along its 1.5s
+            let stops = ["arrive1": 14, "arrive2": 30, "arrive3": 48, "arrive4": 82]
+            v.materialize()
+            for _ in 0..<(stops[name] ?? 20) { v.tick(dt: 1.0 / 60) }
+        } else {
+            for _ in 0..<90 { v.tick(dt: 1.0 / 60) }
+        }
         switch name {
         case "blink":     v.forceBlink(); v.tick(dt: 1.0 / 60)
         case "happy":     v.celebrate(); for _ in 0..<22 { v.tick(dt: 1.0 / 60) }
