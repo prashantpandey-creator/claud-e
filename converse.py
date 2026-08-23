@@ -125,8 +125,19 @@ def turn(utterance: str, allow_actions: bool = False,
     # ("what is bothering me" once matched the catch-all bucket 'other' and
     # answered 'no goal tracked yet' — routing order was the bug.)
     if _STATUS.search(text):
-        b = vc.briefing(**kw)
         out["intent"] = "status"
+        # The full catch-up, same composed sentences the console's hero shows —
+        # one voice everywhere. Spoken form takes the first three sentences;
+        # a five-sentence monologue is a wall in the ear too.
+        try:
+            import brief as bf
+            lines = bf.gather_and_compose() if not kw else []
+        except Exception:
+            lines = []
+        if lines:
+            out["speech"] = " ".join(lines[:3])
+            return out
+        b = vc.briefing(**kw)
         out["speech"] = b["headline"] + ((" " + b["action"] + ".") if b.get("action") else "")
         return out
 

@@ -172,11 +172,22 @@ def classify(turn: Dict[str, Any], age_h: Optional[float],
     if messages < MIN_MESSAGES:
         return {"state": "stale", "action": None, "why": "barely started"}
 
+    # An unanswered message decays: after a week the moment has passed and
+    # calling it "waiting" is false urgency — a 23-day-old half-sentence was
+    # being quoted back as the top thing owed.
+    waiting_dead = age_h is not None and age_h > 7 * 24
+
     if role == "user":
+        if waiting_dead:
+            return {"state": "stale", "action": None,
+                    "why": "unanswered, but %d days old" % int(age_h / 24)}
         return {"state": "waiting", "action": "reply",
                 "why": "you spoke last and nothing answered"}
 
     if role == "assistant" and _ASKED_YOU.search(text.strip()):
+        if waiting_dead:
+            return {"state": "stale", "action": None,
+                    "why": "its question expired unanswered"}
         return {"state": "waiting", "action": "reply",
                 "why": "it asked you something and stopped"}
 

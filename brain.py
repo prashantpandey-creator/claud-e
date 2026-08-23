@@ -265,6 +265,8 @@ def state() -> Dict[str, Any]:
         "briefing": _casper_briefing(),
         "timing": _casper_timing(),
         "projects": _projects_rollup(),
+        "projects_window_days": _window_days_cached(),
+        "fleet_running": _fleet_running(),
         "activity": _recent_events(),
     }
     try:
@@ -272,6 +274,13 @@ def state() -> Dict[str, Any]:
         d["insights"] = _ins(d)
     except Exception:
         d["insights"] = {"headline": "", "projects": [], "needs_you": [], "moving": []}
+    # the hero paragraph — composed from the SAME dict the page gets, so the
+    # words and the numbers under them can never disagree
+    try:
+        from brief import compose
+        d["brief"] = compose(d)
+    except Exception:
+        d["brief"] = []
     return d
 
 
@@ -289,6 +298,23 @@ def _casper_timing() -> Dict[str, Any]:
         return vc.interruptibility()
     except Exception:
         return {"state": "unknown", "interrupt_ok": False}
+
+
+_FLEET_CACHE: Dict[str, Any] = {"at": 0.0, "n": 0}
+
+
+def _fleet_running(ttl_s: float = 8.0) -> int:
+    """How many dispatched agents are still open. Cached — it asks Terminal,
+    and /api/state is polled by both the page and the mascot."""
+    if time.time() - _FLEET_CACHE["at"] < ttl_s:
+        return _FLEET_CACHE["n"]
+    try:
+        from drive import running_agents
+        n = len(running_agents())
+    except Exception:
+        n = 0
+    _FLEET_CACHE.update({"at": time.time(), "n": n})
+    return n
 
 
 _ROLLUP_CACHE: Dict[str, Any] = {"at": 0.0, "rows": []}
@@ -314,6 +340,20 @@ def _triage_cached(ttl_s: float = TRIAGE_TTL_S) -> Dict[str, Any]:
         out = {"counts": {}, "action_items": [], "skipped": 0}
     _TRIAGE_CACHE.update({"at": time.time(), "data": out})
     return out
+
+
+_WINDOW_CACHE: Dict[str, Any] = {"at": 0.0, "days": 0}
+
+
+def _window_days_cached(ttl_s: float = 600.0) -> int:
+    if time.time() - _WINDOW_CACHE["at"] < ttl_s and _WINDOW_CACHE["days"]:
+        return _WINDOW_CACHE["days"]
+    try:
+        from projects import window_days
+        _WINDOW_CACHE.update({"at": time.time(), "days": window_days()})
+    except Exception:
+        _WINDOW_CACHE["at"] = time.time()
+    return _WINDOW_CACHE["days"] or 0
 
 
 def _projects_rollup(ttl_s: float = ROLLUP_TTL_S) -> List[Dict[str, Any]]:
@@ -372,7 +412,8 @@ PAGE = """<!doctype html><meta charset="utf-8">
 <div style="letter-spacing:.35em;font-size:11px;color:#6b6557">MEDITATE · PULSE</div>
 <div style="font-size:22px;margin:6px 0 2px;color:#E3B140">Pulse <span style="font-size:13px;color:#8a8578">· your sessions, goals, memory and fleet — live. One click runs, and shows what ran.</span></div>
 <div id="meta" style="font-size:12px;color:#8a8578"></div>
-<div id="headline" style="margin:12px 0 4px;font-size:15px;color:#d8d2c4"></div>
+<div id="brief" style="margin:16px 0 6px;font-size:16.5px;line-height:1.55;color:#e6e0d2;max-width:820px"></div>
+<div id="headline" style="margin:6px 0 4px;font-size:13px;color:#8a8578"></div>
 <div id="next" style="margin:4px 0 14px;color:#E3B140"></div>
 <div style="display:flex;gap:36px;flex-wrap:wrap;margin:4px 0 8px">
   <div style="min-width:280px"><div style="letter-spacing:.3em;font-size:11px;color:#c96442">NEEDS YOU</div><div id="needs" style="font-size:12.5px;margin-top:6px"></div></div>
@@ -391,6 +432,7 @@ PAGE = """<!doctype html><meta charset="utf-8">
 <pre id="out" style="display:none;background:#12100c;border:1px solid #2a2620;border-radius:8px;padding:10px 14px;font-size:12px;color:#d8d2c4;white-space:pre-wrap;margin:10px 0 0"></pre>
 <style>.b{cursor:pointer;border:1px solid #2a2620;background:transparent;color:#E3B140;border-radius:7px;padding:6px 13px;font-size:13px}.b:hover{background:#1d1a14}
 .cap{font-size:10.5px;color:#6b6557;margin-top:4px;line-height:1.35}</style>
+<details style="margin-top:18px"><summary style="cursor:pointer;letter-spacing:.3em;font-size:11px;color:#6b6557">THE NUMBERS <span style="letter-spacing:0;color:#4a463c">— every table the sentences above were computed from</span></summary>
 <div id="stats" style="display:flex;flex-wrap:wrap;gap:24px;margin:18px 0"></div>
 <div style="font-size:11.5px;color:#6b6557;max-width:760px;margin:-4px 0 4px">what "a memory" means here: one fact about your work, saved with a receipt — the exact file and line it came from. Facts are re-checked against reality; a fact that stops matching goes to the repair queue instead of being trusted. Hover any number for its meaning.</div>
 <div style="letter-spacing:.3em;font-size:11px;color:#6b6557;margin-top:26px">LIVE SESSIONS <span style="letter-spacing:0;color:#4a463c">— each orb beats with its session: fast = working right now, dim ember = gone quiet (prāṇa, the breath)</span></div>
@@ -404,8 +446,9 @@ PAGE = """<!doctype html><meta charset="utf-8">
        background:radial-gradient(circle at 35% 35%, #f5d68a, #E3B140 55%, #6b4e12);
        animation:prana 2s ease-in-out infinite; margin:0 auto 8px; }
 </style>
-<div style="letter-spacing:.3em;font-size:11px;color:#6b6557;margin-top:26px">PROJECTS <span style="letter-spacing:0;color:#4a463c">— where your attention actually went, and what is open in each</span></div>
+<div style="letter-spacing:.3em;font-size:11px;color:#6b6557;margin-top:26px">PROJECTS <span style="letter-spacing:0;color:#4a463c" id="projlabel">— recent attention vs the repo's whole history</span></div>
 <div id="projects" style="font-size:13px;margin-top:8px"></div>
+</details>
 <div style="letter-spacing:.3em;font-size:11px;color:#6b6557;margin-top:22px">GOALS</div>
 <div id="goals"></div>
 <div style="letter-spacing:.3em;font-size:11px;color:#6b6557;margin-top:22px">FLEET</div>
@@ -491,15 +534,21 @@ async function tick(){
         · <a href="#" class="j-name" data-sid="${esc(x.sid)}" data-label="${esc(x.label)}" style="color:${DIM}" title="Rename this session in your own words.">name</a>
         · <a href="#" class="j-stop" data-sid="${esc(x.sid)}" data-label="${esc(x.label)}" style="color:${DIM}" title="End this session — same as closing its window.">stop</a></div>
     </div>`}).join("") || `<div style="color:${DIM};font-size:13px">no living sessions — the field is still</div>`;
-  document.getElementById("goals").innerHTML = s.goals.map(g=>
-    `<div style="margin:8px 0"><div style="display:flex;gap:12px;align-items:center">
+  const onGoal = {};
+  (s.fleet||[]).forEach(f=>{ if(f.goal) onGoal[f.goal] = f; });
+  document.getElementById("goals").innerHTML = s.goals.map(g=>{
+    const f = onGoal[g.name];
+    const working = f
+      ? `<span style="color:${G}" title="agent live on this goal${f.last_file?` — last touched ${esc(f.last_file)}`:""}">⟳ agent on it · ${Math.round(f.dispatched_min)}m${f.milestone_ticked?` · milestone ✓`:""}</span>`
+      : `<button class="b j-go" data-goal="${esc(g.name)}" style="padding:2px 9px;font-size:11px" title="Opens ONE Terminal agent working only this goal's next milestone: ${esc(g.next||'')}">dispatch</button>`;
+    return `<div style="margin:8px 0"><div style="display:flex;gap:12px;align-items:center">
       <span style="width:250px">${esc(g.title.slice(0,42))}</span>${bar(g.pct)}
       <span style="color:${G}">${Math.round(g.pct)}%</span>
       <span style="color:${DIM}">${g.done}/${g.total}</span>
       ${g.scope_delta>0?`<span style="color:${G}">scope +${g.scope_delta}</span>`:""}
-      <button class="b j-go" data-goal="${esc(g.name)}" style="padding:2px 9px;font-size:11px" title="Opens ONE Terminal agent working only this goal's next milestone: ${esc(g.next||'')}">dispatch</button></div>
-      <div style="margin-left:262px;font-size:12px;color:${DIM}">next: ${esc(g.next||"—")}</div></div>`
-  ).join("");
+      ${working}</div>
+      <div style="margin-left:262px;font-size:12px;color:${DIM}">next: ${esc(g.next||"—")}</div></div>`;
+  }).join("");
   document.getElementById("fleet").innerHTML = s.fleet.map(f=>{
     const status = f.says
       ? `<span style="color:${f.says_done?G:'#d8d2c4'}">${f.says_done?'✓ ':'▸ '}${esc(f.says)}</span> <span style="color:#4a463c">(${esc(f.says_ts||'')})</span>`
@@ -514,13 +563,23 @@ async function tick(){
      ${m.fails.map(f=>`<div style="margin-left:18px;color:${DIM};font-size:12px">FAILS ${esc(f)}</div>`).join("")}</div>`
   ).join("") || `<div style="color:${DIM}">clean — nothing failed verification</div>`;
   const tot = (s.projects||[]).reduce((a,p)=>a+p.messages,0)||1;
+  document.getElementById("brief").innerHTML =
+    (s.brief||[]).map(x=>esc(x)).join(" ") ||
+    `<span style="color:${DIM}">reading the room…</span>`;
+  const wd = s.projects_window_days||0;
+  if (wd) document.getElementById("projlabel").textContent =
+    `— % is share of the last ${wd} days of chats; commits are the whole history`;
   document.getElementById("projects").innerHTML = (s.projects||[]).map(p=>{
     const share = 100*p.messages/tot;
+    const hist = p.commits ? `${p.commits} commits since ${(p.since||"").slice(0,7)}`
+                           + (p.commits_recent?` · ${p.commits_recent} this month`:"")
+                           : "no repo";
     return `<div style="margin:7px 0">
       <div style="display:flex;gap:12px;align-items:center">
         <span style="width:140px;color:${G}">${esc(p.project)}</span>
         ${bar(share,140)}
         <span style="color:${DIM};width:150px">${share.toFixed(0)}% · ${p.messages} msgs · ${p.sessions} chats</span>
+        <span style="color:${DIM};width:230px">${esc(hist)}</span>
         <span style="color:${DIM}">${p.facts} facts${p.repair_items?` · <span style="color:${G}">${p.repair_items} to fix</span>`:""}</span>
       </div>
       ${(p.open_tasks||[]).map(t=>`<div style="margin-left:152px;font-size:11.5px;color:${DIM}">↳ ${esc(t.task)}</div>`).join("")}
@@ -595,6 +654,17 @@ class _Handler(BaseHTTPRequestHandler):
                 res = {"started": True, "output": "named"}
             elif action == "stop":
                 res = stop_session(arg)
+            elif action == "stopfleet":
+                # distinct from "stop", which halts ONE named session. This
+                # closes every agent this tool dispatched, and nothing else.
+                try:
+                    from drive import stop_fleet
+                    r = stop_fleet()
+                    res = {"started": True,
+                           "output": ("nothing was running" if not r["was_running"]
+                                      else "stopped %d agent(s)" % r["count"])}
+                except Exception as e:
+                    res = {"started": False, "output": "could not stop: %s" % e}
             elif action in ACTIONS:
                 res = ACT_RUNNER(action, arg)
             else:

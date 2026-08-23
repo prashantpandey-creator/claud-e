@@ -87,6 +87,22 @@ def test_every_element_the_script_fills_exists_in_the_page():
         assert not missing, f"{name} script writes to missing ids: {sorted(missing)}"
 
 
+def test_the_goals_bar_tracks_a_dispatched_fleet():
+    """When an agent is launched on a goal, its row must show it working —
+    the join from s.fleet into the goals renderer, and a live badge."""
+    assert "onGoal" in br.PAGE, "fleet is not joined into the goals bar"
+    assert "agent on it" in br.PAGE, "no visible sign an agent is working"
+    assert "dispatched_min" in br.PAGE, "how long it has been working is missing"
+
+
+def test_the_page_leads_with_words_not_tables():
+    """The hero paragraph renders from state.brief; the tables sit behind a
+    fold. A dashboard you must read has failed at being an assistant."""
+    assert 'id="brief"' in br.PAGE
+    assert "<details" in br.PAGE and "THE NUMBERS" in br.PAGE
+    assert br.PAGE.index('id="brief"') < br.PAGE.index("<details")
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

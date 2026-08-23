@@ -215,6 +215,116 @@ def project_of_work(files: Optional[List[str]]) -> Optional[str]:
     return max(counts, key=lambda k: counts[k])
 
 
+def window_days(root: Optional[str] = None) -> int:
+    """How far back the transcripts on disk actually reach. The attention
+    numbers are a share of THIS window, not of history — the tool archives
+    old transcripts, so the window is ~3 weeks here while the repos go back
+    months. The label must say so or the percentage lies by omission."""
+    root = root or os.path.expanduser("~/.claude/projects")
+    oldest = 0.0
+    try:
+        for slug in os.listdir(root):
+            d = os.path.join(root, slug)
+            if not os.path.isdir(d):
+                continue
+            for fn in os.listdir(d):
+                if fn.endswith(".jsonl"):
+                    try:
+                        age = time.time() - os.path.getmtime(os.path.join(d, fn))
+                        oldest = max(oldest, age)
+                    except OSError:
+                        pass
+    except OSError:
+        pass
+    return max(1, int(oldest / 86400))
+
+
+def _repo_dirs(containers: Optional[List[str]] = None,
+               max_depth: int = 2) -> Dict[str, str]:
+    """cleaned-name -> path for every REAL repo under the containers.
+
+    A worktree carries a .git FILE pointing at its parent repo; counting it
+    as a repo would count the same commits twice (wt-glyph-sweep is a branch
+    of purangpt-next, not a second project). Only a .git DIRECTORY counts.
+    """
+    out: Dict[str, str] = {}
+    roots = containers if containers is not None else _CONTAINERS[:2]
+    frontier = [(r, 0) for r in roots if os.path.isdir(r)]
+    while frontier:
+        base, depth = frontier.pop()
+        try:
+            entries = sorted(os.scandir(base), key=lambda e: e.name)
+        except OSError:
+            continue
+        for e in entries:
+            if not e.is_dir(follow_symlinks=False) or e.name.startswith("."):
+                continue
+            git = os.path.join(e.path, ".git")
+            if os.path.isdir(git):                      # real repo
+                name = _clean_project_name(e.name)
+                # An alias can fold a differently-named dir onto this name
+                # (the-vedic-mind-architecture -> purangpt). The repo whose
+                # OWN directory name is the name outranks an alias hit —
+                # otherwise scan order decides which repo owns the label,
+                # and the real purangpt lost its own name to a mirror.
+                exact = _clean_project_name.__wrapped__(e.name) == name \
+                    if hasattr(_clean_project_name, "__wrapped__") else \
+                    re.sub(r"[ _]+", "-", e.name.lower()).strip("-") == name
+                if exact or name not in out:
+                    if exact or not out.get("__exact_" + name):
+                        out[name] = e.path
+                if exact:
+                    out["__exact_" + name] = e.path
+            elif not os.path.exists(git) and depth + 1 < max_depth:
+                frontier.append((e.path, depth + 1))    # container, look inside
+    return {k: v for k, v in out.items() if not k.startswith("__exact_")}
+
+
+def _git_out(repo: str, *args: str) -> str:
+    import subprocess
+    try:
+        r = subprocess.run(["git", "-C", repo, *args], capture_output=True,
+                           text=True, timeout=20)
+        return r.stdout.strip() if r.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
+_HISTORY_CACHE: Dict[str, Any] = {"at": 0.0, "data": {}}
+
+
+def commit_history(recent_days: int = 30,
+                   containers: Optional[List[str]] = None,
+                   ttl_s: float = 300.0) -> Dict[str, Dict[str, Any]]:
+    """name -> {commits, commits_recent, since} from each repo's OWN history.
+
+    Transcripts only reach back ~23 days here — the tool archives them — so
+    message counts are a recency window, not a history. Git is the durable
+    record: purangpt shows 574 commits since June while this tool's 79 span
+    two days. Both axes are true; only shown together are they honest.
+    """
+    import time as _t
+    if containers is None and _t.time() - _HISTORY_CACHE["at"] < ttl_s \
+            and _HISTORY_CACHE["data"]:
+        return _HISTORY_CACHE["data"]
+    out: Dict[str, Dict[str, Any]] = {}
+    for name, path in _repo_dirs(containers).items():
+        # --branches, not HEAD: the checked-out branch here sat at Jul 21
+        # while a month of work lived on worktree branches in the same repo.
+        total = _git_out(path, "rev-list", "--count", "--branches")
+        if not total or not int(total):
+            continue
+        recent = _git_out(path, "rev-list", "--count",
+                          "--since=%d.days" % recent_days, "--branches")
+        since = _git_out(path, "log", "--max-parents=0", "--format=%as")
+        out[name] = {"commits": int(total),
+                     "commits_recent": int(recent or 0),
+                     "since": (since.splitlines() or [""])[-1]}
+    if containers is None:
+        _HISTORY_CACHE.update({"at": _t.time(), "data": out})
+    return out
+
+
 def rollup(sessions: Optional[List[Dict]] = None,
            store_dir: str = STORE_DIR,
            goals_dir: Optional[str] = None,
@@ -251,6 +361,19 @@ def rollup(sessions: Optional[List[Dict]] = None,
         if age is not None:
             if r["last_touched_days"] is None or age < r["last_touched_days"]:
                 r["last_touched_days"] = round(age, 1)
+
+    # history: the repos' own record, which outlives the transcripts
+    hist = commit_history()
+    for name, h in hist.items():
+        if name in proj or h["commits_recent"] > 0:
+            r = row(name)
+            r["commits"] = h["commits"]
+            r["commits_recent"] = h["commits_recent"]
+            r["since"] = h["since"]
+    for r in proj.values():
+        r.setdefault("commits", 0)
+        r.setdefault("commits_recent", 0)
+        r.setdefault("since", "")
 
     # knowledge
     mp = os.path.join(store_dir, "memories.jsonl")
