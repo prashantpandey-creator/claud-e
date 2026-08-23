@@ -22,6 +22,7 @@ struct Brief {
     var canInterrupt: Bool
     var facts: Int
     var verified: Int
+    var fleetRunning: Int = 0
 }
 
 final class Meditate {
@@ -62,7 +63,8 @@ final class Meditate {
                         action: b["action"] as? String ?? "",
                         kind: b["kind"] as? String ?? "clear",
                         canInterrupt: t["interrupt_ok"] as? Bool ?? false,
-                        facts: 0, verified: 0)
+                        facts: 0, verified: 0,
+                        fleetRunning: j["fleet_running"] as? Int ?? 0)
         }.resume()
         _ = sem.wait(timeout: .now() + 8)
         return out
@@ -196,6 +198,23 @@ final class GhostView: NSView {
     private var lean: CGFloat = 0
     private var ring: CGFloat = 0
 
+    // ---- micro-expressions -------------------------------------------------
+    // Brief, involuntary-looking twitches. Nobody consciously notices them;
+    // without them a face reads as a puppet holding still between commands.
+    private enum Micro { case none, browRaise, smileFlick, squint, sniff }
+    private var micro: Micro = .none
+    private var microUntil: CGFloat = 0
+    private var nextMicroAt: CGFloat = 1.8
+
+    /// How interested he is in you right now — rises as your cursor comes
+    /// near. Drives pupil size, because pupils widening is the one cue people
+    /// read as warmth without ever being able to name it.
+    private var interest: CGFloat = 0
+
+    /// Nothing symmetrical looks alive. One eye is a hair bigger and blinks a
+    /// beat sooner than the other, forever.
+    private let asym: CGFloat = 0.055
+
     // ---- body physics: one spring, doing all the bouncing ------------------
     // A hop, a landing squash and a click bounce are the same thing from a
     // mascot's point of view: a mass on a spring. Driving them from real
@@ -244,6 +263,24 @@ final class GhostView: NSView {
     private var quietFrames = 0
 
     override var isFlipped: Bool { true }
+
+    /// Where your cursor is, as a gaze direction — nil when it is too far
+    /// away to care about.
+    ///
+    /// This is the cheapest large thing in the whole mascot: a character whose
+    /// eyes follow you has been noticed by you, and one whose eyes wander at
+    /// random is a screensaver. Everything else here is decoration on top.
+    private func cursorGaze() -> (CGPoint, CGFloat)? {
+        guard let win = window else { return nil }
+        let p = convert(win.convertPoint(fromScreen: NSEvent.mouseLocation), from: nil)
+        let cx = bounds.width / 2, cy = bounds.height * 0.42
+        let dx = p.x - cx, dy = p.y - cy
+        let dist = hypot(dx, dy)
+        guard dist < 520 else { return nil }
+        let near = max(0, 1 - dist / 380)           // 1 when right on him
+        return (CGPoint(x: max(-1, min(1, dx / 150)),
+                        y: max(-1, min(1, dy / 150))), near)
+    }
 
     /// Force the next frame to be mid-blink. Only render mode uses this —
     /// blinks are on a random schedule, so a review frame would never catch one.
@@ -359,7 +396,13 @@ final class GhostView: NSView {
                 gazeTo = CGPoint(x: .random(in: -0.9 ... 0.9), y: .random(in: -0.7 ... 0.4))
                 gazeAt = t + 2.5
             case .tilt:   tiltTo = CGFloat.random(in: -0.16 ... 0.16)
-            case .hop:    hopV -= 150
+            case .hop:
+                // crouch first, THEN spring. Anticipation is the difference
+                // between a jump and a teleport upward.
+                hopV += 95
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.13) { [weak self] in
+                    self?.hopV -= 260
+                }
             case .peek:   gazeTo = CGPoint(x: 0, y: -0.45); gazeAt = t + 2; blinksOwed = 1
             case .yawn:   feel(.sleepy, for: 2.2)
             default:      break
@@ -372,11 +415,27 @@ final class GhostView: NSView {
             nextActAt = t + CGFloat.random(in: 3.5...9.0) * (1.25 - energy * 0.7)
         }
 
+        // ---- micro-expressions ------------------------------------------------
+        if t > microUntil { micro = .none }
+        if micro == .none && t > nextMicroAt && mood != .speaking {
+            let bag: [Micro] = interest > 0.35
+                ? [.browRaise, .smileFlick, .browRaise, .sniff]
+                : [.squint, .sniff, .browRaise]
+            micro = bag.randomElement() ?? .browRaise
+            microUntil = t + CGFloat.random(in: 0.16...0.30)
+            nextMicroAt = t + CGFloat.random(in: 1.6...4.2)
+        }
+
         // ---- gaze -----------------------------------------------------------
+        let cursor = cursorGaze()
+        interest += ((cursor?.1 ?? 0) - interest) * min(1, dt * 4)
         if mood == .thinking {
             gazeTo = CGPoint(x: -0.5, y: -0.6)
         } else if mood == .listening {
             gazeTo = CGPoint(x: 0, y: -0.25)          // look AT you while you talk
+        } else if let c = cursor, act == .none, c.1 > 0.08 {
+            gazeTo = c.0                              // he is watching your cursor
+            gazeAt = t + 0.4
         } else if t > gazeAt {
             gazeTo = CGPoint(x: .random(in: -0.45...0.45), y: .random(in: -0.3...0.25))
             gazeAt = t + CGFloat.random(in: 1.4...3.6)
@@ -402,6 +461,7 @@ final class GhostView: NSView {
         } else {
             mouthTarget = 0
         }
+        if micro == .smileFlick { mouthTarget += 0.14 }
         mouth += (mouthTarget - mouth) * min(1, dt * 16)
 
         // ---- spring, tilt, sway ----------------------------------------------
@@ -578,8 +638,8 @@ final class GhostView: NSView {
         ctx.restoreGState()
 
         // ---- face
-        let eyeY = ty + bh * 0.40
-        let eyeDX = bw * 0.21
+        let eyeY = ty + bh * 0.435      // low on the face reads younger
+        let eyeDX = bw * 0.225
         drawEyes(cx: cx, eyeY: eyeY, eyeDX: eyeDX, bw: bw, bh: bh)
 
         // blush — deeper when pleased, which is most of what "cute" is
@@ -649,12 +709,23 @@ final class GhostView: NSView {
         let openAmt = max(0.08, blink)
         let wide: CGFloat = feeling == .surprised ? 1.45 : 1.0
         let lid: CGFloat = feeling == .sleepy ? 0.45 : 1.0
-        let eyeW = bw * 0.115 * wide
-        let eyeH = eyeW * 1.45 * openAmt * lid
+        // pupils widen as you come near. Nobody can name this cue; everybody
+        // reads it as warmth.
+        let dilate = 1 + interest * 0.12
+        // micro-expressions: a brow raise or a squint, 0.2s, involuntary
+        let browed: CGFloat = micro == .browRaise ? 1.22
+                            : micro == .squint    ? 0.62 : 1.0
+        let eyeW = bw * 0.135 * wide * dilate
+        let eyeH = eyeW * 1.22 * openAmt * lid * browed
 
-        for sx in [-eyeDX, eyeDX] {
-            let ex = cx + sx + gaze.x * bw * 0.055
-            let ey = eyeY + gaze.y * bh * 0.042
+        for (i, sx) in [-eyeDX, eyeDX].enumerated() {
+            // nothing symmetrical looks alive: one eye a hair bigger, and it
+            // shuts a beat before the other
+            let k = 1 + (i == 0 ? asym : -asym)
+            let eyeW = eyeW * k, eyeH = eyeH * k
+            let jitter: CGFloat = micro == .sniff ? sin(t * 34) * 0.5 : 0
+            let ex = cx + sx + gaze.x * bw * 0.062 + jitter
+            let ey = eyeY + gaze.y * bh * 0.048
 
             // sleepy: heavy lids drawn as a downward curve. Squashing the
             // capsule was not enough — a short wide oval with a highlight in
@@ -691,10 +762,15 @@ final class GhostView: NSView {
                 NSRect(x: ex - eyeW / 2, y: ey - eyeH / 2, width: eyeW, height: eyeH),
                 xRadius: eyeW / 2, yRadius: min(eyeW / 2, eyeH / 2))
             ink.setFill(); e.fill()
-            if blink > 0.55 {          // specular dot — the thing that makes eyes alive
-                NSColor(white: 1, alpha: 0.92 * blink).setFill()
-                NSBezierPath(ovalIn: NSRect(x: ex - eyeW * 0.08, y: ey - eyeH * 0.26,
-                                            width: eyeW * 0.30, height: eyeW * 0.30)).fill()
+            if blink > 0.55 {
+                // two highlights, not one. A single dot is a doll's eye; a big
+                // one with a small one behind it is wet, and wet reads alive.
+                NSColor(white: 1, alpha: 0.94 * blink).setFill()
+                NSBezierPath(ovalIn: NSRect(x: ex - eyeW * 0.10, y: ey - eyeH * 0.28,
+                                            width: eyeW * 0.34, height: eyeW * 0.34)).fill()
+                NSColor(white: 1, alpha: 0.45 * blink).setFill()
+                NSBezierPath(ovalIn: NSRect(x: ex + eyeW * 0.14, y: ey + eyeH * 0.16,
+                                            width: eyeW * 0.11, height: eyeW * 0.11)).fill()
             }
         }
     }
@@ -744,6 +820,8 @@ final class App: NSObject, NSApplicationDelegate {
     var yesBtn: NSButton!
     var noBtn: NSButton!
     var askBtn: NSButton!
+    var fleetBtn: NSButton!
+    var fleetRunning = 0
     var micBtn: NSButton!
     let mouth = Mouth()
     let ear = Ear()
@@ -810,15 +888,20 @@ final class App: NSObject, NSApplicationDelegate {
         bubble.cell?.isScrollable = false
         bubbleBox.addSubview(bubble)
 
-        yesBtn = button("Yes, fix it", x: 6, w: 92)
+        yesBtn = button("Yes, fix it", x: 6, w: 72)
         yesBtn.target = self; yesBtn.action = #selector(sayYes)
         yesBtn.keyEquivalent = "\r"                 // the obvious answer is the default
         style(yesBtn, title: "Yes, fix it", accent: true)
-        noBtn = button("Not now", x: 102, w: 92)
+        noBtn = button("Not now", x: 82, w: 48)
         noBtn.target = self; noBtn.action = #selector(sayNo)
-        askBtn = button("Ask me", x: 102, w: 92)
+        askBtn = button("Ask", x: 136, w: 58)
         askBtn.target = self; askBtn.action = #selector(askSomething)
-        micBtn = button("Talk to me", x: 6, w: 92)
+        fleetBtn = button("Start fleet", x: 68, w: 64)
+        fleetBtn.target = self; fleetBtn.action = #selector(toggleFleet)
+        tinted(fleetBtn, title: "Start fleet", tint: .green)
+        root.addSubview(fleetBtn)
+
+        micBtn = button("Talk", x: 6, w: 58)
         micBtn.target = self; micBtn.action = #selector(toggleMic)
         [yesBtn, noBtn, askBtn, micBtn].forEach { root.addSubview($0!) }
         showOffer(false)
@@ -897,6 +980,14 @@ final class App: NSObject, NSApplicationDelegate {
         Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in self.writeStatus() }
 
         Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { _ in self.check() }
+        // the switch tracks reality on its own clock: a 20s lag on "is work
+        // running" is long enough to press start on something already running
+        Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { _ in
+            DispatchQueue.global().async {
+                guard let b = Meditate.briefFromServer() else { return }
+                DispatchQueue.main.async { self.refreshFleetButton(b.fleetRunning) }
+            }
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + (firstEver ? 2.1 : 1.2)) {
             self.greet()
         }
@@ -917,6 +1008,28 @@ final class App: NSObject, NSApplicationDelegate {
         b.layer?.backgroundColor = NSColor(calibratedWhite: 0.13, alpha: 0.92).cgColor
         style(b, title: title, accent: false)
         return b
+    }
+
+    /// Colour carries the verb. Green starts work, red stops it, amber is the
+    /// affirmative answer to a question he asked. Nobody should have to read a
+    /// 60px label to find out which button is the dangerous one.
+    enum Tint { case neutral, amber, green, red }
+
+    func tinted(_ b: NSButton, title: String, tint: Tint) {
+        let bg: NSColor
+        var fg = NSColor(calibratedWhite: 0.97, alpha: 1)
+        switch tint {
+        case .green:   bg = NSColor(srgbRed: 0.18, green: 0.68, blue: 0.34, alpha: 1)
+        case .red:     bg = NSColor(srgbRed: 0.84, green: 0.26, blue: 0.24, alpha: 1)
+        case .amber:   bg = NSColor(srgbRed: 0.91, green: 0.71, blue: 0.25, alpha: 1)
+                       fg = NSColor(calibratedWhite: 0.10, alpha: 1)
+        case .neutral: bg = NSColor(calibratedWhite: 0.13, alpha: 0.92)
+        }
+        b.attributedTitle = NSAttributedString(string: title, attributes: [
+            .foregroundColor: fg,
+            .font: NSFont.systemFont(ofSize: 11, weight: .semibold),
+        ])
+        b.layer?.backgroundColor = bg.cgColor
     }
 
     func style(_ b: NSButton, title: String, accent: Bool) {
@@ -952,6 +1065,9 @@ final class App: NSObject, NSApplicationDelegate {
         noBtn.isHidden = !on
         askBtn.isHidden = on          // one row, two states — never four buttons
         micBtn.isHidden = on
+        // ...except the fleet switch, which stays. Whether work is running is
+        // not a question he asked you, and you should always be able to stop it.
+        fleetBtn.isHidden = false
     }
 
     func say(_ text: String) {
@@ -1020,6 +1136,7 @@ final class App: NSObject, NSApplicationDelegate {
             DispatchQueue.main.async { self.serverState = viaServer != nil ? "up" : "down" }
             guard let b = viaServer ?? Meditate.brief() else { return }
             DispatchQueue.main.async {
+                self.refreshFleetButton(b.fleetRunning)
                 let hasSomething = !b.headline.isEmpty && b.kind != "clear"
                 self.ghost.glow = hasSomething ? 1.0 : 0.25
                 guard hasSomething, b.canInterrupt, b.headline != self.lastSpoken,
@@ -1148,6 +1265,8 @@ final class App: NSObject, NSApplicationDelegate {
         if ghost.onClick   != nil { wired.append("click>listen") }
         if ghost.hearLevel == ear.level { wired.append("mic>face") }
         parts.append("wired=" + wired.joined(separator: ","))
+        parts.append("fleet=" + (fleetBtn.isHidden ? "hidden" : "shown")
+                     + ":" + fleetBtn.title + ":" + String(fleetRunning))
         // Cached from the 20s poll. Asking the server here would block the
         // main thread for up to 8s every 2s — a diagnostic that freezes the
         // thing it is diagnosing is not a diagnostic.
@@ -1206,6 +1325,38 @@ final class App: NSObject, NSApplicationDelegate {
         style(micBtn, title: on ? "I'm listening" : "Talk to me", accent: on)
         micBtn.toolTip = on ? "Click to stop listening"
                             : "Click to let Casper hear you"
+    }
+
+    /// Green starts the fleet, red stops it. Same button — the colour IS the
+    /// state, so there is never a moment where you can press start on
+    /// something already running.
+    @objc func toggleFleet() {
+        let stopping = fleetRunning > 0
+        setBubble(stopping ? "Stopping…" : "Starting the fleet…")
+        busy = true
+        DispatchQueue.global().async {
+            let out = Meditate.postAct(stopping ? "stopfleet" : "go") ?? ""
+            DispatchQueue.main.async {
+                self.busy = false
+                if !stopping && !out.lowercased().contains("error") {
+                    self.ghost.celebrate()
+                }
+                self.say(out.isEmpty ? (stopping ? "Stopped." : "They're off.")
+                                     : String(out.prefix(220)))
+                self.refreshFleetButton(stopping ? 0 : self.fleetRunning)
+            }
+        }
+    }
+
+    /// The button repaints from the SERVER's count, never from what we just
+    /// asked for — otherwise it lies for the seconds between the two.
+    func refreshFleetButton(_ n: Int) {
+        fleetRunning = n
+        if n > 0 {
+            tinted(fleetBtn, title: "Stop \(n)", tint: .red)
+        } else {
+            tinted(fleetBtn, title: "Start fleet", tint: .green)
+        }
     }
 
     @objc func sayNo() {

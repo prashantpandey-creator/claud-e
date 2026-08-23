@@ -128,6 +128,44 @@ def test_fleet_status_survives_a_session_that_has_touched_no_files():
     assert dv._last_file({"files": {"/a/b/late.py": 20, "/a/b/early.py": 10}}) == "late.py"
 
 
+def test_alive_is_the_only_honest_test_of_a_kill():
+    """Verification used to re-read the window's tty. Once the window is gone
+    that returns nothing, and absence of evidence read as success — it
+    reported "stopped 2 agents" with the process still running."""
+    assert dv._alive(os.getpid()) is True
+    assert dv._alive(999999) is False
+
+
+def test_stop_fleet_reports_nothing_when_nothing_is_ours():
+    """Two unrelated Terminal windows were open during this; neither is ours,
+    and stop must leave them alone."""
+    import tempfile, json, time
+    with tempfile.TemporaryDirectory() as tmp:
+        led = os.path.join(tmp, "d.jsonl")
+        with open(led, "w") as f:
+            f.write(json.dumps({"goal": "old", "ts_epoch": time.time(),
+                                "window_id": "999999999"}) + "\n")
+        r = dv.stop_fleet(ledger_path=led)
+        assert r["was_running"] == 0, r
+        assert r["count"] == 0 and not r["failed"], r
+
+
+def test_a_stopped_row_does_not_hide_a_live_agent():
+    """The ledger note is a hint. Whether it runs is decided by the process."""
+    import tempfile, json, time
+    with tempfile.TemporaryDirectory() as tmp:
+        led = os.path.join(tmp, "d.jsonl")
+        with open(led, "w") as f:
+            f.write(json.dumps({"goal": "g", "ts_epoch": time.time(),
+                                "window_id": "12345"}) + "\n")
+            f.write(json.dumps({"goal": "g", "event": "stopped",
+                                "ts_epoch": time.time(),
+                                "window_id": "12345"}) + "\n")
+        # window 12345 does not exist, so nothing is running either way —
+        # the point is it does not crash and does not invent a runner
+        assert dv.running_agents(ledger_path=led) == []
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

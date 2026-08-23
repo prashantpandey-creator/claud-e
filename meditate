@@ -118,6 +118,25 @@ case "${1:-}" in
     echo "Click him and talk, or say \"Casper, ...\" — he answers from what he"
     echo "knows about your work. Everything he hears stays on this Mac."
     ;;
+  stop|halt)
+    shift
+    # Close every agent THIS tool dispatched, and nothing else — the window
+    # ids were recorded at launch precisely so this cannot take out the
+    # session you are typing in.
+    python3 -c "
+import sys; sys.path.insert(0, '$DIR')
+from drive import stop_fleet
+r = stop_fleet()
+if not r['was_running']:
+    print('Nothing of mine is running.')
+else:
+    print('Stopped %d agent(s).' % r['count'])
+    for a in r['closed']:
+        print('  %s  (%d min in)' % (a['goal'], a['age_min']))
+    for a in r['failed']:
+        print('  could not close: %s' % a['goal'])
+"
+    ;;
   advise|advice|think)
     shift
     python3 "$DIR/advisor.py" "$@"

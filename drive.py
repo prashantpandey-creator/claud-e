@@ -26,6 +26,8 @@ import argparse
 import json
 import os
 import sys
+import signal
+import subprocess
 import time
 from typing import Any, Callable, Dict, List, Optional
 
@@ -111,6 +113,10 @@ def run(go: int = 0, goals_dir: Optional[str] = None,
                         "goal": g["name"], "milestone": g["next"],
                         "ts_epoch": time.time(),
                         "ts": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()),
+                        # which Terminal window this agent got. Without it,
+                        # "stop the fleet" can only mean killing every claude
+                        # on the machine, including the one you are typing in.
+                        "window_id": getattr(launcher, "last_window_id", ""),
                     }) + "\n")
             except OSError:
                 pass
@@ -224,3 +230,211 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv[1:]))
+
+def _open_window_ids() -> set:
+    """Terminal window ids that currently exist."""
+    try:
+        r = subprocess.run(
+            ["osascript", "-e",
+             'tell application "Terminal" to return id of every window'],
+            capture_output=True, text=True, timeout=10)
+    except Exception:
+        return set()
+    return {w.strip() for w in (r.stdout or "").split(",") if w.strip()}
+
+
+def running_agents(ledger_path: str = None, max_age_h: float = 12.0):
+    """Agents THIS tool dispatched whose Terminal window is still open.
+
+    Keyed on the window id recorded at dispatch. Without that, "stop the
+    fleet" could only mean killing every claude on the machine — including
+    the session you are typing in.
+    """
+    lp = ledger_path or LEDGER_PATH
+    now = time.time()
+    latest = {}
+    try:
+        with open(lp) as f:
+            for line in f:
+                try:
+                    r = json.loads(line)
+                except Exception:
+                    continue
+                wid = str(r.get("window_id") or "").strip()
+                if not wid:
+                    continue
+                if now - r.get("ts_epoch", 0) > max_age_h * 3600:
+                    continue
+                latest[wid] = r
+    except OSError:
+        return []
+    alive = _open_window_ids()
+    return [{"window_id": w, "goal": r.get("goal", ""),
+             "milestone": r.get("milestone", ""),
+             "age_min": int((now - r.get("ts_epoch", now)) / 60)}
+            for w, r in latest.items() if w in alive]
+
+
+def _alive(pid: int) -> bool:
+    """Is this pid still running? The only honest test of a kill."""
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except Exception:
+        return False
+
+
+def _tty_of(window_id: str) -> str:
+    try:
+        r = subprocess.run(
+            ["osascript", "-e",
+             'tell application "Terminal" to return tty of selected tab of '
+             'window id %s' % window_id],
+            capture_output=True, text=True, timeout=8)
+        return (r.stdout or "").strip()
+    except Exception:
+        return ""
+
+
+def _agent_pids(tty: str) -> List[int]:
+    """claude processes running on a terminal, by pid.
+
+    Not the login shell and not zsh — those ignore TERM and survive on
+    purpose. The agent is the thing we started and the only thing we kill.
+    """
+    dev = (tty or "").replace("/dev/", "")
+    if not dev:
+        return []
+    try:
+        r = subprocess.run(["ps", "-t", dev, "-o", "pid=,command="],
+                           capture_output=True, text=True, timeout=8)
+    except Exception:
+        return []
+    out = []
+    for line in (r.stdout or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        pid, _, cmd = line.partition(" ")
+        if "claude" not in cmd:
+            continue
+        try:
+            out.append(int(pid))
+        except ValueError:
+            continue
+    return out
+
+
+def running_agents(ledger_path: str = None, max_age_h: float = 12.0):
+    """Agents THIS tool dispatched that are still actually working.
+
+    Keyed on the window id recorded at dispatch, then confirmed by finding a
+    live claude process on that window's tty. Window-open alone was the wrong
+    test: Terminal keeps a window after its shell exits (a preference we do
+    not control), so a finished agent would have counted as running forever.
+    """
+    lp = ledger_path or LEDGER_PATH
+    now = time.time()
+    latest = {}
+    try:
+        with open(lp) as f:
+            for line in f:
+                try:
+                    r = json.loads(line)
+                except Exception:
+                    continue
+                wid = str(r.get("window_id") or "").strip()
+                if not wid:
+                    continue
+                if r.get("event") == "stopped":
+                    # only a HINT. Whether it is running is decided below by
+                    # looking for the process, not by trusting our own note —
+                    # a false "stopped" row once hid a live agent completely.
+                    latest.pop(wid, None)
+                    continue
+                if now - r.get("ts_epoch", 0) > max_age_h * 3600:
+                    continue
+                latest[wid] = r
+    except OSError:
+        return []
+    alive = _open_window_ids()
+    out = []
+    for w, r in latest.items():
+        if w not in alive:
+            continue
+        pids = _agent_pids(_tty_of(w))
+        if not pids:
+            continue
+        out.append({"window_id": w, "goal": r.get("goal", ""),
+                    "milestone": r.get("milestone", ""),
+                    "pids": pids,
+                    "age_min": int((now - r.get("ts_epoch", now)) / 60)})
+    return out
+
+
+def stop_fleet(ledger_path: str = None):
+    """End the agents we started, and nothing else.
+
+    Success is THE AGENT IS GONE, not "the window closed". `close window id N`
+    returns success and leaves a busy window open — measured: it reported
+    "stopped 1 agent(s)" with the window still on screen — and even an idle
+    window stays if Terminal is set to keep it. So: kill the claude processes
+    on that window's tty, verify they are gone, then ask the window to close
+    as a courtesy and do not claim it either way.
+    """
+    agents = running_agents(ledger_path)
+    stopped, failed = [], []
+    for a in agents:
+        # Verify by PID, never by re-reading the tty. Once the window is
+        # gone _tty_of returns "" and _agent_pids returns [] — absence of
+        # evidence read as success, and it claimed "stopped 2 agents" with the
+        # process still alive.
+        for pid in a["pids"]:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            except Exception:
+                pass
+        deadline = time.time() + 5
+        while time.time() < deadline and any(_alive(p) for p in a["pids"]):
+            time.sleep(0.25)
+        # a agent that ignores TERM still has to go
+        for pid in a["pids"]:
+            if _alive(pid):
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except Exception:
+                    pass
+        deadline = time.time() + 3
+        while time.time() < deadline and any(_alive(p) for p in a["pids"]):
+            time.sleep(0.2)
+        gone = not any(_alive(p) for p in a["pids"])
+        if gone:
+            try:
+                subprocess.run(
+                    ["osascript", "-e",
+                     'tell application "Terminal" to close window id %s'
+                     % a["window_id"]], capture_output=True, timeout=8)
+            except Exception:
+                pass
+        (stopped if gone else failed).append(a)
+    if stopped:
+        try:
+            with open(ledger_path or LEDGER_PATH, "a") as f:
+                for a in stopped:
+                    f.write(json.dumps({
+                        "goal": a["goal"], "event": "stopped",
+                        "window_id": a["window_id"],
+                        "ts_epoch": time.time(),
+                        "ts": time.strftime("%Y-%m-%dT%H:%M:%S+00:00",
+                                            time.gmtime()),
+                    }) + "\n")
+        except OSError:
+            pass
+    return {"closed": stopped, "failed": failed,
+            "count": len(stopped), "was_running": len(agents)}
