@@ -19,6 +19,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 
 SKILL = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SKILL)
@@ -116,6 +117,24 @@ def test_sangama_event_counts():
                        coord_root=coord, meditation_dir=med)
         assert d["sangama"]["facts_served"] == 2
         assert d["sangama"]["collisions_warned"] == 1
+        assert d["sangama"]["span_days"] is None   # "x" does not parse as a ts
+
+
+def test_sangama_span_is_the_oldest_counted_event():
+    """The milestone needs 'a week accumulated' — span must read from the
+    EARLIEST fact/collision event, not the newest, or a week of history
+    would look like it just started."""
+    with tempfile.TemporaryDirectory() as t:
+        store, arch, coord, med = _world(t)
+        old_ts = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(time.time() - 8 * 86400))
+        new_ts = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(time.time() - 1 * 86400))
+        with open(os.path.join(coord, "events.jsonl"), "w") as f:
+            f.write(json.dumps({"type": "collision_warned", "ts": old_ts}) + "\n")
+            f.write(json.dumps({"type": "fact_served", "ts": new_ts}) + "\n")
+            f.write(json.dumps({"type": "brain_action", "ts": "2020-01-01T00:00:00+00:00"}) + "\n")
+        d = rp.compute(store_dir=store, archive_root=arch,
+                       coord_root=coord, meditation_dir=med)
+        assert abs(d["sangama"]["span_days"] - 8.0) < 0.2, d["sangama"]
 
 
 def test_drift_demotion_pairs_with_later_repair():

@@ -138,12 +138,19 @@ def _stilling(archive_root: str, meditation_dir: str) -> Dict[str, Any]:
 
 def _sangama(coord_root: str) -> Dict[str, Any]:
     counts = {"fact_served": 0, "collision_warned": 0}
+    earliest = None
     for e in _jsonl(os.path.join(coord_root, "events.jsonl")):
         t = e.get("type")
-        if t in counts:
-            counts[t] += 1
+        if t not in counts:
+            continue
+        counts[t] += 1
+        ts = _ts(e.get("ts", ""))
+        if ts and (earliest is None or ts < earliest):
+            earliest = ts
+    span_days = round((time.time() - earliest) / 86400, 1) if earliest else None
     return {"facts_served": counts["fact_served"],
-            "collisions_warned": counts["collision_warned"]}
+            "collisions_warned": counts["collision_warned"],
+            "span_days": span_days}
 
 
 def compute(store_dir: str = STORE_DIR, archive_root: str = ARCHIVE_ROOT,
@@ -184,6 +191,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     if s["stillness_age_days"] is not None:
         print("    last stilling pass:  %.1f days ago" % s["stillness_age_days"])
     print("\n  Sangama (since 0.4.3 — logged from now on)")
+    if g["span_days"] is not None:
+        print("    counters span:                    %.1f days" % g["span_days"])
     print("    graded facts served at edit time: %d" % g["facts_served"])
     print("    collision warnings issued:        %d" % g["collisions_warned"])
     return 0
