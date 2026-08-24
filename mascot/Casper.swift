@@ -1341,8 +1341,11 @@ final class App: NSObject, NSApplicationDelegate {
         let fleetW = App.widthFor("Stop 88", font: bf)
         let fleetXPos = W - 8 - fleetW
         let leftWidth = fleetXPos - 12   // a real gap before the fleet switch
-        let offerX = App.rowX(["Yes", "Not now"], font: bf, width: leftWidth)
+        let offerX = App.rowX(["Yes", "Not now", "Muted"], font: bf, width: leftWidth)
         let ctrlX  = App.rowX(["Hearing", "Muted", "Ask"], font: bf, width: leftWidth)
+        // Mute sits in the SAME slot in both rows, so it never moves under
+        // your cursor when a question appears.
+        let muteX = (max(offerX[2].0, ctrlX[1].0), max(offerX[2].1, ctrlX[1].1))
 
         yesBtn = button("Yes", x: offerX[0].0, w: offerX[0].1)
         yesBtn.target = self; yesBtn.action = #selector(sayYes)
@@ -1356,7 +1359,7 @@ final class App: NSObject, NSApplicationDelegate {
         tinted(fleetBtn, title: "Start", tint: .green)
         root.addSubview(fleetBtn)
 
-        muteBtn = button("Mute", x: ctrlX[1].0, w: ctrlX[1].1)
+        muteBtn = button("Mute", x: muteX.0, w: muteX.1)
         muteBtn.target = self; muteBtn.action = #selector(toggleMute)
         root.addSubview(muteBtn)
 
@@ -1411,13 +1414,19 @@ final class App: NSObject, NSApplicationDelegate {
         Hotkey.shared.onFire = { [weak self] in self?.summoned() }
         Hotkey.shared.install()
         Notifier.shared.start()
-        window.makeKeyAndOrderFront(nil)
-        // Policy FIRST, then the status item. Changing the activation policy
-        // tears down the app's connection to the status bar, so an item made
-        // before this line is created and then silently discarded — the
-        // menu-bar ghost simply never appeared.
-        NSApp.setActivationPolicy(.accessory)       // no Dock icon; lives in the menu bar
+        // The policy is already .accessory — main.swift sets it before run().
+        // Setting it AGAIN here, after the window was shown, ordered the
+        // window out: switching to .accessory hides visible windows, and the
+        // app stayed alive with nothing on screen. That is the "it closed by
+        // itself" — he never closed, he was hidden by his own launch.
         installMenuBar()
+        window.makeKeyAndOrderFront(nil)
+        // and prove it stuck: if anything ordered it out during setup, show it
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+            guard let self = self, self.window != nil, !self.window.isVisible,
+                  !self.shotMode else { return }
+            self.window.makeKeyAndOrderFront(nil)
+        }
 
         Timer.scheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) { _ in
             // one place decides the mood, so the face never argues with itself
@@ -1657,7 +1666,9 @@ final class App: NSObject, NSApplicationDelegate {
         noBtn.isHidden = !on
         askBtn.isHidden = on          // one row, two states — never four buttons
         micBtn.isHidden = on
-        muteBtn.isHidden = on
+        // Mute does NOT hide with the row. He is asking you something, out
+        // loud, and the control that shuts him up was the one that vanished.
+        muteBtn.isHidden = false
         // ...except the fleet switch, which stays. Whether work is running is
         // not a question he asked you, and you should always be able to stop it.
         fleetBtn.isHidden = false

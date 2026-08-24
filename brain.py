@@ -288,6 +288,8 @@ def state() -> Dict[str, Any]:
         "projects_window_days": _window_days_cached(),
         "facts_unattributed": getattr(_pj_rollup, "facts_unattributed", 0),
         "fleet_running": _fleet_running(),
+        # True when the code on disk is newer than this process.
+        "server_stale": _code_stamp() > _BOOT_STAMP + 1,
         "activity": _recent_events(),
     }
     try:
@@ -338,6 +340,27 @@ def _casper_timing() -> Dict[str, Any]:
 
 
 _FLEET_CACHE: Dict[str, Any] = {"at": 0.0, "n": 0}
+
+
+def _code_stamp() -> float:
+    """Newest mtime across the modules this server serves from.
+
+    A Pulse server runs for days with whatever code it started with. Nothing
+    restarts it, so every change to brain.py or drive.py silently keeps
+    serving the old answer — the mascot's fleet dots were grey for an hour
+    because `alive` did not exist in THIS process, only on disk. Reporting the
+    stamp makes that visible instead of mysterious.
+    """
+    newest = 0.0
+    for f in ("brain.py", "drive.py", "voice.py", "status.py", "projects.py"):
+        try:
+            newest = max(newest, os.path.getmtime(os.path.join(SKILL_DIR, f)))
+        except OSError:
+            pass
+    return newest
+
+
+_BOOT_STAMP = _code_stamp()
 
 
 def _fleet_running(ttl_s: float = 8.0) -> int:
