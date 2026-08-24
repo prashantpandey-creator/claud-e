@@ -423,6 +423,54 @@ def test_auto_reports_when_it_holds():
     assert d["why"] and "here" in d["why"].lower(), d
 
 
+def test_dispatch_falls_back_to_HEADLESS_when_the_window_fails():
+    """Measured live: the automation fired, the gate opened correctly (away
+    115 min), it selected the right work — and dispatched ZERO.
+
+    Every launch failed inside osascript: the first timed out after 75s, the
+    next two exited non-zero. The cause is a conflict built into the design:
+    the gate dispatches when the owner is AWAY, away almost always means the
+    DISPLAY IS OFF (pmset shows it off 21:26-22:11, exactly when the beat
+    fired), and driving Terminal through System Events needs an awake display.
+    The two conditions are mutually exclusive.
+
+    No display detector is available here — pmset's IODisplayWrangler probe
+    returns "Internal failure" on Apple Silicon — so do not predict. Try the
+    window; when it fails, run the agent headless, which needs no GUI at all
+    (verified: `claude -p` returns normally with the screen off)."""
+    calls = []
+
+    def gui_fails(cwd, prompt, name, model=""):
+        calls.append(("gui", name))
+        return False
+
+    def headless(cwd, prompt, name, model=""):
+        calls.append(("headless", name))
+        return True
+
+    ok = go.dispatch_one("/tmp", "do the thing", "probe",
+                         gui=gui_fails, headless=headless)
+    assert ok is True, "fell back to nothing"
+    assert [c[0] for c in calls] == ["gui", "headless"], calls
+
+
+def test_headless_is_not_used_when_the_window_opens():
+    """A watchable window is better when it is available — do not downgrade."""
+    calls = []
+    ok = go.dispatch_one("/tmp", "p", "probe",
+                         gui=lambda *a, **k: calls.append("gui") or True,
+                         headless=lambda *a, **k: calls.append("headless") or True)
+    assert ok is True and calls == ["gui"], calls
+
+
+def test_a_raising_launcher_still_falls_back():
+    """osascript timing out raises rather than returning False."""
+    def boom(*a, **k):
+        raise RuntimeError("osascript timed out after 75 seconds")
+    assert go.dispatch_one("/tmp", "p", "probe", gui=boom,
+                           headless=lambda *a, **k: True) is True
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

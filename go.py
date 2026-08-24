@@ -152,6 +152,66 @@ def _repair_kickoff(meditation_dir: str, store_dir: str = STORE_DIR,
 
 
 
+HEADLESS_LOG_DIR = os.path.join(MEDITATION_DIR, "agents")
+
+
+def _headless(cwd: str, prompt: str, name: str, model: str = "") -> bool:
+    """Run the agent with no GUI at all, output to a log.
+
+    `claude -p` needs no window, no Terminal and no awake display — verified
+    directly with the screen off. It runs the task to completion and exits,
+    which is what an unattended dispatch wants anyway.
+    """
+    import subprocess
+    try:
+        os.makedirs(HEADLESS_LOG_DIR, exist_ok=True)
+        stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
+        log = os.path.join(HEADLESS_LOG_DIR, "%s-%s.log" % (stamp, name[:40]))
+        with open(log, "w") as fh:
+            fh.write("# %s\n# cwd: %s\n\n" % (name, cwd))
+            fh.flush()
+            subprocess.Popen(
+                ["claude", "-p", prompt, "--model", model or "sonnet",
+                 "--dangerously-skip-permissions"],
+                cwd=cwd if os.path.isdir(cwd) else os.path.expanduser("~"),
+                stdout=fh, stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL, start_new_session=True)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def dispatch_one(cwd: str, prompt: str, name: str, model: str = "",
+                 gui=None, headless=None) -> bool:
+    """Open a watchable window if we can; otherwise run it headless.
+
+    Measured live: the heartbeat's first real run selected the right work,
+    opened the gate correctly (away 115 min) and dispatched ZERO — every
+    osascript launch failed, the first by timing out after 75 seconds. The
+    cause is a conflict baked into the design: the gate fires when the owner
+    is AWAY, away almost always means the DISPLAY IS OFF, and driving Terminal
+    through System Events needs an awake display.
+
+    There is no display detector to consult — pmset's IODisplayWrangler probe
+    answers "Internal failure" on this hardware — so this does not predict. It
+    tries the window and falls back. A watchable window is better when it is
+    available; a running agent is better than a window that never opened.
+    """
+    if gui is None:
+        from launch import launch_claude as gui       # type: ignore
+    if headless is None:
+        headless = _headless
+    try:
+        if gui(cwd, prompt, name, model):
+            return True
+    except Exception:
+        pass                       # osascript times out by raising, not returning
+    try:
+        return bool(headless(cwd, prompt, name, model))
+    except Exception:
+        return False
+
+
 # Away = no key or mouse for this long. Below it you catch someone reading,
 # and an agent editing files under a reader's hands is exactly the collision
 # the sangama layer spends its life preventing.
@@ -295,7 +355,11 @@ def run(n: Optional[int] = None, repair_only: bool = False,
         return result
 
     if launcher is None:
-        from launch import launch_claude as launcher  # type: ignore
+        # Not launch_claude directly: dispatch_one tries the watchable window
+        # and falls back to headless when it fails. The first real unattended
+        # run selected the right work and launched NOTHING because every
+        # osascript call failed with the display asleep.
+        launcher = dispatch_one
     budget = n if n is not None else len(would)
 
     if repair and budget > 0:
