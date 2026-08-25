@@ -6,11 +6,25 @@ Meditate turns everything Claude Code does on your machine into knowledge you
 can trust: facts with receipts, projects with honest progress, and agents you
 dispatch and watch.
 
-**It is a private island by design.** No account, no sign-up, no server of
-ours, no telemetry, nothing to breach. Every install runs entirely on your own
-machine and reads only your own files — the author cannot see your data, and
-neither can anyone else. That is why it needs no login: there is nothing on
-the other end to log into. Your memory, your sessions, your work — yours.
+**It is a private island by design.** No account, no sign-up, nothing to
+breach. Every install runs entirely on your own machine and reads only your
+own files — the author cannot see your data, and neither can anyone else.
+That is why it needs no login: there is nothing on the other end to log into.
+Your memory, your sessions, your work — yours.
+
+The one thing that can ever leave, and only if it is switched on:
+
+```
+meditate census show     # the exact five fields, before anything is sent
+meditate census off      # never again
+```
+
+That is a count of installs — a random number, the version, the OS, the
+python version, the date. Never your name, your paths, your project names,
+your goals, or a word you wrote. It ships **off**, it is inert with no
+endpoint configured, and the installer says so on screen rather than in a
+config file. A counter nobody was told about is telemetry; this one is a
+maintainer asking how many people are there.
 
 ```
 444 facts known · 94% still true when re-checked · 75 learned by itself

@@ -107,11 +107,16 @@ def test_a_clean_home_gets_working_defaults_not_the_authors():
                        capture_output=True, text=True, env=env, timeout=60)
     assert r.returncode == 0, r.stderr
     d = json.loads(r.stdout)["data"]
+    # describe() grew a nested `coverage` dict from another lane; check every
+    # string ANYWHERE in the structure rather than assuming a flat shape, or
+    # this test breaks on somebody's unrelated addition instead of on a real
+    # leak — and a brittle guard gets deleted rather than fixed.
+    assert "badenath" not in json.dumps(d), d
     for key, value in d.items():
-        assert "badenath" not in value, (key, value)
-        if key != "nidra_root":
-            assert value.startswith(home), \
-                "%s escaped the sandbox home: %s" % (key, value)
+        if key in ("nidra_root",) or not isinstance(value, str):
+            continue
+        assert value.startswith(home), \
+            "%s escaped the sandbox home: %s" % (key, value)
 
 
 def test_an_existing_layout_is_not_moved():

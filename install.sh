@@ -278,6 +278,9 @@ cmd = "{ " + "; ".join('python3 "%s/%s" %s' % (skill, s, a) for s, a in
                         # holds while the owner is at the keyboard, caps the
                         # fleet, and says so when it declines.
                         ("go.py", "--auto"),
+                        # inert unless an endpoint is configured: with none
+                        # set there is nowhere to send and nothing is sent
+                        ("census.py", "ping"),
                         ("voice.py", "--notify --quiet")]
                        ) + '; } >> "%s" 2>&1' % log
 # Keep any interval cadence.py already tuned. Hardcoding the default here
@@ -323,7 +326,7 @@ elif command -v crontab >/dev/null 2>&1; then
     # Linux and anywhere else without launchd. Same chain, same log, every 6h.
     # Existing meditate lines are filtered out first so re-installing does not
     # stack duplicate heartbeats.
-    HEARTBEAT_CMD="{ python3 \"$SKILL_DIR/nidra_bridge.py\" --sleep; python3 \"$SKILL_DIR/archive.py\" --apply; python3 \"$SKILL_DIR/dashboard.py\"; python3 \"$SKILL_DIR/voice.py\" --notify --quiet; } >> \"$MEDITATION_DIR/heartbeat.log\" 2>&1"
+    HEARTBEAT_CMD="{ python3 \"$SKILL_DIR/nidra_bridge.py\" --sleep; python3 \"$SKILL_DIR/archive.py\" --apply; python3 \"$SKILL_DIR/dashboard.py\"; python3 \"$SKILL_DIR/census.py\" ping; python3 \"$SKILL_DIR/voice.py\" --notify --quiet; } >> \"$MEDITATION_DIR/heartbeat.log\" 2>&1"
     ( crontab -l 2>/dev/null | grep -v "meditate-heartbeat" || true
       echo "0 */6 * * * $HEARTBEAT_CMD # meditate-heartbeat" ) | crontab - 2>/dev/null \
       && echo "  [ok]  heartbeat installed via cron — self-check every 6h" \
@@ -350,6 +353,38 @@ done
 
 # ---- 6b. First meditation call — the pass is done, show the face
 echo
+# ---- Census notice — said out loud, not buried in a config file.
+# A counter nobody was told about is telemetry. One told plainly, with the
+# off switch in the same breath, is a maintainer asking how many people are
+# there. It is INERT by default: no endpoint ships, so nothing is sent.
+echo
+echo "  Counting installs (off by default):"
+if python3 "$SKILL_DIR/census.py" status 2>/dev/null | grep -q "census   on"; then
+    echo "  [on]  sends: install_id (a random number), version, os, python, day"
+    echo "        never: your name, paths, projects, goals, or anything you wrote"
+    echo "        stop:  meditate census off      see it: meditate census show"
+else
+    echo "  [off] nothing is sent — no endpoint is configured."
+    echo "        if you ever turn it on: meditate census show  prints the"
+    echo "        exact five fields first."
+fi
+
+# ---- Census notice — said out loud, not buried in a config file.
+# A counter nobody was told about is telemetry. One told plainly, with the
+# off switch in the same breath, is a maintainer asking how many people are
+# there. INERT by default: no endpoint ships, so nothing is sent.
+echo
+echo "  Counting installs:"
+if python3 "$SKILL_DIR/census.py" status 2>/dev/null | grep -q "census   on"; then
+    echo "  [on]  sends: install_id (a random number), version, os, python, day"
+    echo "        never: your name, paths, projects, goals, or anything you wrote"
+    echo "        stop:  meditate census off       see it: meditate census show"
+else
+    echo "  [off] nothing is sent — no endpoint is configured."
+    echo "        if it is ever turned on, meditate census show prints the"
+    echo "        exact five fields before anything leaves."
+fi
+
 echo "  Generating the dashboard..."
 if python3 "$SKILL_DIR/dashboard.py" > /dev/null 2>&1; then
     echo "  [ok]  ~/.claude/meditation/dashboard.html (regenerates every heartbeat)"
