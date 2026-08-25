@@ -432,9 +432,16 @@ final class Mouth: NSObject, AVSpeechSynthesizerDelegate {
     ///
     /// Without this a queued sentence was not sent to Kokoro until the first
     /// had finished PLAYING, so every two-part answer carried a render's worth
-    /// of silence in its middle: measured 0.61s by `casper --saytwice`. The
-    /// render can perfectly well happen while the first line is still in the
-    /// air — the voice server is free the moment it hands back a buffer.
+    /// of silence in its middle. The render can perfectly well happen while
+    /// the first line is still in the air — the voice server is free the
+    /// moment it hands back a buffer.
+    ///
+    /// A/B through `casper --saytwice`, same harness both sides:
+    ///   before  start1@0.68  finish1@2.52  start2@3.17  finish2@5.30
+    ///   after   start1@0.68  finish1@2.52  start2@2.52  finish2@4.65
+    /// 0.65s of dead air gone; the second line now begins in the same instant
+    /// the first ends. This is also what makes speaking an answer in pieces
+    /// worth doing at all — in pieces WITHOUT it, every seam costs 0.65s.
     private var queuedBuf: AVAudioPCMBuffer?
     /// Which text queuedBuf belongs to, so a newer queued line never plays a
     /// stale buffer. `queued` is newest-wins and can change mid-render.
