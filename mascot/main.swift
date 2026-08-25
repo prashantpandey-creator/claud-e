@@ -133,6 +133,47 @@ if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--transcribe" {
     RunLoop.main.run()
 }
 
+// The model that is already on the machine.
+//
+//   casper --afm-check                 -> "available", or why not
+//   echo "<prompt>" | casper --afm     -> one finished sentence per line
+//
+// Prompt comes in on stdin, not argv: a prompt carries the whole facts block
+// and a transcript, and argv has a length limit that a growing conversation
+// would eventually walk into.
+// Where does a spoken sentence actually end? Version numbers and domain
+// names both carry a full stop that is not one.
+if CommandLine.arguments.count > 1, CommandLine.arguments[1] == "--sentences" {
+    let cases = [
+        ("The iOS app v1.2 build 338 is waiting. Keep an eye on it.", 2),
+        ("It is live at swapsafe.store! Nothing else is blocked.", 2),
+        ("First token was 0.32s and the whole answer 0.98s. That is fast.", 2),
+        ("One thing broke. Two things are waiting. Three are done.", 3),
+    ]
+    var bad = 0
+    for (text, want) in cases {
+        let got = Mouth.sentences(text)
+        if got.count != want { bad += 1 }
+        print("  \(got.count == want ? "ok  " : "WRONG") want \(want) got \(got.count): \(got)")
+    }
+    print(bad == 0 ? "SENTENCE SPLIT CORRECT" : "\(bad) wrong")
+    exit(bad == 0 ? 0 : 1)
+}
+
+if CommandLine.arguments.count > 1, CommandLine.arguments[1] == "--afm-check" {
+    print(AppleModel.availability())
+    exit(AppleModel.availability() == "available" ? 0 : 1)
+}
+if CommandLine.arguments.count > 1, CommandLine.arguments[1] == "--afm" {
+    let prompt = String(data: FileHandle.standardInput.readDataToEndOfFile(),
+                        encoding: .utf8) ?? ""
+    guard prompt.count > 2 else { exit(2) }
+    let ok = AppleModel.stream(prompt) { line in
+        FileHandle.standardOutput.write(Data((line + "\n").utf8))
+    }
+    exit(ok ? 0 : 1)
+}
+
 // A streamed answer arrives in pieces. Does he speak ALL of them, in order?
 //
 // The queue used to be one slot with newest-wins, which is right for a new

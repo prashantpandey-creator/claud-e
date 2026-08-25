@@ -634,14 +634,32 @@ final class Mouth: NSObject, AVSpeechSynthesizerDelegate {
     /// it for intonation, and a sentence stripped of its full stop is read
     /// flat.
     static func sentences(_ text: String) -> [String] {
+        // A full stop is only the end of a sentence when what follows says so.
+        //
+        // Two cases where it is not, both heard out loud before they were
+        // fixed: a version number, where the stop sits between two digits —
+        // "the iOS app v1." / "2 build 338 is waiting" — and a domain, where
+        // it is followed by a lowercase letter — "swapsafe." / "store!".
+        // Each was spoken as two separate sentences, with the mouth's pause
+        // in the middle, which is how a version number turns into nonsense.
+        let ch = Array(text)
         var out: [String] = []
         var cur = ""
-        for ch in text {
-            cur.append(ch)
-            if ch == "." || ch == "!" || ch == "?" {
-                let t = cur.trimmingCharacters(in: .whitespaces)
-                if t.count > 1 { out.append(t); cur = "" }
+        for i in 0..<ch.count {
+            cur.append(ch[i])
+            guard ch[i] == "." || ch[i] == "!" || ch[i] == "?" else { continue }
+            if ch[i] == "." {
+                let prev: Character? = i > 0 ? ch[i - 1] : nil
+                let next: Character? = i + 1 < ch.count ? ch[i + 1] : nil
+                // 1.2 — a decimal point.
+                if let p = prev, let n = next, p.isNumber, n.isNumber { continue }
+                // swapsafe.store — a name, not two sentences. A real sentence
+                // break is followed by a space, so the absence of one is the
+                // tell.
+                if let n = next, n.isLowercase { continue }
             }
+            let t = cur.trimmingCharacters(in: .whitespaces)
+            if t.count > 1 { out.append(t); cur = "" }
         }
         let tail = cur.trimmingCharacters(in: .whitespaces)
         if !tail.isEmpty { out.append(tail) }

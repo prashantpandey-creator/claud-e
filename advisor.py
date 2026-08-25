@@ -344,6 +344,14 @@ def ask_local(question: str, facts: str, mem: str = "", talk: str = "",
     """
     import urllib.request
     if not _local_up():
+        # Nothing to wait for if it was never installed. This loop spends ten
+        # seconds waiting for a server to come up, which is right on a machine
+        # where ollama exists and is merely asleep, and pure dead air on every
+        # machine where it does not — ten seconds before EACH question, in
+        # front of the lane that would have answered.
+        import shutil
+        if not shutil.which("ollama"):
+            return None
         _start_local()
         for _ in range(20):
             if _local_up(0.5):
@@ -384,6 +392,57 @@ def ask_local(question: str, facts: str, mem: str = "", talk: str = "",
     return text or None
 
 
+def ask_apple(question: str, facts: str, mem: str = "", talk: str = "",
+              on_sentence=None) -> Optional[str]:
+    """Answer with the model that shipped with macOS. Nothing to install.
+
+    This exists for DISTRIBUTION, not for quality. The alternative — telling
+    every user to install ollama and pull a model before the companion can
+    think — is a wall most people will not climb, and on this machine it was
+    not even affordable: 14 GB free of 460 GB when it was checked, against a
+    9 GB pull for a 14B model.
+
+    It is the SECOND lane, not the first, because it is slower here. Measured
+    on an M1 Pro, macOS 26.5, against the real 2,887-character prompt, warm,
+    same process, instructions preloaded and prewarm() called:
+
+        Apple on-device   7.92-21.55s
+        qwen3:4b/ollama   2.20- 3.76s
+
+    A tiny prompt hides this — the first probe measured 0.95s and looked
+    competitive. It is prompt processing, not startup: keeping the session
+    warm across four questions did not close the gap.
+
+    Returns None whenever it cannot answer, including on every Mac where it
+    is not available at all — Intel, Apple Intelligence switched off, or the
+    model still downloading. The caller falls through, so those machines lose
+    nothing they had.
+    """
+    binary = os.path.join(SKILL_DIR, "mascot", "casper")
+    if not os.access(binary, os.X_OK):
+        return None
+    prompt = ("%s\n\nFACTS (the only ground truth you have):\n%s\n%s\n\n%s\n"
+              "The user asks: %s" % (SYSTEM, facts, mem, talk, question))
+    said: List[str] = []
+    try:
+        p = subprocess.Popen([binary, "--afm"], stdin=subprocess.PIPE,
+                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                             text=True, bufsize=1)
+        p.stdin.write(prompt)
+        p.stdin.close()
+        for line in p.stdout:
+            s = line.strip()
+            if not s:
+                continue
+            said.append(s)
+            if on_sentence:
+                on_sentence(s)
+        p.wait(timeout=90)
+    except Exception:
+        return None
+    return " ".join(said) or None
+
+
 def advise(question: str, timeout_s: int = TIMEOUT_S,
            model: str = MODEL, on_sentence=None) -> Dict[str, Any]:
     """Answer, and remember having answered.
@@ -419,6 +478,14 @@ def _advise(question: str, timeout_s: int = TIMEOUT_S,
     if local:
         _say_doing("")
         return {"speech": local[:700], "source": "local", "ok": True}
+
+    # Nothing installed? Use the model that came with the Mac.
+    _say_doing("thinking")
+    apple = ask_apple(q, facts, mem, _talk_block(_talk_read()),
+                      on_sentence=on_sentence)
+    if apple:
+        _say_doing("")
+        return {"speech": apple[:700], "source": "apple", "ok": True}
     try:
         import address as _addr
         system = SYSTEM.replace("ADDRESS_TERM", _addr.term())

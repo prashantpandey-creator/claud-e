@@ -66,7 +66,7 @@ cat > "$STAGE/Contents/Info.plist" <<'PLIST'
 PLIST
 echo '</plist>' >> "$STAGE/Contents/Info.plist"
 
-swiftc -O -o "$STAGE/Contents/MacOS/casper" main.swift Casper.swift Voice.swift \
+swiftc -O -o "$STAGE/Contents/MacOS/casper" main.swift Casper.swift Voice.swift AppleModel.swift \
     -framework Cocoa -framework AVFoundation -framework Speech
 
 # Sign with a REAL identity when the machine has one.
