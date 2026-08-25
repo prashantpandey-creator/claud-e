@@ -35,6 +35,18 @@ jobs:
         # an agent into, so the heartbeat step is expected to warn, not fail.
         run: bash install.sh || true
 
+      - name: Build the mascot, so its no-ship guarantee is actually tested
+        # test_mascot_route.py drives the REAL binary. mascot/Casper.app/ is
+        # gitignored, so on a fresh checkout the binary was always absent, and
+        # all three of its tests printed "(skipped: mascot not built here)"
+        # and returned success — including the one asserting Casper REFUSES to
+        # push or deploy by voice. Measured 2026-08-25 by mutation: deleting
+        # the refusal block from routeDecision and recompiling makes the real
+        # binary answer "OFFER meditate fix" to "push the fix", and every
+        # Python test stayed green. The safety guarantee had zero CI coverage
+        # for as long as it has existed. macos-latest has swiftc; build it.
+        run: bash mascot/build.sh
+
       - name: The suite
         run: |
           set -e

@@ -5,16 +5,33 @@ browser's own SpeechRecognition and SpeechSynthesis. That page is discarded;
 the real Casper is the native app in mascot/ (Casper.swift), which pops up
 and speaks. The page and its three page-shape tests are gone.
 
-What did NOT go: the API contracts underneath, which the native mascot uses
-exactly as the page did. They were only living in this file by accident of
-who wrote them first.
+CORRECTION (2026-08-25). When the page was deleted I wrote here that "the
+API contracts underneath ... the native mascot uses exactly as the page did".
+An adversarial pass broke that by measurement. What is actually true:
 
-Contract:
+  - /api/state — YES, the native mascot polls it exactly as the page did.
+  - /api/act action=say — NO. The mascot never posts it. Since casper_page.py
+    was deleted that branch (brain.py:891) has had ZERO clients. The tests
+    below still guard it because the endpoint is still served and still
+    reachable, but they guard a lane nothing currently drives.
+
+That matters most for the no-ship rule. The mascot's refusal to push/deploy
+is Swift — routeDecision in mascot/Casper.swift — NOT this endpoint. The only
+test of the real thing is test_mascot_route.py, which until today silently
+passed whenever the binary was missing (i.e. every CI run). Fixed there, not
+here. Do not read the test below as covering the mascot; it does not.
+
+Contract (what these tests actually pin):
   - POST /api/act action=say routes one turn through converse and returns
     BOTH the spoken line and the parsed turn
-  - voice NEVER pushes/deploys, even asked politely
-  - /api/state exposes briefing+timing, so the mascot can know WHAT to say
-    (briefing.headline) and WHEN it may interrupt (timing.interrupt_ok)
+  - that endpoint NEVER pushes/deploys, even asked politely
+  - /api/state PUBLISHES briefing+timing — briefing.headline (WHAT to say) and
+    timing.interrupt_ok (WHEN it may interrupt). Publication only: nothing
+    here checks that any consumer OBEYS interrupt_ok. The deleted page test
+    did check that. Its replacement for the native mascot
+    (Casper.swift's `guard hasSomething, b.canInterrupt` and `lastSpoken`)
+    does not exist yet — that is a real, open coverage hole, not a
+    bookkeeping note.
 
 Run: python3 ~/.claude/skills/meditate/test_casper.py
 """
@@ -80,12 +97,15 @@ def test_say_endpoint_returns_speech_and_turn():
 
 
 def test_voice_never_ships():
-    """The hard line: no push/deploy by voice, even politely.
+    """The hard line: no push/deploy by voice, even politely — on THIS endpoint.
 
-    This outlived the browser page it was written for. The page is gone; the
-    native mascot talks to the same /api/act, so the guarantee still needs a
-    test and this is it. Deleting it along with the page's own tests would
-    have quietly removed a safety net, not dead code.
+    I originally justified keeping this by saying "the native mascot talks to
+    the same /api/act, so the guarantee still needs a test and this is it."
+    That was wrong and was refuted by grepping the Swift: the mascot never
+    posts action=say. This guards /api/act, which is still served and still
+    reachable by anything that speaks HTTP — worth keeping — but it is NOT
+    the mascot's no-ship guarantee. That one lives in Casper.swift's
+    routeDecision and is tested only by test_mascot_route.py.
     """
     srv, base = _serve()
     try:

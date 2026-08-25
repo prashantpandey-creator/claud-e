@@ -38,11 +38,40 @@ def _built() -> bool:
     return os.access(BIN, os.X_OK)
 
 
+def _require_built() -> None:
+    """A missing binary is a FAILURE, not a skip.
+
+    These three tests were written as the only check that the real Casper
+    refuses to push/deploy by voice. All three used to print "(skipped:
+    mascot not built here)" and return success when the binary was absent —
+    and mascot/Casper.app/ is gitignored, so it is absent on every fresh
+    checkout, which is every CI run. The guarantee has therefore never once
+    been exercised in CI.
+
+    Proven by mutation on 2026-08-25, not by reading: delete the
+    push/deploy/ship/release/merge refusal block from routeDecision, compile
+    with swiftc, and the mutant answers "OFFER meditate fix" to "Casper, push
+    the fix" where the real binary answers "REFUSED (code, not prompt)". The
+    whole Python suite stayed green through that mutation. On a clean checkout
+    this file printed "3/3 passed" while testing nothing at all.
+
+    A test that reports success without checking anything is worse than no
+    test: it occupies the slot where a real check would have gone. CI now
+    builds the mascot before the suite (see .github/workflows/test.yml); if
+    that build ever breaks, this fails loudly instead of going quiet.
+    """
+    if not _built():
+        raise AssertionError(
+            "mascot binary missing at %s — build it with `bash mascot/build.sh`. "
+            "This is a FAILURE, not a skip: these tests are the only check that "
+            "Casper refuses to push/deploy by voice, and silently passing here "
+            "is how that guarantee went untested in CI since it was written." % BIN
+        )
+
+
 def test_voice_never_ships_through_the_mascot():
     """The falsifier for the old hole: this exact lane used to reach the LLM."""
-    if not _built():
-        print("       (skipped: mascot not built here)")
-        return
+    _require_built()
     for utter in ("Casper, push it to production",
                   "Casper, deploy the backend now",
                   "Casper, merge it and release"):
@@ -52,9 +81,7 @@ def test_voice_never_ships_through_the_mascot():
 
 
 def test_commands_become_offers_not_executions():
-    if not _built():
-        print("       (skipped: mascot not built here)")
-        return
+    _require_built()
     out = _hear("Casper, run the fleet please")
     assert "OFFER meditate go" in out, out
     assert "nothing runs without Yes" in out, out
@@ -63,9 +90,7 @@ def test_commands_become_offers_not_executions():
 
 
 def test_overheard_talk_stays_silent():
-    if not _built():
-        print("       (skipped: mascot not built here)")
-        return
+    _require_built()
     out = _hear("so anyway I told her to fix the deploy pipeline")
     assert "NOT ADDRESSED" in out, out
     assert "REFUSED" not in out and "OFFER" not in out, \

@@ -120,9 +120,29 @@ def notify_done(goal: str, message: str) -> bool:
 
 
 def _casper_running() -> bool:
+    """Is the companion actually up?
+
+    This used to be `pgrep -f "Casper.app/Contents/MacOS/casper"` — an
+    unanchored substring matched against full argv, which matches any process
+    whose command line merely CONTAINS that path. Its own build is such a
+    process: mascot/build.sh compiles to
+    "$TMPDIR/casper-build.XXXX/Casper.app/Contents/MacOS/casper", so swiftc,
+    clang and ld each carry the pattern for the whole build. Observed firing
+    2026-08-25 08:27 during a rebuild — four matches, `pgrep -x casper` exit
+    1, no Casper running.
+
+    It fails in the worst direction: the caller SUPPRESSES its own completion
+    notice when this returns True, on the theory that Casper will post a
+    better one. During a rebuild Casper is not up to post anything, so the
+    news is simply lost — and `meditate` auto-rebuilds on any newer .swift,
+    so the command that starts the companion is the one that opens the hole.
+
+    `pgrep -x` matches the executable NAME exactly, which no compiler
+    invocation can spoof.
+    """
     try:
         import subprocess
-        r = subprocess.run(["pgrep", "-f", "Casper.app/Contents/MacOS/casper"],
+        r = subprocess.run(["pgrep", "-x", "casper"],
                            capture_output=True, timeout=5)
         return r.returncode == 0 and bool(r.stdout.strip())
     except Exception:
