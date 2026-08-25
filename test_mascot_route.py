@@ -25,7 +25,23 @@ import subprocess
 import sys
 
 SKILL = os.path.dirname(os.path.abspath(__file__))
-BIN = os.path.join(SKILL, "mascot", "Casper.app", "Contents", "MacOS", "casper")
+
+# Prefer the BARE binary that build.sh leaves beside the bundle.
+#
+# Running mascot/Casper.app/Contents/MacOS/casper checks the process in with
+# LaunchServices as a second instance of com.meditate.casper — and macOS
+# answers that by invalidating the workspace connection of the instance the
+# owner is actually using and SIGTERMing it. So running this suite killed the
+# live Casper, once per test, and from his side the mascot "closed by itself".
+# Observed 2026-08-25: three check-in/death pairs inside 150ms at 14:42:29,
+# with the owner's pid 90910 SIGTERMed in the middle of them.
+#
+# The bare copy has no bundle, so it takes no app slot and disturbs nothing.
+# It is the same executable — build.sh copies it from inside the bundle.
+_BARE = os.path.join(SKILL, "mascot", "casper")
+_BUNDLED = os.path.join(SKILL, "mascot", "Casper.app", "Contents", "MacOS",
+                        "casper")
+BIN = _BARE if os.access(_BARE, os.X_OK) else _BUNDLED
 
 
 def _hear(said: str) -> str:

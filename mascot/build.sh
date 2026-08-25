@@ -94,10 +94,27 @@ fi
 
 # The swap: the old bundle only disappears once the new one is ready, and the
 # gap is a rename rather than a compile.
+#
+# A Casper that is running out of the old bundle cannot survive this. The
+# kernel re-validates the pages it is executing, finds them gone, and SIGKILLs
+# it: "Code Signature Invalid", namespace CODESIGNING, no stack worth reading.
+# Two such reports on 2026-08-25 at 08:23, thirteen seconds apart. Nothing
+# restarts him afterwards, so from the owner's side the mascot simply vanished
+# mid-morning. So: if he was up before the swap, put him back after it.
+WAS_UP=no
+pgrep -f "$PWD/$APP/Contents/MacOS/casper" >/dev/null 2>&1 && WAS_UP=yes
+
 OLD="$(mktemp -d "${TMPDIR:-/tmp}/casper-old.XXXXXX")"
 [ -d "$APP" ] && mv "$APP" "$OLD/" 2>/dev/null || true
 mv "$STAGE" "$APP"
 rm -rf "$OLD" 2>/dev/null || true
+
+if [ "$WAS_UP" = yes ]; then
+    pkill -f "$PWD/$APP/Contents/MacOS/casper" 2>/dev/null || true
+    sleep 0.4
+    open "$PWD/$APP" 2>/dev/null || true
+    echo "restored the running Casper onto the new build"
+fi
 
 # TCC binds its decision to a bundle's code signature. Changing the signing
 # identity (ad-hoc -> a developer certificate, say) leaves a STALE record, and
@@ -126,6 +143,19 @@ if [ -f "$SIGFILE" ] && [ "$(cat "$SIGFILE")" != "$NOWSIG" ]; then
 fi
 printf '%s\n' "$NOWSIG" > "$SIGFILE"
 
-cp "$BIN" ./casper          # bare binary stays, for --render and tests
+# The bare binary, for --render and the tests.
+#
+# It has to be re-signed. A copy of the bundle's executable carries the
+# bundle's signature, and that signature covers the bundle — so outside it the
+# copy fails validation and the kernel SIGKILLs it: exit 137, no stdout, no
+# stderr, nothing to read. That silence is what a test sees as "0/3 passed".
+# Ad-hoc, and without the runtime entitlements, because this copy never asks
+# for a microphone; it answers --hear and draws frames.
+#
+# Tests use THIS one rather than the bundle's, because running the bundle's
+# executable checks in with LaunchServices as a second instance of
+# com.meditate.casper and macOS kills the owner's live Casper to make room.
+cp "$BIN" ./casper
+codesign --force --sign - --identifier com.meditate.casper.bare ./casper 2>/dev/null || true
 echo "built $APP  ($(stat -f%z "$BIN") bytes)"
 codesign -dv "$APP" 2>&1 | grep -E "Identifier|Signature" || true
