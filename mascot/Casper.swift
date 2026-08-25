@@ -1338,21 +1338,29 @@ final class App: NSObject, NSApplicationDelegate {
         // rows, so laying each row out independently put it underneath "Not
         // now" — two layouts disagreeing about the same button. Pin it right,
         // then fill the space to its left.
-        let fleetW = App.widthFor("Stop 88", font: bf)
-        let fleetXPos = W - 8 - fleetW
-        let leftWidth = fleetXPos - 12   // a real gap before the fleet switch
-        let offerX = App.rowX(["Yes", "Not now", "Muted"], font: bf, width: leftWidth)
-        let ctrlX  = App.rowX(["Hearing", "Muted", "Ask"], font: bf, width: leftWidth)
-        // Mute sits in the SAME slot in both rows, so it never moves under
-        // your cursor when a question appears.
-        let muteX = (max(offerX[2].0, ctrlX[1].0), max(offerX[2].1, ctrlX[1].1))
+        // ONE set of slots, shared by both rows. Laying the offer row and the
+        // control row out independently is what put "Ask" on top of "Mute" —
+        // two solvers disagreeing about where the third button goes. Each slot
+        // is sized for the widest label that can ever appear in it, so nothing
+        // moves under your cursor when the row swaps:
+        //
+        //   slot 0   Yes      / Talk|Hearing
+        //   slot 1   Not now  / Ask
+        //   slot 2   Mute            (always present)
+        //   slot 3   Start|Stop N    (always present, pinned right)
+        let slot = App.rowX(["Hearing", "Not now", "Muted", "Stop 88"],
+                            font: bf, width: W)
+        let offerX = slot, ctrlX = slot
+        let muteX = (slot[2].0, slot[2].1)
+        let fleetXPos = slot[3].0
+        let fleetW = slot[3].1
 
         yesBtn = button("Yes", x: offerX[0].0, w: offerX[0].1)
         yesBtn.target = self; yesBtn.action = #selector(sayYes)
         yesBtn.keyEquivalent = "\r"                 // the obvious answer is the default
         noBtn = button("Not now", x: offerX[1].0, w: offerX[1].1)
         noBtn.target = self; noBtn.action = #selector(sayNo)
-        askBtn = button("Ask", x: ctrlX[2].0, w: ctrlX[2].1)
+        askBtn = button("Ask", x: ctrlX[1].0, w: ctrlX[1].1)
         askBtn.target = self; askBtn.action = #selector(askSomething)
         fleetBtn = button("Start", x: fleetXPos, w: fleetW)
         fleetBtn.target = self; fleetBtn.action = #selector(toggleFleet)
@@ -1648,6 +1656,7 @@ final class App: NSObject, NSApplicationDelegate {
     /// when there is nothing to say he is just a small ghost on your desktop.
     func setBubble(_ text: String) {
         lastBubbleAt = Date()
+        defer { relayoutAfterBubble() }
         bubble.stringValue = text
         bubbleBox.isHidden = text.isEmpty
         guard !text.isEmpty else { return }
@@ -2324,6 +2333,16 @@ final class App: NSObject, NSApplicationDelegate {
     /// Grow upward for the fleet, so the buttons never move under your cursor.
     /// The window is anchored bottom-right; adding height at the top is the
     /// only change that does not shift what you were about to click.
+    /// The card just changed height; move what sits on top of it.
+    func relayoutAfterBubble() {
+        guard fleetView != nil, ghost != nil, window != nil, fleetH > 0 else { return }
+        let W = window.frame.width
+        let cardTop = bubbleBox.frame.maxY + 8
+        fleetView.frame = NSRect(x: 10, y: cardTop, width: W - 20, height: fleetH)
+        ghost.frame = NSRect(x: (W - 132) / 2, y: cardTop + fleetH,
+                             width: 132, height: 132)
+    }
+
     func layoutFleet(_ rows: [FleetView.Row]) {
         fleetView.rows = rows
         let h = FleetView.height(for: rows.count)
@@ -2336,8 +2355,13 @@ final class App: NSObject, NSApplicationDelegate {
         window.setFrame(f, display: true, animate: false)
         let rootH = f.size.height
         window.contentView?.frame = NSRect(x: 0, y: 0, width: W, height: rootH)
-        fleetView.frame = NSRect(x: 10, y: 110, width: W - 20, height: h)
-        ghost.frame = NSRect(x: (W - 132) / 2, y: 110 + h, width: 132, height: 132)
+        // Sit on top of the CARD, wherever the card currently ends. Pinning
+        // the strip to a constant 110 left a dead band whenever the bubble
+        // shrank to one line — the card grew and shrank to its text and the
+        // strip never moved with it.
+        let cardTop = bubbleBox.frame.maxY + 8
+        fleetView.frame = NSRect(x: 10, y: cardTop, width: W - 20, height: h)
+        ghost.frame = NSRect(x: (W - 132) / 2, y: cardTop + h, width: 132, height: 132)
         // The X is pinned to the top-right corner, and the corner moved.
         closeBtn.frame = NSRect(x: W - 24, y: rootH - 24, width: 18, height: 18)
     }

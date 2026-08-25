@@ -150,12 +150,26 @@ def fleet_status(goals_dir=None, ledger_path=None, history_path=None):
     seen_sids = set()
     if os.path.exists(lp):
         last = {}
+        # The window id is recorded ONCE, at dispatch. Later rows for the same
+        # goal — progress notes, stop events — carry none, and taking simply
+        # "the last row" threw it away: every row came back with wid empty, so
+        # nothing matched a live process and every dot in the mascot was grey
+        # while three agents were running. Carry the id forward.
+        wid_seen = {}
         for line in open(lp, errors="replace"):
             try:
                 r = json.loads(line)
-                last[r["goal"]] = r
             except Exception:
                 continue
+            g = r.get("goal")
+            if not g:
+                continue
+            w = str(r.get("window_id") or "").strip()
+            if w:
+                wid_seen[g] = w
+            elif wid_seen.get(g):
+                r["window_id"] = wid_seen[g]
+            last[g] = r
         now = time.time()
         # Who is ACTUALLY working, keyed by the window we recorded at dispatch.
         # Matching by cwd prefix was the bug: two goals share the meditate

@@ -126,7 +126,7 @@ case "$EV" in
 3. Subtract, never add — fix by removal, not another layer.
 4. Plain words — stats/evals in workshop language, not jargon verdicts.
 5. Verify the world — external facts are research questions (curl/read/benchmark), don't guess; take the owner's facts about their own domain as given.
-6. Ship discipline — OWN TOOLING (meditate, nidra, and their tests/docs): commit AND PUSH when green, no asking (owner standing go, 2026-08-23). EVERYTHING ELSE — prod, deploys, shared corpus/DB, purangpt web+iOS, another session's uncommitted work — commit LOCAL and STOP; push only on explicit go. Green means the repo's own suite passes.
+6. Ship discipline — commit to a LOCAL branch and STOP; push only on explicit go. Before any push: the repo's own tests green, and the claim proven live rather than traced.
 Add your own in $RULES_FILE — that file replaces this list entirely."
     fi
 
@@ -211,7 +211,7 @@ $CHECKPOINT"
   PreToolUse)
     shopt -s nocasematch
     if [[ "$CMD" =~ $GIT_PAT ]]; then
-      MSG="RULE (fires at git commit/push): own tooling (meditate/nidra) — push when the suite is green, no need to ask. Anything else (prod, deploy, shared data, purangpt web/iOS) — commit LOCAL and STOP, push only on the owner's explicit go."
+      MSG="RULE (fires at git commit/push): push automatically when the repo's own suite is green — the owner gave a standing go 2026-08-25; do not ask. STOP only for destructive/irreversible acts, another session's uncommitted work, or App Store submission. Concurrent sessions: fetch and REBASE, never merge over their work."
     elif [[ "$CMD" =~ $DEPLOY_PAT ]]; then
       MSG="RULE (fires at deploy): verify the artifact by duration + live output, never trust a GREEN report. Prod corpus/DB is shared infrastructure — a write under a live experiment needs a HANDOFF."
     fi
