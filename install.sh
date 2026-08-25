@@ -358,6 +358,53 @@ if python3 "$SKILL_DIR/dashboard.py" > /dev/null 2>&1; then
     fi
 fi
 
+# ---- 6a. The two local servers become services
+#
+# Kokoro (voice) and ollama (the brain) used to start on demand and die with
+# whatever launched them. That is why the voice was cold, fell back to a
+# different speaker mid-conversation, and why an answer took seconds instead
+# of milliseconds. Keeping them up is the whole difference between this and a
+# hosted API.
+#
+# ProcessType Interactive, deliberately: a first attempt used Background,
+# which launchd CPU-throttles, and a render measured at 0.86s by hand took
+# 7.8-10.1s as a throttled service.
+if [ "$(uname)" = "Darwin" ] && command -v launchctl >/dev/null 2>&1; then
+    PY310="$(command -v python3.10 || true)"
+    OLLAMA="$(command -v ollama || true)"
+    mkdir -p "$HOME/Library/LaunchAgents"
+    _svc() {   # label, program, args...
+        local label="$1"; shift
+        local plist="$HOME/Library/LaunchAgents/$label.plist"
+        python3 - "$plist" "$label" "$@" <<'PYSVC'
+import plistlib, sys
+plist, label = sys.argv[1], sys.argv[2]
+d = {"Label": label, "ProgramArguments": sys.argv[3:],
+     "RunAtLoad": True, "KeepAlive": True,
+     "ProcessType": "Interactive", "Nice": -5,
+     "EnvironmentVariables": {"PATH": "/opt/homebrew/bin:/usr/bin:/bin"},
+     "StandardOutPath": "/tmp/%s.log" % label,
+     "StandardErrorPath": "/tmp/%s.log" % label}
+with open(plist, "wb") as f:
+    plistlib.dump(d, f)
+PYSVC
+        launchctl unload "$plist" 2>/dev/null || true
+        launchctl load -w "$plist" 2>/dev/null \
+            && echo "  [ok]  $label kept warm" \
+            || echo "  [--]  $label could not be loaded"
+    }
+    if [ -n "$PY310" ] && [ -f "$SKILL_DIR/tts.py" ]; then
+        _svc com.meditate.tts "$PY310" "$SKILL_DIR/tts.py" --serve
+    else
+        echo "  [--]  voice server needs python3.10 (onnxruntime has no 3.14 wheel)"
+    fi
+    if [ -n "$OLLAMA" ]; then
+        _svc com.meditate.brain "$OLLAMA" serve
+    else
+        echo "  [--]  no ollama — answers fall back to the slow path"
+    fi
+fi
+
 # ---- 6b. Casper appears
 # The install should END with someone standing there, not with a list of
 # commands to memorise. He builds once, gathers himself out of nothing on
