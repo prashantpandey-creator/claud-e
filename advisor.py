@@ -62,8 +62,81 @@ SYSTEM = (
     "6. If they're asking about something stalled, say what is actually "
     "blocking it — not that it is stalled. They can see that.\n"
     "7. Address them as ADDRESS_TERM, at most ONCE, and only where you hand "
-    "the decision back. Every sentence is grovelling; once is a person."
+    "the decision back. Every sentence is grovelling; once is a person.\n"
 )
+
+
+# ---- what was just said -----------------------------------------------------
+#
+# Every question used to arrive as a brand new process holding SYSTEM, the
+# facts, and one sentence — and nothing at all about the sentence before it.
+#
+# What that costs, measured 2026-08-25 over six chains each way. It depends
+# entirely on whether the thing they mean is also the loudest thing in the
+# FACTS block:
+#
+#   ask about the dominant subject, then "why that one?"
+#     without transcript 6/6 right   with 6/6   — no difference, because the
+#     facts already point there and any guess lands on it
+#
+#   ask about the marketplace, then "what would you do about it?"
+#     without transcript 0/6 right   with 3/6
+#
+# So: it fixes the case where the referent is NOT the obvious one, and it
+# fixes half of those, not all. A first pass at this claimed the whole thing
+# on the strength of one sample where the follow-up wandered off to
+# indexer/search.py — rerunning it six times showed that sample was variance,
+# not the effect. The effect is the 0/6 -> 3/6.
+#
+# Three prompt rules were written to push it further — one forbidding
+# promises it cannot keep, one forbidding invented dates, one telling it that
+# pronouns mean the conversation. All three measured as exact no-ops (0/6 vs
+# 0/6, 1/6 vs 1/6, 1/4 vs 1/4) and were removed. The remaining gap is the 4B
+# model, not the prompt.
+_TALK = os.path.expanduser("~/.claude/meditation/.casper-talk.json")
+# Three turns. Enough for "why that one?" and "and the other?"; short enough
+# that the facts, not the chat, stay the thing he reasons over.
+_TALK_KEEP = 3
+# Silence this long and it is a NEW conversation. Without it, the first thing
+# he heard every morning was half of last night.
+_TALK_GAP = 600.0
+
+
+def _talk_read(now: Optional[float] = None) -> List[Dict[str, str]]:
+    now = time.time() if now is None else now
+    try:
+        with open(_TALK) as f:
+            d = json.load(f)
+    except (OSError, ValueError):
+        return []
+    if now - float(d.get("at", 0)) > _TALK_GAP:
+        return []
+    turns = d.get("turns") or []
+    return turns[-_TALK_KEEP:] if isinstance(turns, list) else []
+
+
+def _talk_write(question: str, answer: str, now: Optional[float] = None) -> None:
+    now = time.time() if now is None else now
+    turns = _talk_read(now)
+    turns.append({"q": question[:300], "a": answer[:600]})
+    try:
+        os.makedirs(os.path.dirname(_TALK), exist_ok=True)
+        with open(_TALK, "w") as f:
+            json.dump({"at": now, "turns": turns[-_TALK_KEEP:]}, f)
+    except OSError:
+        pass          # a transcript that cannot be written is not an error
+
+
+def _talk_block(turns: List[Dict[str, str]]) -> str:
+    if not turns:
+        return ""
+    out = ["EARLIER IN THIS CONVERSATION (most recent last). When they say "
+           "'that one', 'it', 'the other', or ask 'why', they mean something "
+           "here:"]
+    for t in turns:
+        out.append("  They asked: %s" % t.get("q", ""))
+        out.append("  You said:   %s" % t.get("a", ""))
+    return "\n".join(out) + "\n"
 
 
 def _say_doing(step: str, detail: str = "") -> None:
@@ -245,7 +318,7 @@ def _split_sentences(buf: str):
     return out, buf[start:]
 
 
-def ask_local(question: str, facts: str, mem: str = "",
+def ask_local(question: str, facts: str, mem: str = "", talk: str = "",
               model: str = LOCAL_MODEL, timeout_s: float = 25.0,
               on_sentence=None):
     """Answer on THIS machine, streaming.
@@ -278,8 +351,8 @@ def ask_local(question: str, facts: str, mem: str = "",
             time.sleep(0.5)
         else:
             return None
-    prompt = ("%s\n\nFACTS (the only ground truth you have):\n%s\n%s\n\n"
-              "The user asks: %s" % (SYSTEM, facts, mem, question))
+    prompt = ("%s\n\nFACTS (the only ground truth you have):\n%s\n%s\n\n%s\n"
+              "The user asks: %s" % (SYSTEM, facts, mem, talk, question))
     body = json.dumps({"model": model, "prompt": prompt, "stream": True,
                        "keep_alive": "30m",
                        "options": {"num_predict": 120, "temperature": 0.4}}).encode()
@@ -313,6 +386,22 @@ def ask_local(question: str, facts: str, mem: str = "",
 
 def advise(question: str, timeout_s: int = TIMEOUT_S,
            model: str = MODEL, on_sentence=None) -> Dict[str, Any]:
+    """Answer, and remember having answered.
+
+    The recording happens HERE rather than at each return inside _advise,
+    because there are four lanes that can answer and a follow-up has to work
+    the same way whichever one did. One of them remembering and three
+    forgetting would be worse than none: "why that one?" would sometimes mean
+    the last thing he said and sometimes mean nothing.
+    """
+    res = _advise(question, timeout_s, model, on_sentence)
+    if res.get("ok") and res.get("speech"):
+        _talk_write(question, res["speech"])
+    return res
+
+
+def _advise(question: str, timeout_s: int = TIMEOUT_S,
+            model: str = MODEL, on_sentence=None) -> Dict[str, Any]:
     """Reason over the graded facts. Returns {speech, source, ok}."""
     q = (question or "").strip()
     if len(q) < 3:
@@ -325,7 +414,8 @@ def advise(question: str, timeout_s: int = TIMEOUT_S,
     # This machine first. It is ~50x faster to first token than the harness,
     # and it is the only lane that keeps his answers on the laptop.
     _say_doing("thinking")
-    local = ask_local(q, facts, mem, on_sentence=on_sentence)
+    local = ask_local(q, facts, mem, _talk_block(_talk_read()),
+                      on_sentence=on_sentence)
     if local:
         _say_doing("")
         return {"speech": local[:700], "source": "local", "ok": True}
@@ -334,8 +424,10 @@ def advise(question: str, timeout_s: int = TIMEOUT_S,
         system = SYSTEM.replace("ADDRESS_TERM", _addr.term())
     except Exception:
         system = SYSTEM.replace("ADDRESS_TERM", "sir")
-    prompt = ("%s\n\nFACTS (the only ground truth you have):\n%s\n%s\n\n"
-              "The user asks: %s" % (system, facts, mem, q))
+    # The slow lane gets the same conversation the fast one does. Two lanes
+    # that remember different things is worse than neither remembering.
+    prompt = ("%s\n\nFACTS (the only ground truth you have):\n%s\n%s\n\n%s\n"
+              "The user asks: %s" % (system, facts, mem, _talk_block(_talk_read()), q))
     _say_doing("thinking it through")
     try:
         r = subprocess.run(["claude", "-p", "--model", model],
