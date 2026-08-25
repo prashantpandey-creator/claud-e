@@ -9,6 +9,10 @@
 //      speech.
 //   2. He must never hear himself. Recognition is muted for the whole time he
 //      is speaking, or the first thing he answers is his own last sentence.
+//      That mute is also why you could not INTERRUPT him — see BargeGuard,
+//      which reads the microphone during the mute without feeding it to the
+//      recogniser, so cutting him off is possible without him answering his
+//      own voice.
 //
 // Recognition is on-device. That is not a preference — the whole tool's
 // promise is that your work never leaves your machine, and a companion that
@@ -17,6 +21,71 @@
 import AVFoundation
 import Cocoa
 import Speech
+
+// MARK: - interrupting him
+
+/// Decides whether loudness arriving at the microphone WHILE HE IS TALKING is
+/// you cutting in, or just Casper hearing himself through the speakers.
+///
+/// This is the whole difference between a companion you can interrupt and one
+/// you have to sit through. It has to be a guess, because there is only one
+/// microphone and it carries both voices — so the guess is made from the one
+/// thing that reliably separates them: his own voice arrives at a level the
+/// room settles into within a moment of him starting, and yours arrives on
+/// top of it.
+///
+/// Kept as a plain struct with no audio in it so the decision can be driven
+/// from a test with a made-up loudness trace, rather than by talking over a
+/// live window and hoping.
+struct BargeGuard {
+    /// How loud his own voice measures in this room, learned each time he
+    /// speaks. Rises fast, decays slowly — an echo that got quiet for one
+    /// buffer must not make the next syllable look like you.
+    private(set) var echoPeak: CGFloat = 0
+    /// When the current run of loud-enough audio began.
+    private var loudSince: Date?
+
+    /// You have to be this much louder than his own echo to count.
+    static let overEcho: CGFloat = 1.7
+    /// ...and this much above the room, so a door does not interrupt him.
+    static let overFloor: CGFloat = 1.6
+    /// Held for this long. One syllable of echo spike is not an interruption.
+    static let sustain: TimeInterval = 0.25
+    /// He gets this long to establish what his own voice measures. Before it,
+    /// nothing can barge in — otherwise his own first word trips the guard,
+    /// because at that instant the learned echo level is still zero.
+    static let learn: TimeInterval = 0.6
+
+    mutating func reset() { echoPeak = 0; loudSince = nil }
+
+    /// One microphone buffer. Returns true exactly once per interruption.
+    ///
+    /// - rms:          loudness of this buffer
+    /// - floor:        the room's learned quiet level
+    /// - speakingFor:  how long he has been talking
+    mutating func feed(rms: CGFloat, floor: CGFloat,
+                       speakingFor: TimeInterval, now: Date) -> Bool {
+        // How fast the echo estimate is allowed to chase the microphone.
+        //
+        // During the learning window everything arriving IS him, so chase it
+        // hard and settle on his real level. After that, chase it barely at
+        // all — otherwise your voice is absorbed into the estimate the same
+        // instant you start, the bar rises with you, and you can never get
+        // over it. That was the first version, and it could not be
+        // interrupted at all: `--barge over` fired never.
+        let rising: CGFloat = speakingFor < Self.learn ? 0.35 : 0.008
+        let k: CGFloat = rms > echoPeak ? rising : 0.02
+        echoPeak += (rms - echoPeak) * k
+        guard speakingFor >= Self.learn else { loudSince = nil; return false }
+        let bar = max(floor * Self.overFloor, echoPeak * Self.overEcho)
+        guard rms > bar else { loudSince = nil; return false }
+        guard let since = loudSince else { loudSince = now; return false }
+        guard now.timeIntervalSince(since) >= Self.sustain else { return false }
+        loudSince = nil
+        return true
+    }
+}
+
 
 // MARK: - the ear
 
@@ -39,6 +108,14 @@ final class Ear: NSObject {
     var onPartial: ((String) -> Void)?
     /// Called once when you stop talking, with the finished utterance.
     var onUtterance: ((String) -> Void)?
+    /// Called when you start talking OVER him. Whoever owns the mouth is
+    /// expected to stop it.
+    var onBargeIn: (() -> Void)?
+
+    /// Set by whoever is speaking, so the guard knows how long his voice has
+    /// been in the room. nil when he is not talking.
+    var speakingSince: Date?
+    private var barge = BargeGuard()
 
     private var partial = ""
     private var lastLoudAt = Date()
@@ -127,6 +204,21 @@ final class Ear: NSObject {
 
                 let speechAt = max(0.018, self.noiseFloor * 2.2 + 0.012)
                 if rms > speechAt { self.lastLoudAt = Date() }
+
+                // Talking over him. This runs INSIDE the mute — the buffer is
+                // still dropped below, so he never hears himself; only the
+                // loudness is read. That is what makes interrupting possible
+                // without reintroducing the bug the mute exists to prevent.
+                if self.muted, let since = self.speakingSince {
+                    let now = Date()
+                    if self.barge.feed(rms: rms, floor: self.noiseFloor,
+                                       speakingFor: now.timeIntervalSince(since),
+                                       now: now) {
+                        DispatchQueue.main.async { self.onBargeIn?() }
+                    }
+                } else if !self.muted {
+                    self.barge.reset()
+                }
             }
             guard !self.muted else { return }
             self.request?.append(buf)

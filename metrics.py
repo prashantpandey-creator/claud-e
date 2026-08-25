@@ -405,7 +405,21 @@ def print_human(data: Dict):
     print(f"    merges:      {c['merges']:>4}  (duplicates fused)")
 
     print(f"\n  Coverage")
-    print(f"    Sessions:    {cov['session_memories']:>4} / {cov['sessions_known']}  {_bar(cov['session_coverage'])} {cov['session_coverage']*100:.1f}%")
+    # RENAMED. This read "Sessions: 165 / 230" under a "Coverage" heading,
+    # which any reader takes as "165 of your sessions have memories". It is
+    # not that — it is session-summary memories divided by transcripts, i.e.
+    # how much of the backlog has been MINED. The genuine cwd-coverage number
+    # is paths.memory_coverage(), which said 174/230 on the same day. Two
+    # numbers, one label, different questions; the labels now say which.
+    print(f"    Sessions mined: {cov['session_memories']:>4} / {cov['sessions_known']}  {_bar(cov['session_coverage'])} {cov['session_coverage']*100:.1f}%")
+    try:
+        import paths as _paths
+        _mc = _paths.memory_coverage()
+        if _mc["sessions_total"]:
+            _r = _mc["sessions_covered"] / _mc["sessions_total"]
+            print(f"    Sessions with a memory dir: {_mc['sessions_covered']:>4} / {_mc['sessions_total']}  {_bar(_r)} {_r*100:.1f}%")
+    except Exception:
+        pass
     print(f"    .md files:   {cov['md_file_memories']:>4} / {cov['md_files_known']}  {_bar(cov['md_file_coverage'])} {cov['md_file_coverage']*100:.1f}%")
     print(f"    total active: {cov['total_active']}")
 

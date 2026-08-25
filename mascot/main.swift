@@ -140,6 +140,49 @@ if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--transcribe" {
 //   casper --answer "not now"        -> no
 //   casper --decline "meditate go"   -> records one refusal
 //   casper --declined "meditate go"  -> suppressed n=1 hushed=no
+// Can you cut him off, and does his own voice cut him off by mistake?
+//
+//   casper --barge echo        his voice only -> must NEVER fire
+//   casper --barge over        you talking over him -> must fire
+//   casper --barge blip        one loud spike -> must NEVER fire
+//   casper --barge early       loud from his first instant -> must NEVER fire
+//
+// Driven by a made-up loudness trace at 100 buffers a second, because the
+// alternative is shouting at a live window and calling whatever happens a
+// result.
+if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--barge" {
+    let kind = CommandLine.arguments[2]
+    var g = BargeGuard()
+    let floor: CGFloat = 0.02
+    let echo: CGFloat = 0.09          // what his own voice measures
+    let you: CGFloat = 0.34           // what you measure, talking over him
+    let step = 0.01                   // seconds per buffer
+    var firedAt: Double = -1
+    let start = Date()
+    var t = 0.0
+    while t < 4.0 {
+        var rms = echo
+        switch kind {
+        case "echo":  rms = echo * (t.truncatingRemainder(dividingBy: 0.4) < 0.2 ? 1.0 : 0.55)
+        case "over":  rms = t > 1.5 ? you : echo
+        case "blip":  rms = (t > 1.5 && t < 1.62) ? you : echo
+        case "early": rms = you        // loud from the very first buffer
+        default:      rms = echo
+        }
+        let now = start.addingTimeInterval(t)
+        if g.feed(rms: rms, floor: floor, speakingFor: t, now: now), firedAt < 0 {
+            firedAt = t
+        }
+        t += step
+    }
+    let shouldFire = (kind == "over")
+    let fired = firedAt >= 0
+    print(String(format: "%@: fired=%@ at=%.2fs  echoPeak=%.3f",
+                 kind, fired ? "yes" : "no", firedAt, Double(g.echoPeak)))
+    print(fired == shouldFire ? "CORRECT" : "WRONG")
+    exit(fired == shouldFire ? 0 : 1)
+}
+
 if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--answer" {
     let a = answerToPendingOffer(CommandLine.arguments[2])
     print(a == nil ? "-" : (a! ? "yes" : "no"))

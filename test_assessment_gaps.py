@@ -45,16 +45,42 @@ def _p(name, sessions=0, goals=0, facts=0, days=1.0):
 # not-a-project detection
 # ---------------------------------------------------------------------------
 
-def test_path_fragments_are_named_as_not_projects():
-    """`skills` and `claude-sync` had 37 and 27 sessions — more than most real
-    products — purely because normalize() took the first path segment."""
-    gaps = projects.assessment_gaps([
-        _p("skills", sessions=37), _p("claude-sync", sessions=27),
-        _p("purangpt", sessions=89, goals=2),
-    ])
+def test_a_declared_container_is_not_a_project():
+    """`skills` had 37 sessions — more than any real product except purangpt —
+    purely because normalize() takes the first path segment and ~/.claude/skills
+    is a CONTAINER. It is already declared as one in _CONTAINERS; that config
+    is the source, not a hardcoded name list."""
+    gaps = projects.assessment_gaps([_p("skills", sessions=37),
+                                     _p("purangpt", sessions=89, goals=2)])
     names = {g["project"] for g in gaps["not_projects"]}
-    assert names == {"skills", "claude-sync"}, names
+    assert "skills" in names, names
     assert "purangpt" not in names
+
+
+def test_the_not_a_project_rule_uses_NO_hardcoded_names():
+    """The first cut of this was 18 literal names — the author's own machine
+    written into the tool. On another layout those names are wrong AND the
+    real containers are missing. Every rule must derive from _CONTAINERS /
+    _NOT_WORK or from shape, never from a name someone typed."""
+    import inspect
+    src = inspect.getsource(projects._is_product) + inspect.getsource(projects._container_names)
+    for leaked in ("skills", "downloads", "library", "claude-sync", "desktop", "plugins"):
+        assert '"%s"' % leaked not in src and "'%s'" % leaked not in src, \
+            "%r is hardcoded — it is this machine's layout, not a rule" % leaked
+
+
+def test_an_unknown_name_is_TRUSTED_as_a_product():
+    """FALSIFIER for the rule that was removed.
+
+    A "name must resolve to a real directory" rule was tried and cut: it
+    called purangpt a fragment (nested at ~/projects/vedic puran/purangpt)
+    and still missed puranastro (under ~/.scratch-worktrees/). Trusting an
+    unrecognised name is the safe direction — a stray entry in the list costs
+    one glance; a real product silently dropped from assessment costs the
+    thing the tool exists for."""
+    gaps = projects.assessment_gaps([_p("zzz-some-new-product", sessions=4)])
+    assert gaps["not_projects"] == [], "an unrecognised name was dropped as a fragment"
+    assert [g["project"] for g in gaps["unassessed"]] == ["zzz-some-new-product"]
 
 
 def test_the_fallback_name_is_flagged():

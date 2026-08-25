@@ -189,8 +189,39 @@ def _start_local() -> None:
 _STARTED = False
 
 
+def _split_sentences(buf: str):
+    """(complete sentences, leftover). Splits where a reader would breathe.
+
+    Deliberately dumb except about ONE thing: a full stop between two digits
+    is a decimal point, not the end of a thought. Without that carve-out this
+    said "check the review_submission status for v1." and then, as a separate
+    utterance, "2 build 338." — measured, not imagined. Half a version number
+    read aloud as a sentence is worse than a slightly long sentence.
+
+    When the stop is the last character seen so far, nothing is emitted: we
+    cannot yet know whether a digit follows. It goes out on the next chunk,
+    or with the tail.
+    """
+    out, start = [], 0
+    for i, ch in enumerate(buf):
+        if ch not in ".!?":
+            continue
+        if ch == "." and i and buf[i - 1].isdigit():
+            nxt = buf[i + 1] if i + 1 < len(buf) else ""
+            if nxt.isdigit():
+                continue          # a decimal point: keep scanning past it
+            if nxt == "":
+                break             # last character seen — cannot tell yet
+        seg = buf[start:i + 1].strip()
+        if len(seg) > 12:
+            out.append(seg)
+            start = i + 1
+    return out, buf[start:]
+
+
 def ask_local(question: str, facts: str, mem: str = "",
-              model: str = LOCAL_MODEL, timeout_s: float = 25.0):
+              model: str = LOCAL_MODEL, timeout_s: float = 25.0,
+              on_sentence=None):
     """Answer on THIS machine, streaming.
 
     `claude -p` is an agent harness, not an inference endpoint: it loads
@@ -203,8 +234,14 @@ def ask_local(question: str, facts: str, mem: str = "",
     to first sound, with no key, no network, and without breaking the promise
     this tool already makes about the microphone.
 
-    Yields text as it arrives, so the caller can start SPEAKING the first
-    sentence while the rest is still being written.
+    Pass on_sentence to be handed each COMPLETE sentence the moment it
+    finishes, so the caller can start speaking sentence one while the rest is
+    still being written. Without it this blocks until the whole answer is
+    done, which is how it behaved for a long time while this docstring
+    claimed otherwise: it said "yields text as it arrives" and then
+    accumulated into a list and returned the joined string. Measured on this
+    machine — first token 0.10-0.32s, whole answer 0.77-0.98s — so waiting for
+    the end threw away most of a second on every single reply.
     """
     import urllib.request
     if not _local_up():
@@ -222,7 +259,7 @@ def ask_local(question: str, facts: str, mem: str = "",
                        "options": {"num_predict": 120, "temperature": 0.4}}).encode()
     req = urllib.request.Request(LOCAL_URL, data=body,
                                  headers={"Content-Type": "application/json"})
-    out = []
+    out, pending = [], ""
     try:
         with urllib.request.urlopen(req, timeout=timeout_s) as r:
             for line in r:
@@ -233,16 +270,23 @@ def ask_local(question: str, facts: str, mem: str = "",
                 piece = d.get("response", "")
                 if piece:
                     out.append(piece)
+                    if on_sentence:
+                        done, pending = _split_sentences(pending + piece)
+                        for s in done:
+                            on_sentence(s)
                 if d.get("done"):
                     break
     except Exception:
         return None
+    # The tail, which has no full stop on it because the model stopped there.
+    if on_sentence and pending.strip():
+        on_sentence(pending.strip())
     text = "".join(out).strip()
     return text or None
 
 
 def advise(question: str, timeout_s: int = TIMEOUT_S,
-           model: str = MODEL) -> Dict[str, Any]:
+           model: str = MODEL, on_sentence=None) -> Dict[str, Any]:
     """Reason over the graded facts. Returns {speech, source, ok}."""
     q = (question or "").strip()
     if len(q) < 3:
@@ -255,7 +299,7 @@ def advise(question: str, timeout_s: int = TIMEOUT_S,
     # This machine first. It is ~50x faster to first token than the harness,
     # and it is the only lane that keeps his answers on the laptop.
     _say_doing("thinking")
-    local = ask_local(q, facts, mem)
+    local = ask_local(q, facts, mem, on_sentence=on_sentence)
     if local:
         _say_doing("")
         return {"speech": local[:700], "source": "local", "ok": True}
@@ -302,8 +346,31 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(prog="meditate advise", description="Casper reasons over your work")
     ap.add_argument("question", nargs="*")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--stream", action="store_true",
+                    help="print each sentence the moment it is finished, "
+                         "flushed, so the mascot can speak it while the rest "
+                         "is still being written")
     a = ap.parse_args(argv)
     q = " ".join(a.question) or "what should I be working on"
+
+    if a.stream and not a.json:
+        said = []
+
+        def emit(s):
+            said.append(s)
+            sys.stdout.write(s + "\n")
+            sys.stdout.flush()
+
+        res = advise(q, on_sentence=emit)
+        # The fallback lanes (the harness, then facts-only) do not stream —
+        # they hand back one finished string. Emitting it here keeps ONE
+        # output contract for the caller: whatever answered, the answer
+        # arrives as flushed lines. Without this a reader that speaks lines
+        # would go silent for exactly the answers that took longest.
+        if not said and res.get("speech"):
+            emit(res["speech"])
+        return 0
+
     res = advise(q)
     if a.json:
         print(json.dumps({"tool_name": "meditate_advisor", "success": res["ok"],

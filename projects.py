@@ -696,23 +696,51 @@ def rollup(sessions: Optional[List[Dict]] = None,
     return out
 
 
-# A name normalize() produced from a path component rather than a product.
-# These are what you get when a session is opened inside a container directory
-# (~/.claude/skills, ~/claude-sync) — the first real segment becomes the
-# "project". Measured 2026-08-25: `skills` showed 37 sessions and `claude-sync`
-# 27, more than most actual products, and `other` — normalize()'s own
-# "I could not name this" fallback — sat in the table looking like one.
-_NOT_PRODUCTS = {"skills", "claude-sync", "claude", "private", "web", "other",
-                 "meditation", "backups", "tmp", "var", "scratch", "hooks",
-                 "plugins", "sync", "desktop", "downloads", "library"}
-
 # A git worktree directory: two dictionary words plus a short hex tag, e.g.
 # `amazing-bartik-bd7fe3`. Carries no product identity.
 _WORKTREE_NAME = re.compile(r"^[a-z]+-[a-z]+-[0-9a-f]{6,}$")
 
 
+def _container_names() -> set:
+    """Directory names that HOLD projects, so are never projects themselves.
+
+    Derived from _CONTAINERS and _NOT_WORK, which already declare them —
+    NOT a hardcoded list. The first version of this was 18 literal names
+    (`skills`, `downloads`, `library`, ...), which is the author's machine
+    written into the tool: on anyone else's layout those names are wrong and
+    the real containers are missing. The config that already exists is the
+    right source.
+    """
+    return {os.path.basename(p).lower() for p in (_CONTAINERS + _NOT_WORK) if p}
+
+
 def _is_product(name: str) -> bool:
-    return not (name in _NOT_PRODUCTS or _WORKTREE_NAME.match(name or ""))
+    """Is this name a product, or an artefact of how the name was derived?
+
+    Three rules, all derived — no machine-specific names:
+      1. `other` is normalize()'s own "I could not name this" sentinel. A
+         fallback is not an answer, and it had been sitting in the project
+         table as if it were a product.
+      2. a declared container (see _container_names) holds projects, so it is
+         not one.
+    Worktree-shaped names are excluded by shape, which needs no filesystem.
+
+    A third rule was tried and REMOVED: "the name must resolve to a real
+    directory". It looked principled and was fragile — real products are
+    nested (`~/projects/vedic puran/purangpt`) so a direct-child check called
+    purangpt a fragment and collapsed 69 real projects to 32; widening to two
+    levels still missed puranastro, which lives under `~/.scratch-worktrees/`,
+    and rescuing it needed a prefix-match escape hatch. A rule that needs
+    escape hatches to stop being wrong is not a rule. The two fragments it
+    caught (`private`, `web`) are what project-aliases.txt exists for — a
+    user-tunable file beats a filesystem heuristic that fails silently on
+    someone else's layout.
+    """
+    if not name or name == "other":
+        return False
+    if _WORKTREE_NAME.match(name):
+        return False
+    return name.lower() not in _container_names()
 
 
 def assessment_gaps(rows: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:

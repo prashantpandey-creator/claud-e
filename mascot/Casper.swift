@@ -1607,6 +1607,7 @@ final class App: NSObject, NSApplicationDelegate {
         // else and a companion turns into a thing that talks over your calls.
         mouth.onFinish = { [weak self] in
             guard let self = self else { return }
+            self.ear.speakingSince = nil
             self.ear.muted = false            // safe to hear you again
             self.ear.freshTurn()              // drop fragments heard pre-mute
         }
@@ -1618,6 +1619,27 @@ final class App: NSObject, NSApplicationDelegate {
         mouth.onStart = { [weak self] in
             prevOnStart?()
             self?.ear.muted = true
+            // The guard needs to know WHEN he started, because for the first
+            // fraction of a second it has not yet learned what his own voice
+            // measures in this room.
+            self?.ear.speakingSince = Date()
+        }
+
+        // You started talking over him. Stop, immediately, and listen.
+        //
+        // A companion you cannot interrupt is one you have to sit through,
+        // and sitting through an answer you already know is wrong is the
+        // single most irritating thing a talking tool does. shutUp() also
+        // drops anything queued and invalidates renders in flight, so the
+        // rest of the answer does not arrive three seconds later.
+        ear.onBargeIn = { [weak self] in
+            guard let self = self, self.mouth.speaking else { return }
+            self.mouth.shutUp()
+            self.ear.speakingSince = nil
+            self.ear.muted = false
+            self.ear.freshTurn()      // his words are not the start of yours
+            self.armed = true         // you clearly meant him
+            self.ghost.startle()
         }
         ear.onPartial = { [weak self] text in
             guard let self = self, !text.isEmpty else { return }
