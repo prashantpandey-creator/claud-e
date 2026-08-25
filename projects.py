@@ -696,6 +696,74 @@ def rollup(sessions: Optional[List[Dict]] = None,
     return out
 
 
+# A name normalize() produced from a path component rather than a product.
+# These are what you get when a session is opened inside a container directory
+# (~/.claude/skills, ~/claude-sync) — the first real segment becomes the
+# "project". Measured 2026-08-25: `skills` showed 37 sessions and `claude-sync`
+# 27, more than most actual products, and `other` — normalize()'s own
+# "I could not name this" fallback — sat in the table looking like one.
+_NOT_PRODUCTS = {"skills", "claude-sync", "claude", "private", "web", "other",
+                 "meditation", "backups", "tmp", "var", "scratch", "hooks",
+                 "plugins", "sync", "desktop", "downloads", "library"}
+
+# A git worktree directory: two dictionary words plus a short hex tag, e.g.
+# `amazing-bartik-bd7fe3`. Carries no product identity.
+_WORKTREE_NAME = re.compile(r"^[a-z]+-[a-z]+-[0-9a-f]{6,}$")
+
+
+def _is_product(name: str) -> bool:
+    return not (name in _NOT_PRODUCTS or _WORKTREE_NAME.match(name or ""))
+
+
+def assessment_gaps(rows: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    """Where is meditate silent about your work, and why?
+
+    Two different gaps that need two different fixes, which is why they are
+    reported separately:
+
+      not_projects — the name came from a path component, not a product. Needs
+                     a line in project-aliases.txt, NOT a goal file. Telling
+                     someone to write goals for a directory name is worse than
+                     saying nothing.
+      unassessed   — a real product you actively work in that has no goal, so
+                     nothing can say whether it is going well. Measured
+                     2026-08-25: 79 of 83 tracked entries had zero goals; six
+                     goal files cover three products. Where a goal DOES exist
+                     the judgement is good (purangpt-mobile-live reads 6/8 with
+                     live-verified evidence per box) — the defect is coverage,
+                     not quality, and silence about the other ~20 products
+                     reads as health.
+
+    Dormant projects are never reported. Zero sessions means you are not
+    working there, and manufacturing work out of silence is the same
+    can't-say-I-don't-know defect this tool keeps finding in itself.
+    """
+    if rows is None:
+        rows = rollup()          # returns a LIST of rows, not an envelope
+    not_products, unassessed, assessed = [], [], 0
+    for p in rows:
+        name = p.get("project") or ""
+        sessions = p.get("sessions") or 0
+        if not _is_product(name):
+            if sessions:
+                not_products.append({"project": name, "sessions": sessions})
+            continue
+        if p.get("goals"):
+            assessed += 1
+        elif sessions:
+            unassessed.append({"project": name, "sessions": sessions,
+                               "facts": p.get("facts") or 0})
+    unassessed.sort(key=lambda g: -g["sessions"])
+    not_products.sort(key=lambda g: -g["sessions"])
+    return {
+        "tracked": len(rows),
+        "real_projects": sum(1 for p in rows if _is_product(p.get("project") or "")),
+        "assessed": assessed,
+        "unassessed": unassessed,
+        "not_projects": not_products,
+    }
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(prog="meditate projects", description="Per-project attention and tasks")
     ap.add_argument("--json", action="store_true")

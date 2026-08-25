@@ -328,6 +328,28 @@ def _check_memory_coverage() -> Dict[str, Any]:
         return {"checked": False, "blind": 0, "auto_linkable": 0, "error": str(e)[:120]}
 
 
+def _check_assessment() -> Dict[str, Any]:
+    """Is meditate actually judging the work, or just counting sessions?
+
+    Measured 2026-08-25: 83 tracked entries, 4 with a goal. Where a goal
+    exists the judgement is good; the defect is that ~25 real products you
+    work in have no yardstick, so the tool is silent about most of the work
+    and the silence reads as health.
+    """
+    try:
+        sys.path.insert(0, SKILL_DIR)
+        import projects
+        g = projects.assessment_gaps()
+        return {"checked": True, "tracked": g["tracked"],
+                "real_projects": g["real_projects"], "assessed": g["assessed"],
+                "unassessed": len(g["unassessed"]),
+                "not_projects": len(g["not_projects"]),
+                "top_unassessed": [x["project"] for x in g["unassessed"][:5]],
+                "needs_alias": [x["project"] for x in g["not_projects"][:5]]}
+    except Exception as e:
+        return {"checked": False, "error": str(e)[:120]}
+
+
 def run(run_tests: bool = True) -> Dict[str, Any]:
     """run_tests=False returns the same envelope without executing 26 suites.
     test_doctor.py calls run() three times to check STRUCTURE; making it
@@ -343,6 +365,7 @@ def run(run_tests: bool = True) -> Dict[str, Any]:
     nidra = _check_nidra()
     index = _check_index()
     coverage = _check_memory_coverage()
+    assessment = _check_assessment()
 
     issues = []
     if not all(p["ok"] for p in prereqs):
@@ -359,6 +382,12 @@ def run(run_tests: bool = True) -> Dict[str, Any]:
         issues.append("heartbeat_stale")
     if index.get("stale"):
         issues.append("memory_index_stale")
+    if assessment.get("not_projects"):
+        # Path fragments sitting in the project table as if they were products.
+        # Mechanical: one alias line each. NOT an issue for unassessed products
+        # — which product deserves a goal is the owner's call, and doctor going
+        # red on a judgement it cannot make is how a health check gets ignored.
+        issues.append("project_names_unaliased")
     if coverage.get("auto_linkable"):
         # Only the MECHANICAL gap is an issue. A cwd with no covering project
         # is a decision, not a defect, so it is reported but never fails the
@@ -381,6 +410,7 @@ def run(run_tests: bool = True) -> Dict[str, Any]:
         "stillness": stillness,
         "index": index,
         "coverage": coverage,
+        "assessment": assessment,
         "output": output,
         "nidra": nidra,
     }
