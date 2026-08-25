@@ -2368,6 +2368,16 @@ final class App: NSObject, NSApplicationDelegate {
             armed = false
             ear.stop()
             micEnabled = false
+            // Say so in the STATUS too, not only in the bubble.
+            //
+            // This line was missing, so earStatus kept whatever it was set to
+            // when permission was granted — "listening" — for the rest of the
+            // process's life. The status file then read `status=listening`
+            // next to `ear=off`, which is a contradiction it was written to
+            // prevent: that file exists precisely so the ear can be checked
+            // without asking the owner what he sees on his own screen. It was
+            // believed over the owner for a whole session on 2026-08-25.
+            earStatus = "off — mic switched off"
             setBubble("Off. I won't hear anything until you switch me back on.")
         } else {
             micEnabled = true
