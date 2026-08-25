@@ -13,8 +13,9 @@ Contract:
   - speech not addressed to him -> silence
   - the built app exists wherever `meditate casper` would run it
 
-Skips (passes) when the binary has not been built on this machine — builds
-are gitignored, so CI has no mascot to interrogate.
+FAILS LOUDLY when the binary has not been built. It used to skip-and-pass,
+and since builds are gitignored that meant it tested nothing on every CI run
+— see _require_built() below. CI builds the mascot before the suite now.
 
 Run: python3 ~/.claude/skills/meditate/test_mascot_route.py
 """

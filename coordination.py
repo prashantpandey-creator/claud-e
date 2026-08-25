@@ -578,6 +578,25 @@ def hook_edit(payload: Dict[str, Any],
     cwd = str(payload.get("cwd") or "")
     now = time.time()
 
+    # Parallel Edit calls in the same session hit this hook as separate
+    # subprocesses. Without a lock, both load the same on-disk presence,
+    # both decide a fact/collision is unserved, and both log it — caught
+    # live as two byte-identical fact_served rows in the real event log.
+    # A per-sid flock serializes load -> decide -> save -> log so the
+    # second caller sees the first one's write.
+    import fcntl
+    os.makedirs(coord_dir, exist_ok=True)
+    lock_f = open(_pfile(sid, coord_dir) + ".lock", "w")
+    fcntl.flock(lock_f, fcntl.LOCK_EX)
+    try:
+        return _hook_edit_locked(payload, ti, path, sid, cwd, now, coord_dir, store_dir)
+    finally:
+        lock_f.close()
+
+
+def _hook_edit_locked(payload: Dict[str, Any], ti: Dict[str, Any], path: str,
+                      sid: str, cwd: str, now: float,
+                      coord_dir: str, store_dir: str) -> str:
     me = load_presence(sid, coord_dir)
     me.update({"sid": sid, "cwd": cwd})
     try:

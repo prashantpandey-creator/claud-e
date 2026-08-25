@@ -157,6 +157,49 @@ def test_events_logged_durably():
         assert "fact_served" in types and "collision_warned" in types, types
 
 
+def test_concurrent_edits_do_not_double_log_a_fact():
+    """Two parallel Edit calls in the same session both hit the hook before
+    either's presence save lands — an unlocked read-modify-write serves (and
+    logs) the same fact twice. Caught live: two byte-identical fact_served
+    rows, same sid/path/ts/mem_id, in the real coordination log."""
+    import threading
+    with tempfile.TemporaryDirectory() as t:
+        coord, store = _env(t)
+        _write_index(store, "/repo/main.py",
+                     [{"statement": "a graded fact", "status": "machine_checked"}])
+
+        barrier = threading.Barrier(2, timeout=0.5)
+        orig_load = co.load_presence
+
+        def synced_load(sid, coord_dir=co.COORD_DIR):
+            try:
+                barrier.wait()
+            except threading.BrokenBarrierError:
+                pass
+            return orig_load(sid, coord_dir)
+
+        co.load_presence = synced_load
+        try:
+            threads = [threading.Thread(
+                target=co.hook_edit,
+                args=(_payload("sid-a", "/repo/main.py"),),
+                kwargs={"coord_dir": coord, "store_dir": store})
+                for _ in range(2)]
+            for th in threads:
+                th.start()
+            for th in threads:
+                th.join()
+        finally:
+            co.load_presence = orig_load
+
+        ev_path = os.path.join(os.path.dirname(coord.rstrip("/")), "events.jsonl")
+        served = [json.loads(l) for l in open(ev_path)
+                  if json.loads(l)["type"] == "fact_served"]
+        assert len(served) == 1, (
+            "fact_served logged %d times for one fact under concurrent edits"
+            % len(served))
+
+
 # ---- guard rules (moved from bash) ------------------------------------------
 
 def test_pipeline_rule_fires():
