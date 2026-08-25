@@ -114,14 +114,40 @@ def _facts_from_server(timeout_s: float = 4.0) -> Optional[str]:
     return "\n".join(lines) or None
 
 
+_FACTS_CACHE = os.path.expanduser("~/.claude/meditation/.facts-cache.txt")
+# Long enough that a back-and-forth conversation pays for this once; short
+# enough that acting on something and then asking about it tells the truth.
+_FACTS_TTL = 30.0
+
+
 def _facts(limit_projects: int = 4) -> str:
     """Everything Casper is allowed to reason over, compact and verified.
 
-    Server first: it keeps this warm on a background thread. Only when it is
-    down do we pay the full price of computing it here.
+    Cache first, then the server, then the full price.
+
+    The server keeps this warm, but it still takes 0.50-0.69s to hand it over
+    and it was asked on EVERY question — while, by the note on
+    _facts_from_server above, the data changes about once an hour. So the
+    second question of any conversation spent half a second of silence buying
+    information it already had.
     """
+    try:
+        if time.time() - os.stat(_FACTS_CACHE).st_mtime < _FACTS_TTL:
+            with open(_FACTS_CACHE) as f:
+                cached = f.read()
+            if cached.strip():
+                return cached
+    except OSError:
+        pass
+
     served = _facts_from_server()
     if served:
+        try:
+            os.makedirs(os.path.dirname(_FACTS_CACHE), exist_ok=True)
+            with open(_FACTS_CACHE, "w") as f:
+                f.write(served)
+        except OSError:
+            pass          # a cache that cannot be written is not an error
         return served
     lines: List[str] = []
     _say_doing("reading what I know")
