@@ -49,18 +49,33 @@ else
 fi
 
 # ---- 2. the running companion -----------------------------------------------
-if pgrep -f "Casper.app/Contents" >/dev/null 2>&1; then
-    say "close Casper"
-    run pkill -f "Casper.app/Contents" || true
-fi
-if pgrep -f "meditate/brain.py" >/dev/null 2>&1; then
-    say "stop the Pulse server"
-    run pkill -f "meditate/brain.py" || true
-fi
-if pgrep -f "meditate/tts.py" >/dev/null 2>&1; then
-    say "stop the voice server"
-    run pkill -f "meditate/tts.py" || true
-fi
+#
+# Only what belongs to THIS home, matched on the full installed path.
+#
+# The header above promises this file never touches anything outside $HOME,
+# and for every other step it was true. These three matched a bare substring —
+# "Casper.app/Contents", "meditate/tts.py" — so they killed those processes
+# for every user on the machine and, more to the point, for every HOME.
+# test_packaging.py runs this script with a temp HOME to check that it spares
+# other tools' hooks, which means every single run of the test suite shut down
+# the owner's live mascot, his Pulse server and his voice server. Measured
+# 2026-08-25: pid 4243 before `python3 test_packaging.py`, none after. The
+# mascot was not crashing. It was being uninstalled, by its own tests.
+case "$SKILL_DIR" in
+    "$HOME"/*) OWN="$SKILL_DIR" ;;
+    *)         OWN="" ;;   # installed outside $HOME — not ours to kill
+esac
+
+stop_mine() {   # stop_mine <path-under-SKILL_DIR> <what to say>
+    [ -n "$OWN" ] || return 0
+    if pgrep -f "$OWN/$1" >/dev/null 2>&1; then
+        say "$2"
+        run pkill -f "$OWN/$1" || true
+    fi
+}
+stop_mine "mascot/Casper.app/Contents" "close Casper"
+stop_mine "brain.py"                   "stop the Pulse server"
+stop_mine "tts.py"                     "stop the voice server"
 
 # ---- 3. the hooks in settings.json ------------------------------------------
 # Edited with python, matched on the hook PATH — a text edit of someone's
