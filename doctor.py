@@ -308,6 +308,26 @@ def _check_index() -> Dict[str, Any]:
         return {"checked": False, "stale": 0, "lines": [], "error": str(e)[:120]}
 
 
+def _check_memory_coverage() -> Dict[str, Any]:
+    """Which cwds you work in start with NO memory at all.
+
+    Measured 2026-08-25: 164 of 228 transcripts ran in a cwd that had
+    memories. The rest started cold and nothing said so — worst case, the
+    tool's own repo with 45 sessions and zero memories. A gap nobody can see
+    is a gap nobody fixes.
+    """
+    try:
+        sys.path.insert(0, SKILL_DIR)
+        import paths
+        c = paths.memory_coverage()
+        return {"checked": True, "blind": len(c["blind"]),
+                "auto_linkable": sum(1 for b in c["blind"] if b["link_to"]),
+                "sessions_covered": c["sessions_covered"],
+                "sessions_total": c["sessions_total"], "detail": c["blind"][:10]}
+    except Exception as e:
+        return {"checked": False, "blind": 0, "auto_linkable": 0, "error": str(e)[:120]}
+
+
 def run(run_tests: bool = True) -> Dict[str, Any]:
     """run_tests=False returns the same envelope without executing 26 suites.
     test_doctor.py calls run() three times to check STRUCTURE; making it
@@ -322,6 +342,7 @@ def run(run_tests: bool = True) -> Dict[str, Any]:
     output = _check_output()
     nidra = _check_nidra()
     index = _check_index()
+    coverage = _check_memory_coverage()
 
     issues = []
     if not all(p["ok"] for p in prereqs):
@@ -338,6 +359,11 @@ def run(run_tests: bool = True) -> Dict[str, Any]:
         issues.append("heartbeat_stale")
     if index.get("stale"):
         issues.append("memory_index_stale")
+    if coverage.get("auto_linkable"):
+        # Only the MECHANICAL gap is an issue. A cwd with no covering project
+        # is a decision, not a defect, so it is reported but never fails the
+        # health check — doctor must not go red on something it cannot fix.
+        issues.append("memory_dirs_unlinked")
     if stillness["overdue"]:
         issues.append("stillness_overdue")
     elif stillness.get("never_run"):
@@ -354,6 +380,7 @@ def run(run_tests: bool = True) -> Dict[str, Any]:
         "heartbeat": heartbeat,
         "stillness": stillness,
         "index": index,
+        "coverage": coverage,
         "output": output,
         "nidra": nidra,
     }
