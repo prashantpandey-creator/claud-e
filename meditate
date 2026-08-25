@@ -19,11 +19,45 @@ case "${1:-}" in
     # a signed bundle with usage strings in its Info.plist, so "he listens"
     # depends on packaging before it depends on code.
     NEWEST=$(ls -t "$DIR/mascot"/*.swift 2>/dev/null | head -1)
-    if [ ! -x "$DIR/mascot/Casper.app/Contents/MacOS/casper" ] \
-       || [ -n "$NEWEST" -a "$NEWEST" -nt "$DIR/mascot/Casper.app/Contents/MacOS/casper" ]; then
+    CBIN="$DIR/mascot/Casper.app/Contents/MacOS/casper"
+    REBUILT=no
+    if [ ! -x "$CBIN" ] || [ -n "$NEWEST" -a "$NEWEST" -nt "$CBIN" ]; then
       echo "  building Casper..."
       bash "$DIR/mascot/build.sh" >/dev/null || {
         echo "  couldn't build the companion (needs Xcode command line tools)"; exit 1; }
+      REBUILT=yes
+    fi
+
+    # A stale privacy record kills him at launch, and it does not need the
+    # signing identity to have changed -- build.sh only clears the record in
+    # that case, so this one gets through. The symptom is a SIGABRT inside
+    # __TCC_CRASHING_DUE_TO_PRIVACY_VIOLATION__ with a report that says the
+    # Info.plist "must contain an NSSpeechRecognitionUsageDescription key"
+    # while the key is sitting right there in the plist. Observed 2026-08-25.
+    # If the last launch died that way, clear the record and let macOS re-read
+    # the plist. Costs one Allow click, and only after a crash.
+    LASTCRASH=$(ls -t "$HOME/Library/Logs/DiagnosticReports"/casper-*.ips 2>/dev/null | head -1)
+    if [ -n "$LASTCRASH" ] && ! pgrep -f "$DIR/mascot/Casper.app/Contents" >/dev/null 2>&1 \
+       && grep -q '"namespace":"TCC"' "$LASTCRASH" 2>/dev/null; then
+      echo "  his last launch was blocked by a stale privacy record — clearing it"
+      for s in SpeechRecognition Microphone AppleEvents; do
+        tccutil reset "$s" com.meditate.casper >/dev/null 2>&1 || true
+      done
+      mv "$LASTCRASH" "$LASTCRASH.handled" 2>/dev/null || true
+    fi
+
+    # Already awake and current? Then raise him and stop.
+    #
+    # These two lines used to run unconditionally, which meant that with
+    # several sessions open at once, whichever one typed `meditate casper`
+    # killed the Casper the others were using -- and if a rebuild was mid-swap
+    # the freshly opened app was SIGKILLed for "Code Signature Invalid"
+    # instead of drawing. Measured on 2026-08-25: 25 launch/death pairs inside
+    # 60 seconds, and from the owner's side he "closed automatically".
+    if [ "$REBUILT" = no ] && pgrep -f "$DIR/mascot/Casper.app/Contents" >/dev/null 2>&1; then
+      open "$DIR/mascot/Casper.app"   # activates the running one, starts nothing
+      echo "Casper is already awake — bottom-right of your screen."
+      exit 0
     fi
     pkill -f "$DIR/mascot/Casper.app/Contents" 2>/dev/null || true
     pkill -x casper 2>/dev/null || true
