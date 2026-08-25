@@ -428,6 +428,11 @@ final class Mouth: NSObject, AVSpeechSynthesizerDelegate {
         synth.delegate = self
     }
 
+    /// The sentence currently coming out of the speaker. Observable so a test
+    /// can check WHAT was spoken and in what order, not merely how many times
+    /// something started.
+    private(set) var nowSaying = ""
+
     /// Which lane produced the last utterance — "kokoro" or "apple".
     /// Observable so nobody has to guess whether the good voice is actually
     /// the one talking.
@@ -518,7 +523,22 @@ final class Mouth: NSObject, AVSpeechSynthesizerDelegate {
     private var inFlight = false
     /// The newest thing he was asked to say while busy. Only one is kept —
     /// his lines are status, and stale status is worse than silence.
-    private var queued: String?
+    /// What is waiting to be said.
+    ///
+    /// Two different things end up here and they need opposite policies. A
+    /// NEW thought arriving while he talks should replace whatever was
+    /// waiting — that is say(), newest wins, and it is why a briefing landing
+    /// mid-sentence does not queue up a backlog. The REST OF THE SAME ANSWER
+    /// must not replace anything — that is sayNext(), first in first out.
+    /// With one slot for both, a three-sentence answer spoke its first and
+    /// its last and silently dropped the middle.
+    private var queue: [String] = []
+
+    /// Bumped only by shutUp(). A look-ahead render has to survive the start
+    /// of the utterance before it — `generation` cannot be used for that,
+    /// because it ticks on every utterance and would cancel exactly the
+    /// render it is meant to protect.
+    private var epoch: UInt64 = 0
 
     /// The queued line, already rendered, waiting for the current one to end.
     ///
@@ -536,8 +556,27 @@ final class Mouth: NSObject, AVSpeechSynthesizerDelegate {
     /// worth doing at all — in pieces WITHOUT it, every seam costs 0.65s.
     private var queuedBuf: AVAudioPCMBuffer?
     /// Which text queuedBuf belongs to, so a newer queued line never plays a
-    /// stale buffer. `queued` is newest-wins and can change mid-render.
+    /// stale buffer. The head of the queue can change mid-render.
     private var queuedFor: String?
+
+    /// Render whatever is at the head of the queue, now, while something else
+    /// is still playing. Cheap to call repeatedly: it no-ops when the head is
+    /// already rendered or already rendering.
+    private func preRenderHead() {
+        guard let head = queue.first, queuedFor != head else { return }
+        let mine = epoch
+        DispatchQueue.global().async { [weak self] in
+            guard let self = self, let buf = self.kokoroRender(head) else { return }
+            DispatchQueue.main.async {
+                // Still the same conversation, and this is still what comes
+                // next? A newer thought may have replaced the queue while
+                // this rendered, and shutUp() may have ended the whole thing.
+                guard mine == self.epoch, self.queue.first == head else { return }
+                self.queuedBuf = buf
+                self.queuedFor = head
+            }
+        }
+    }
     /// Bumped on every say() and every shutUp(). A render whose generation is
     /// stale must never reach the speakers.
     private var generation: UInt64 = 0
@@ -546,25 +585,14 @@ final class Mouth: NSObject, AVSpeechSynthesizerDelegate {
         let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !clean.isEmpty else { return }
         if inFlight {
-            queued = clean
+            queue = [clean]             // a new thought supersedes the old one
             queuedBuf = nil
             queuedFor = nil
-            let mine = generation
-            DispatchQueue.global().async { [weak self] in
-                guard let self = self else { return }
-                guard let buf = self.kokoroRender(clean) else { return }
-                DispatchQueue.main.async {
-                    // Still the same conversation, and still the same queued
-                    // line? A newer one may have replaced it while this
-                    // rendered, and shutUp() may have ended the whole thing.
-                    guard mine == self.generation, self.queued == clean else { return }
-                    self.queuedBuf = buf
-                    self.queuedFor = clean
-                }
-            }
+            preRenderHead()
             return
         }
         inFlight = true
+        nowSaying = clean
         generation &+= 1
         let mine = generation
         // Kokoro first: rendered off the main thread, whole utterance in one
@@ -745,24 +773,37 @@ final class Mouth: NSObject, AVSpeechSynthesizerDelegate {
 
     /// One utterance is over. Free the lane, then say the newest thing that
     /// arrived while it was busy.
+    /// The REST of the answer he is already giving. Appends rather than
+    /// replaces, so no sentence in the middle is lost.
+    func sayNext(_ text: String) {
+        let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else { return }
+        guard inFlight else { say(clean); return }
+        queue.append(clean)
+        preRenderHead()
+    }
+
     private func finished() {
         inFlight = false
-        guard let next = queued else { return }
-        queued = nil
+        guard !queue.isEmpty else { return }
+        let next = queue.removeFirst()
         // Pre-rendered while the last line was playing: speak it now, with no
         // render sitting between the two halves of one answer.
-        if let buf = queuedBuf, queuedFor == next {
-            queuedBuf = nil
-            queuedFor = nil
+        let ready = (queuedBuf != nil && queuedFor == next) ? queuedBuf : nil
+        queuedBuf = nil
+        queuedFor = nil
+        if let buf = ready {
             inFlight = true
+            nowSaying = next
             generation &+= 1
             lane = "kokoro"
             play([buf])
-            return
+        } else {
+            say(next)           // render was not ready — the old path, intact
         }
-        queuedBuf = nil
-        queuedFor = nil
-        say(next)               // render was not ready — the old path, intact
+        // Stay one render ahead: whatever comes after THIS starts rendering
+        // now, while this is being spoken.
+        preRenderHead()
     }
 
     /// Make a noise. Goes through the same lane as speech, so it queues
@@ -778,11 +819,12 @@ final class Mouth: NSObject, AVSpeechSynthesizerDelegate {
     }
 
     func shutUp() {
-        queued = nil
+        queue.removeAll()
         queuedBuf = nil
         queuedFor = nil
         inFlight = false
         generation &+= 1          // anything still rendering is now stale
+        epoch &+= 1               // ...including look-ahead renders
         player.stop()
         synth.stopSpeaking(at: .immediate)
         speaking = false

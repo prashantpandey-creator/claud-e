@@ -133,13 +133,47 @@ if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--transcribe" {
     RunLoop.main.run()
 }
 
-// What a bare answer means while an offer is on screen, and what he remembers
-// about being told no. Headless, because the alternative is proving it by
-// talking at a live window, which is the same as not proving it.
+// A streamed answer arrives in pieces. Does he speak ALL of them, in order?
 //
-//   casper --answer "not now"        -> no
-//   casper --decline "meditate go"   -> records one refusal
-//   casper --declined "meditate go"  -> suppressed n=1 hushed=no
+// The queue used to be one slot with newest-wins, which is right for a new
+// thought and wrong for the rest of the same answer: sentence three replaced
+// sentence two before it was ever spoken. Prints what actually reached the
+// speaker, in the order it got there.
+if CommandLine.arguments.count > 1, CommandLine.arguments[1] == "--saystream" {
+    _ = NSApplication.shared
+    let m = Mouth()
+    var spoken: [String] = []
+    m.onStart = { spoken.append(m.nowSaying) }
+    // `--saystream old` uses say() for the continuations, i.e. the single
+    // newest-wins slot this replaced. It is here so the claim "the middle
+    // sentence was dropped" stays checkable instead of being a story in a
+    // commit message.
+    let old = CommandLine.arguments.contains("old")
+    let more: (String) -> Void = old ? { m.say($0) } : { m.sayNext($0) }
+    m.say("One, the first sentence.")
+    // ...as the model would deliver them: while the first is still playing.
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+        more("Two, the middle one that used to vanish.")
+    }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+        more("Three, the last one.")
+    }
+    let t0 = Date()
+    Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { tm in
+        if spoken.count >= 3 || Date().timeIntervalSince(t0) > 40 {
+            tm.invalidate()
+            for (i, s) in spoken.enumerated() { print("  \(i + 1). \(s)") }
+            let ok = spoken.count == 3
+                && spoken[0].hasPrefix("One") && spoken[1].hasPrefix("Two")
+                && spoken[2].hasPrefix("Three")
+            print(ok ? "ALL THREE, IN ORDER"
+                     : "LOST OR REORDERED — spoke \(spoken.count) of 3")
+            exit(ok ? 0 : 1)
+        }
+    }
+    RunLoop.main.run()
+}
+
 // Can you cut him off, and does his own voice cut him off by mistake?
 //
 //   casper --barge echo        his voice only -> must NEVER fire
@@ -183,6 +217,13 @@ if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--barge" {
     exit(fired == shouldFire ? 0 : 1)
 }
 
+// What a bare answer means while an offer is on screen, and what he remembers
+// about being told no. Headless, because the alternative is proving it by
+// talking at a live window, which is the same as not proving it.
+//
+//   casper --answer "not now"        -> no
+//   casper --decline "meditate go"   -> records one refusal
+//   casper --declined "meditate go"  -> suppressed n=1 hushed=no
 if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--answer" {
     let a = answerToPendingOffer(CommandLine.arguments[2])
     print(a == nil ? "-" : (a! ? "yes" : "no"))

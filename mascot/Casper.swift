@@ -144,6 +144,51 @@ final class Meditate {
         return out.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// The same answer, delivered a sentence at a time as it is written.
+    ///
+    /// Blocking on the whole reply threw away most of a second on every
+    /// question: measured warm on this machine, the first sentence is ready
+    /// at 1.21-1.51s but the last one does not land until 1.88-2.61s. Nobody
+    /// benefits from silence during the difference.
+    ///
+    /// onSentence is called on a background thread, once per sentence, in
+    /// order. Returns everything that was said, so callers that want the
+    /// whole text still get it.
+    @discardableResult
+    static func adviseStreaming(_ question: String,
+                                onSentence: @escaping (String) -> Void) -> String {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        p.arguments = ["python3", skillDir + "/advisor.py", "--stream", question]
+        p.currentDirectoryURL = URL(fileURLWithPath: skillDir)
+        let pipe = Pipe()
+        p.standardOutput = pipe
+        p.standardError = Pipe()
+        do { try p.run() } catch { return "" }
+
+        // Read by LINE, not to end of file: readDataToEndOfFile() would block
+        // until the process exits, which is exactly the wait being removed.
+        var all: [String] = []
+        var buf = Data()
+        let h = pipe.fileHandleForReading
+        while true {
+            let chunk = h.availableData
+            if chunk.isEmpty { break }
+            buf.append(chunk)
+            while let nl = buf.firstIndex(of: UInt8(ascii: "\n")) {
+                let line = String(data: buf[buf.startIndex..<nl], encoding: .utf8) ?? ""
+                buf = buf[buf.index(after: nl)...]
+                let s = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !s.isEmpty { all.append(s); onSentence(s) }
+            }
+        }
+        let tail = String(data: buf, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !tail.isEmpty { all.append(tail); onSentence(tail) }
+        p.waitUntilExit()
+        return all.joined(separator: " ")
+    }
+
     /// Run an offered action THROUGH THE SERVER, so every action Casper takes
     /// is visible in Pulse's activity trail — same endpoint the dashboard
     /// buttons use, one record of everything that happened. Falls back to
@@ -1867,6 +1912,27 @@ final class App: NSObject, NSApplicationDelegate {
             == line.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// The rest of an answer he is already giving.
+    ///
+    /// Everything say() does about MUTING has to be done here too. Calling
+    /// mouth.sayNext() directly instead skips the voiceOff check, so with the
+    /// mute on he would silently swallow sentence one and then speak
+    /// sentences two and three out loud — the exact opposite of what the
+    /// button promises.
+    ///
+    /// The bubble APPENDS rather than replaces: these are one paragraph
+    /// arriving in pieces, not three separate announcements.
+    func sayMore(_ text: String) {
+        if let t = onSpeakForTest { t(text); return }
+        markDelivered(text)
+        let joined = (bubble.stringValue + " " + text)
+            .trimmingCharacters(in: .whitespaces)
+        setBubble(joined)
+        if voiceOff { ghost.mood = .idle; return }
+        ear.muted = true
+        mouth.sayNext(text)
+    }
+
     func say(_ text: String) {
         if let t = onSpeakForTest { t(text); setBubble(text); return }
         setBubble(text)
@@ -2196,9 +2262,29 @@ final class App: NSObject, NSApplicationDelegate {
         busy = true
         setBubble("\u{201C}" + question + "\u{201D}")
         DispatchQueue.global().async {
-            let answer = Meditate.advise(question)
+            // Speak sentence one while the rest is still being written. say()
+            // serialises and pre-renders, so the later sentences queue behind
+            // this one and follow it with no seam.
+            var spokeAnything = false
+            let answer = Meditate.adviseStreaming(question) { sentence in
+                DispatchQueue.main.async {
+                    // The FIRST sentence is a new thought and replaces
+                    // whatever was waiting. Every one after it is the rest of
+                    // this same answer and must queue behind, not replace —
+                    // say() for both would speak sentence one, then sentence
+                    // three, and drop sentence two on the floor.
+                    if spokeAnything {
+                        self.sayMore(sentence)
+                    } else {
+                        spokeAnything = true
+                        self.busy = false
+                        self.say(sentence)
+                    }
+                }
+            }
             DispatchQueue.main.async {
                 self.busy = false
+                guard !spokeAnything else { return }
                 self.say(answer.isEmpty ? "I don't know that one yet." : answer)
             }
         }
