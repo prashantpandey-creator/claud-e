@@ -292,6 +292,141 @@ func routeDecision(_ question: String) -> RouteKind {
 }
 
 
+// MARK: - being told no
+
+/// "yes" or "no", when he has just asked something. nil when it is neither.
+///
+/// This has to exist separately from routeDecision because a refusal is not a
+/// question and must never reach a model. Measured before it existed: with an
+/// offer on screen, "Casper, not now" routed to `.advise`, went to the LLM,
+/// and came back with a paragraph about drifted memories — the opposite of
+/// being left alone. And a bare "no" was dropped even earlier, by the
+/// three-word floor and the `question.count > 2` gate in addressedQuestion,
+/// so it did nothing at all and the offer stayed up to be asked again.
+///
+/// While an offer is showing, HE asked the question. At that moment a bare
+/// "no" is addressed to him whether or not his name is in it — that is just
+/// how answering works — so the name gate does not apply here.
+func answerToPendingOffer(_ text: String) -> Bool? {
+    var lower = text.lowercased()
+        .trimmingCharacters(in: CharacterSet(charactersIn: " ,.?!"))
+    for n in ["casper,", "casper"] where lower.hasPrefix(n) {
+        lower = String(lower.dropFirst(n.count))
+            .trimmingCharacters(in: CharacterSet(charactersIn: " ,.?!"))
+        break
+    }
+    let no = ["no", "nope", "nah", "no thanks", "no thank you", "not now",
+              "not right now", "not yet", "later", "maybe later", "leave it",
+              "never mind", "nevermind", "skip it", "not interested"]
+    let yes = ["yes", "yeah", "yep", "yup", "sure", "ok", "okay", "alright",
+               "all right", "go ahead", "do it", "please do", "tell me",
+               "go on", "sounds good", "yes please"]
+    if no.contains(lower) { return false }
+    if yes.contains(lower) { return true }
+    // "no, not right now" / "yes, tell me" — the first word decides, because
+    // the rest is politeness.
+    // Punctuation rides along on the first word — "no, not right now" splits
+    // to "no," which matches nothing, and the refusal was read as a question.
+    let first = (lower.split(separator: " ").first.map(String.init) ?? "")
+        .trimmingCharacters(in: CharacterSet(charactersIn: " ,.?!;:"))
+    if ["no", "nope", "nah"].contains(first) { return false }
+    if ["yes", "yeah", "yep", "yup", "sure"].contains(first) { return true }
+    return nil
+}
+
+
+/// What he remembers about being told no, and for how long.
+///
+/// "Not now" used to clear the buttons, say "Alright — I'll leave it", and
+/// write nothing down. The only memory in the room was .casper-last.txt,
+/// which holds ONE line: any other sentence in between wiped it and the same
+/// question came back. Every relaunch re-offered from scratch on top of that.
+///
+/// Two different things are worth remembering, and they are not the same
+/// thing. The SUBJECT, because a no about this is a no about this for a
+/// while — and it escalates, since a second no about the same item means the
+/// first answer has not changed. And the RATE, because three noes inside ten
+/// minutes are not three opinions about three items; they are one person who
+/// wants to be left alone, and the only correct response to that is to stop
+/// asking about anything.
+enum Declines {
+    /// Redirectable, so the tests do not write refusals into the live store.
+    /// A suite that pollutes the file it is checking is how "he is quiet now"
+    /// became a false claim once already in this codebase.
+    static var file: String {
+        ProcessInfo.processInfo.environment["MEDITATE_DECLINES_FILE"]
+            ?? (("~/.claude/meditation" as NSString).expandingTildeInPath)
+               + "/.casper-declined.json"
+    }
+
+    /// Headlines vary in their tail ("2 things" vs "3 things"), so the key is
+    /// the shape of the subject, not the sentence.
+    static func key(_ raw: String) -> String {
+        let s = raw.lowercased()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .filter { $0.isLetter || $0 == " " }
+        return String(s.prefix(120))
+    }
+
+    /// How long a subject is left alone after n refusals.
+    static func backoff(_ n: Int) -> TimeInterval {
+        switch n {
+        case 0, 1: return 90 * 60
+        case 2:    return 6 * 3600
+        default:   return 24 * 3600
+        }
+    }
+
+    private static func load() -> [String: Any] {
+        guard let d = FileManager.default.contents(atPath: file),
+              let o = try? JSONSerialization.jsonObject(with: d)
+                as? [String: Any] else { return [:] }
+        return o
+    }
+
+    private static func save(_ o: [String: Any]) {
+        guard let d = try? JSONSerialization.data(withJSONObject: o) else { return }
+        try? d.write(to: URL(fileURLWithPath: file))
+    }
+
+    static func record(_ subject: String, now: Double = Date().timeIntervalSince1970) {
+        var o = load()
+        var items = o["items"] as? [String: [String: Double]] ?? [:]
+        let k = key(subject)
+        let n = (items[k]?["n"] ?? 0) + 1
+        items[k] = ["n": n, "at": now]
+        o["items"] = items
+
+        var recent = (o["recent"] as? [Double] ?? []).filter { now - $0 < 600 }
+        recent.append(now)
+        o["recent"] = recent
+        if recent.count >= 3 { o["hushUntil"] = now + 2 * 3600 }
+        save(o)
+    }
+
+    /// True while he has been asked, in effect, to stop offering anything.
+    static func hushed(now: Double = Date().timeIntervalSince1970) -> Bool {
+        now < (load()["hushUntil"] as? Double ?? 0)
+    }
+
+    static func suppressed(_ subject: String,
+                           now: Double = Date().timeIntervalSince1970) -> Bool {
+        if hushed(now: now) { return true }
+        guard let items = load()["items"] as? [String: [String: Double]],
+              let rec = items[key(subject)] else { return false }
+        return now - (rec["at"] ?? 0) < backoff(Int(rec["n"] ?? 1))
+    }
+
+    /// For the diagnostic modes and the tests.
+    static func describe(_ subject: String) -> String {
+        let items = load()["items"] as? [String: [String: Double]] ?? [:]
+        let n = Int(items[key(subject)]?["n"] ?? 0)
+        return (suppressed(subject) ? "suppressed" : "open")
+            + " n=\(n) hushed=\(hushed() ? "yes" : "no")"
+    }
+}
+
+
 // MARK: - the ghost
 //
 // Everything that moves lives in tick(); draw() only draws. That split is the
@@ -1732,6 +1867,21 @@ final class App: NSObject, NSApplicationDelegate {
         agendaItems = Meditate.agenda()
         let real = agendaItems.filter { !$0.action.isEmpty }
 
+        // Told no about this recently — so don't open with it again.
+        //
+        // greet() used to offer the agenda on EVERY launch regardless, which
+        // is why "not now" never stuck: the answer was forgotten the moment
+        // he restarted, and he restarted a lot. Same shape as quiet mode from
+        // here: the glow still says there is something, he just doesn't ask.
+        if !quiet && !real.isEmpty && Declines.suppressed("agenda") {
+            ghost.glow = 0.6
+            setBubble("\(real.count) thing\(real.count == 1 ? "" : "s") "
+                      + "here when you want \(real.count == 1 ? "it" : "them").")
+            showOffer(false)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 25) { self.check() }
+            return
+        }
+
         // Quiet mode: presence without a sound. The glow and the bubble carry
         // everything; nothing is spoken and nothing is offered.
         if quiet {
@@ -1830,8 +1980,13 @@ final class App: NSObject, NSApplicationDelegate {
                 // about a VOICE conversation, so the ear gets its own veto.
                 if self.armed { return }
                 if self.ear.running && self.ear.quietFor < 4 { return }
+                // alreadyDelivered() is not memory, it is a single line in a
+                // file: anything else he says overwrites it and the same
+                // question returns. Declines is the part that persists.
                 guard hasSomething, b.canInterrupt,
                       !self.alreadyDelivered(b.headline),
+                      !Declines.suppressed(b.action.isEmpty ? b.headline
+                                                            : b.action),
                       !self.mouth.speaking else { return }
                 self.lastSpoken = b.headline
                 self.pendingAction = b.action
@@ -1961,6 +2116,18 @@ final class App: NSObject, NSApplicationDelegate {
     /// One finished utterance. Decide whether it was aimed at him at all.
     func heard(_ raw: String) {
         noticedYou()
+        // He asked a question and this is the answer to it.
+        //
+        // This runs BEFORE the three-word floor and before the name gate,
+        // both of which threw refusals away: "no" is one word, and
+        // addressedQuestion() drops anything under three characters, so out
+        // loud the word did nothing and the offer stayed up to be asked
+        // again. Answering a question you were just asked does not require
+        // saying the asker's name.
+        if !pendingKind.isEmpty, let yes = answerToPendingOffer(raw) {
+            yes ? sayYes() : sayNo()
+            return
+        }
         // One word followed by a pause is not somebody addressing you. The
         // end-of-turn gap is 1.1s, so "Also" counts as a complete utterance
         // unless there is a floor on what a turn even is.
@@ -2609,10 +2776,16 @@ final class App: NSObject, NSApplicationDelegate {
 
     @objc func sayNo() {
         noticedYou()
+        // Write the no down BEFORE clearing what it was about, or there is
+        // nothing left to remember it against.
+        let subject = pendingKind == "agenda" ? "agenda"
+            : (pendingAction.isEmpty ? lastSpoken : pendingAction)
+        Declines.record(subject)
         pendingKind = ""
         pendingAction = ""
         showOffer(false)
-        say("Alright \u{2014} I'll leave it.")
+        say(Declines.hushed() ? "Alright \u{2014} I'll stay out of your way."
+                              : "Alright \u{2014} I'll leave it.")
     }
 
     /// Type a question; Casper reasons over the graded facts and answers.

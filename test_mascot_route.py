@@ -106,6 +106,74 @@ def test_commands_become_offers_not_executions():
     assert "OFFER meditate fix" in out, out
 
 
+def _answer(said: str) -> str:
+    r = subprocess.run([BIN, "--answer", said], capture_output=True, text=True,
+                       timeout=30)
+    return r.stdout.strip()
+
+
+def _declines(*args, store: str) -> str:
+    """Drive the decline store against a THROWAWAY file.
+
+    Never the live one: a suite that writes into the store it is checking is
+    exactly how "he is quiet now" became a false claim in this codebase.
+    """
+    env = dict(os.environ, MEDITATE_DECLINES_FILE=store)
+    r = subprocess.run([BIN] + list(args), capture_output=True, text=True,
+                       timeout=30, env=env)
+    return r.stdout.strip()
+
+
+def test_a_refusal_is_understood_without_his_name():
+    """The falsifier for what the owner actually hit.
+
+    With an offer on screen, "Casper, not now" used to route to .advise, reach
+    the LLM, and come back with a paragraph of work suggestions — the opposite
+    of being left alone. A bare "no" was dropped even earlier by the
+    three-word floor. Measured 2026-08-25, before this existed.
+    """
+    _require_built()
+    for said in ("no", "not now", "Casper, not now", "no thanks", "nope",
+                 "maybe later", "leave it", "no, not right now"):
+        assert _answer(said) == "no", (said, _answer(said))
+    for said in ("yes", "Casper, yes", "yeah", "go ahead", "sure",
+                 "yes, tell me", "do it"):
+        assert _answer(said) == "yes", (said, _answer(said))
+    # Anything that is not an answer must stay not-an-answer, or a real
+    # question gets swallowed as a "no" the moment an offer is up.
+    for said in ("what should I work on next", "fix the retrieval bug",
+                 "how many memories are graded"):
+        assert _answer(said) == "-", (said, _answer(said))
+
+
+def test_being_told_no_is_remembered_and_escalates():
+    """sayNo() used to write nothing down, so the question came back."""
+    _require_built()
+    import tempfile
+    store = os.path.join(tempfile.mkdtemp(prefix="declines-"), "d.json")
+
+    assert _declines("--declined", "meditate go", store=store).startswith("open")
+    out = _declines("--decline", "meditate go", store=store)
+    assert out.startswith("suppressed") and "n=1" in out, out
+    # A different subject is not covered by a no about this one.
+    assert _declines("--declined", "agenda", store=store).startswith("open")
+    # Same subject again means the first answer has not changed.
+    assert "n=2" in _declines("--decline", "meditate go", store=store)
+
+
+def test_three_refusals_in_a_row_stop_everything():
+    """Three noes are one busy person, not three opinions."""
+    _require_built()
+    import tempfile
+    store = os.path.join(tempfile.mkdtemp(prefix="declines-"), "d.json")
+    for subject in ("meditate go", "agenda", "meditate fix"):
+        _declines("--decline", subject, store=store)
+    # A subject never refused at all is now suppressed too — that is the point.
+    out = _declines("--declined", "something else entirely", store=store)
+    assert out.startswith("suppressed"), out
+    assert "hushed=yes" in out, out
+
+
 def test_overheard_talk_stays_silent():
     _require_built()
     out = _hear("so anyway I told her to fix the deploy pipeline")

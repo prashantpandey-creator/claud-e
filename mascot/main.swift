@@ -133,6 +133,28 @@ if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--transcribe" {
     RunLoop.main.run()
 }
 
+// What a bare answer means while an offer is on screen, and what he remembers
+// about being told no. Headless, because the alternative is proving it by
+// talking at a live window, which is the same as not proving it.
+//
+//   casper --answer "not now"        -> no
+//   casper --decline "meditate go"   -> records one refusal
+//   casper --declined "meditate go"  -> suppressed n=1 hushed=no
+if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--answer" {
+    let a = answerToPendingOffer(CommandLine.arguments[2])
+    print(a == nil ? "-" : (a! ? "yes" : "no"))
+    exit(0)
+}
+if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--decline" {
+    Declines.record(CommandLine.arguments[2])
+    print(Declines.describe(CommandLine.arguments[2]))
+    exit(0)
+}
+if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--declined" {
+    print(Declines.describe(CommandLine.arguments[2]))
+    exit(0)
+}
+
 if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--hear" {
     _ = NSApplication.shared
     let said = CommandLine.arguments[2]
