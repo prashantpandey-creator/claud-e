@@ -21,6 +21,13 @@ goes into the log instead.
 
     python3 repair.py                 what it would fix, changing nothing
     python3 repair.py --apply         fix them, and log every edit
+
+This module also holds stale_index_lines() — the guard on MEMORY.md, which is
+the lane that actually carries the weight (~5,000 tokens into EVERY session,
+loaded by Claude Code's own harness, versus 3 graded facts served in 24h
+through the path-matched lane). It reports which index lines point at a
+memory the grader no longer trusts. Like everything else here it reports and
+does not edit, and it stays silent about files the store has never graded.
 """
 from __future__ import annotations
 
