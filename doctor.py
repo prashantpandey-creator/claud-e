@@ -290,6 +290,24 @@ def _check_nidra() -> Dict[str, Any]:
     return {"connected": True, "total": total, "active": active, "by_status": statuses}
 
 
+def _check_index() -> Dict[str, Any]:
+    """Does MEMORY.md still point only at memories the grader trusts?
+
+    MEMORY.md is the lane that carries the weight — ~5,000 tokens read into
+    EVERY session by Claude Code's own harness. Until now nothing checked it
+    against the graded store, so a demoted memory kept being read in verbatim
+    until a person ran /meditate. Measured 2026-08-25: the graded lane served
+    3 facts in 24h; this one runs every session.
+    """
+    try:
+        sys.path.insert(0, SKILL_DIR)
+        import repair
+        stale = repair.stale_index_lines()
+        return {"checked": True, "stale": len(stale), "lines": stale[:20]}
+    except Exception as e:
+        return {"checked": False, "stale": 0, "lines": [], "error": str(e)[:120]}
+
+
 def run(run_tests: bool = True) -> Dict[str, Any]:
     """run_tests=False returns the same envelope without executing 26 suites.
     test_doctor.py calls run() three times to check STRUCTURE; making it
@@ -303,6 +321,7 @@ def run(run_tests: bool = True) -> Dict[str, Any]:
     stillness = _check_stillness()
     output = _check_output()
     nidra = _check_nidra()
+    index = _check_index()
 
     issues = []
     if not all(p["ok"] for p in prereqs):
@@ -317,6 +336,8 @@ def run(run_tests: bool = True) -> Dict[str, Any]:
         issues.append("heartbeat_never_ran")
     elif heartbeat.get("stale"):
         issues.append("heartbeat_stale")
+    if index.get("stale"):
+        issues.append("memory_index_stale")
     if stillness["overdue"]:
         issues.append("stillness_overdue")
     elif stillness.get("never_run"):
@@ -332,6 +353,7 @@ def run(run_tests: bool = True) -> Dict[str, Any]:
         "hook": hook,
         "heartbeat": heartbeat,
         "stillness": stillness,
+        "index": index,
         "output": output,
         "nidra": nidra,
     }

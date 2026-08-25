@@ -310,7 +310,7 @@ if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--say" {
     Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { tm in
         if m.speaking { samples.append(Double(m.drive)) }
         let done = (started && !m.speaking && samples.count > 4)
-        if done || Date().timeIntervalSince(t0) > 12 {
+        if done || Date().timeIntervalSince(t0) > 30 {
             tm.invalidate()
             // longest run of near-silence: the proof that the pauses between
             // sentences actually reached the audio, rather than just the code
@@ -324,6 +324,7 @@ if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--say" {
             let nz = samples.filter { $0 > 0.02 }
             let mx = samples.max() ?? 0
             let mean = samples.isEmpty ? 0 : samples.reduce(0,+) / Double(samples.count)
+            print("lane=" + m.lane)
             print(String(format: "started=%@ samples=%d nonzero=%d peak=%.3f mean=%.3f",
                          started ? "yes" : "no", samples.count, nz.count, mx, mean))
             // a real envelope moves; a fake one is constant

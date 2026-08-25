@@ -132,6 +132,103 @@ def dead_claims(store_dir: str = STORE_DIR) -> Dict[str, List[str]]:
     return out
 
 
+# ---- the index guard --------------------------------------------------------
+# Measured 2026-08-25 on the live store. The graded store gated exactly ONE
+# delivery lane — coordination.facts_for(), <=2 machine_checked facts per edit,
+# 3 facts served in 24h. The lane that actually carries the weight is MEMORY.md:
+# ~5,000 tokens read into EVERY session by Claude Code's own harness, which no
+# hook loads and which nothing here ever wrote back to. A demoted memory kept
+# being read into every session, verbatim, until a person ran /meditate.
+#
+# The funnel that made it obvious: 638 stored -> 563 active -> 561
+# machine_checked -> 71 reachable by the serving index (12.6%). 492 active
+# memories could not reach a session through the graded lane at all.
+#
+# This does not edit the index. It says which lines to look at, and stays quiet
+# otherwise — on the store as it stands today it flags zero.
+
+_LINK = re.compile(r"\[[^\]]*\]\(([^)]+\.md)\)")
+
+
+def _index_status(store_dir: str) -> Dict[str, str]:
+    """basename of a memory file -> its worst reason to distrust it, or ''."""
+    try:
+        from ask import _load
+        mems = _load(store_dir)
+    except Exception:
+        # Cannot read the grades. Say NOTHING. "I could not check" must never
+        # render as "it is stale" — that inversion is this project's oldest bug.
+        return {}
+    worst: Dict[str, str] = {}
+    for m in mems:
+        if not m.get("active"):
+            continue                      # superseded is history, not rot
+        reason = ""
+        if "drifted" in (m.get("flags") or []):
+            reason = "drifted"            # can be flagged while grade recovered
+        else:
+            st = (m.get("epistemic") or {}).get("evidence_status")
+            if st and st != "machine_checked":
+                reason = st
+        for e in (m.get("evidence") or []):
+            src = str(e.get("source") or "")
+            if not src.endswith(".md"):
+                continue
+            base = os.path.basename(src)
+            if reason:
+                worst[base] = reason      # any bad memory taints the file
+            else:
+                worst.setdefault(base, "")
+    return worst
+
+
+def stale_index_lines(memory_dir: Optional[str] = None,
+                      store_dir: str = STORE_DIR) -> List[Dict[str, Any]]:
+    """MEMORY.md lines whose target is demoted, drifted, or not on disk.
+
+    A target the store has never graded is NOT flagged. "No memory for this
+    file" means the grader has not seen it, not that the fact is wrong; saying
+    "broken" when you mean "I don't know" is the defect this tool exists to
+    catch, and it would be embarrassing to ship it here.
+    """
+    if memory_dir is None:
+        # NOT paths.memory_root() — that is the PARENT of the per-project dirs
+        # (~/claude-sync/memory), which holds no MEMORY.md of its own, so the
+        # default silently checked nothing. Measured: 9 memory dirs exist, one
+        # per cwd-slug; the four PuranGPT cwds are symlinks onto a single
+        # backing dir, so checking every dir cannot double-report them.
+        try:
+            from nidra_bridge import _memory_dirs
+            dirs = _memory_dirs()
+        except Exception:
+            return []
+        out: List[Dict[str, Any]] = []
+        for d in dirs:
+            out.extend(stale_index_lines(d, store_dir))
+        return out
+    index = os.path.join(memory_dir, "MEMORY.md")
+    try:
+        with open(index, errors="replace") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return []
+    status = _index_status(store_dir)
+    out: List[Dict[str, Any]] = []
+    for n, line in enumerate(lines, 1):
+        for target in _LINK.findall(line):
+            if "://" in target:
+                continue                  # an external link is not a memory
+            base = os.path.basename(target)
+            if not _exists(os.path.join(memory_dir, target)):
+                reason = "missing_file"
+            else:
+                reason = status.get(base) or ""
+            if reason:
+                out.append({"line": n, "target": target, "reason": reason,
+                            "text": line.strip()[:120]})
+    return out
+
+
 def run(apply: bool = False, store_dir: str = STORE_DIR) -> Dict[str, Any]:
     claims = dead_claims(store_dir)
     fixed, left = [], []

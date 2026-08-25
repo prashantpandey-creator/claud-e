@@ -448,7 +448,15 @@ final class Mouth: NSObject, AVSpeechSynthesizerDelegate {
         DispatchQueue.global().async { [weak self] in
             guard let self = self else { return }
             Mouth.ensureVoiceServer()
-            if let buf = self.kokoroRender(clean) {
+            // One retry. The server is single-threaded, so a second render
+            // arriving mid-first gets refused — and a refusal used to mean a
+            // whole sentence in the wrong voice.
+            var rendered = self.kokoroRender(clean)
+            if rendered == nil {
+                Thread.sleep(forTimeInterval: 0.35)
+                rendered = self.kokoroRender(clean)
+            }
+            if let buf = rendered {
                 DispatchQueue.main.async {
                     // The render takes ~0.9s and CANNOT be interrupted. If you
                     // pressed Mute, Quiet or the X while it ran, shutUp() froze
@@ -697,11 +705,17 @@ final class Mouth: NSObject, AVSpeechSynthesizerDelegate {
 
     /// Calm and measured first, bright and chirpy last. Order is the taste
     /// call; quality tier still outranks all of it.
-    // Male voices first. Quality still outranks the shortlist, so a premium
-    // voice wins over a compact one of the preferred name — a good voice of
-    // the wrong sort beats a robot of the right one.
-    static let shortlist = ["Daniel", "Oliver", "Alex", "Tom", "Fred",
-                            "Rishi", "Aaron", "Arthur", "Serena", "Samantha"]
+    // The two lanes MUST agree about who he is.
+    //
+    // Kokoro speaks as af_heart, female. This shortlist put Daniel — en-GB,
+    // male — first, so every time the Kokoro server was busy or cold the
+    // fallback answered in a different person's voice. That is the "one woman,
+    // and when I talk, a man": not two voices at once, two voices taking
+    // turns, and nothing anywhere said the speaker had changed.
+    //
+    // If the Kokoro voice is ever changed to a male one, change this too.
+    static let shortlist = ["Samantha", "Serena", "Ava", "Zoe", "Karen",
+                            "Moira", "Fiona", "Allison", "Susan", "Victoria"]
 
     static func rank(_ v: AVSpeechSynthesisVoice) -> (Int, Int) {
         let idx = shortlist.firstIndex(where: { v.name.contains($0) }) ?? shortlist.count
