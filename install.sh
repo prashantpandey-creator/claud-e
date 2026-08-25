@@ -206,7 +206,7 @@ fi
 # or before a release exists.
 if [ ! -d "$NIDRA_ROOT/nidra" ] && ! python3 -c "import nidra" >/dev/null 2>&1; then
     echo "  Fetching the grading engine (one-time)..."
-    if python3 -m pip install --quiet --disable-pip-version-check nidra-agent-memory >/dev/null 2>&1; then
+    if python3 -m pip install --quiet --disable-pip-version-check "nidra-agent-memory>=0.1.0,<0.2.0" >/dev/null 2>&1; then
         echo "  [ok]  grading engine installed (nidra-agent-memory)"
     elif git clone --depth 1 https://github.com/prashantpandey-creator/nidra "$NIDRA_ROOT" >/dev/null 2>&1; then
         echo "  [ok]  grading engine installed (source)"
