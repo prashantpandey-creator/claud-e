@@ -78,9 +78,89 @@ def read_memories() -> List[Dict]:
     return rows
 
 
-def compute_metrics() -> Dict[str, Any]:
-    journal = read_journal()
-    memories = read_memories()
+def _within(rows: List[Dict], days_ago_from: float, days_ago_to: float,
+            now: Optional[datetime] = None) -> List[Dict]:
+    """Rows whose ts falls in [now-days_ago_from, now-days_ago_to)."""
+    now = now or datetime.now(timezone.utc)
+    lo = now.timestamp() - days_ago_from * 86400
+    hi = now.timestamp() - days_ago_to * 86400
+    out = []
+    for r in rows:
+        dt = _parse_ts(r.get("ts", ""))
+        if dt and lo <= dt.timestamp() < hi:
+            out.append(r)
+    return out
+
+
+TRACKED_EVENTS = ("sleep.completed", "sleep.demoted", "sleep.regraded",
+                  "sleep.merged", "import.meditate", "import.memory_files")
+
+
+def _trend(journal: List[Dict], now: Optional[datetime] = None,
+           window_days: float = 7.0) -> Dict[str, Any]:
+    """Last window vs the one before it, per event type.
+
+    This is the only part of this module that can go DOWN, which is the only
+    part that can tell you something broke. `delta` is this-window minus
+    last-window; `dead` names events that fired last window and have fired
+    ZERO times in this one — the shape of a silently-broken lane.
+    """
+    cur = _within(journal, window_days, 0, now)
+    prev = _within(journal, window_days * 2, window_days, now)
+
+    def count(rows):
+        out = {e: 0 for e in TRACKED_EVENTS}
+        for r in rows:
+            e = r.get("event")
+            if e in out:
+                out[e] += 1
+        return out
+
+    c, p = count(cur), count(prev)
+
+    # Is there enough history for the comparison to MEAN anything?
+    #
+    # With 4.5 days of journal, the prior 7-day window predates the first
+    # event, so every count in it is 0 and every delta reads as spectacular
+    # growth. That is not a measurement, it is an artefact of the window
+    # hanging off the end of the data — the same "reported a number where
+    # there was no answer" defect this module was just fixed for. Say
+    # "not enough history yet" instead of printing a triumphant +5130.
+    stamps = [_parse_ts(r.get("ts", "")) for r in journal]
+    first = min((s for s in stamps if s), default=None)
+    ref = now or datetime.now(timezone.utc)
+    needed = ref.timestamp() - window_days * 2 * 86400
+    comparable = bool(first) and first.timestamp() <= needed
+
+    return {
+        "window_days": window_days,
+        "current": c,
+        "previous": p,
+        "comparable": comparable,
+        "history_days": round((ref.timestamp() - first.timestamp()) / 86400, 1) if first else 0.0,
+        # None, not a number, when the baseline window predates the data. A
+        # missing value is honest; a fake one gets quoted back at you later.
+        "delta": {e: c[e] - p[e] for e in TRACKED_EVENTS} if comparable else None,
+        # A lane that WAS running and now is not. Nothing else in this file
+        # can surface that: every cumulative counter keeps its old total and
+        # looks healthy forever. Only meaningful once there is a baseline.
+        "dead": sorted(e for e in TRACKED_EVENTS if p[e] > 0 and c[e] == 0) if comparable else [],
+    }
+
+
+def compute_metrics(journal: Optional[List[Dict]] = None,
+                    memories: Optional[List[Dict]] = None,
+                    now: Optional[datetime] = None) -> Dict[str, Any]:
+    """journal/memories are injectable so the NUMBERS can be tested.
+
+    Before this they were read from fixed paths, so every test could do was
+    assert a key existed and that a rate was >= 0 — which 0.00% satisfies
+    forever. The suite would have passed identically if every metric returned
+    zero, and for one metric it did: drift.downgrades read 0 for the tool's
+    whole life while 41 real demotions sat in the same journal.
+    """
+    journal = read_journal() if journal is None else journal
+    memories = read_memories() if memories is None else memories
 
     # --- Memory health snapshot ---
     total = len(memories)
@@ -145,8 +225,22 @@ def compute_metrics() -> Dict[str, Any]:
             merges += 1
 
     # --- Drift metrics ---
+    #
+    # downgrades USED to count only sleep.regraded rows whose detail began
+    # "machine_checked ->". sleep.py emits `regraded` ONLY when "drifted" is
+    # NOT in states — a drift demotion emits `sleep.demoted` instead. So the
+    # counter could never see the one event it exists to count, and reported
+    # drift_rate 0.00% for the tool's entire life while 41 real demotions sat
+    # in the same journal. Proven 2026-08-25 by running a real demotion
+    # through run_sleep: events were [regraded, completed, DEMOTED, completed]
+    # and no regraded row carried "machine_checked ->".
+    #
+    # The correct count is BOTH paths: demotions caused by drift, plus
+    # non-drift regrades that lost machine_checked.
+    demoted = sum(1 for r in journal if r.get("event") == "sleep.demoted")
+    regrade_down = sum(1 for g in grade_changes if "machine_checked ->" in g.get("detail", ""))
     upgrades = sum(1 for g in grade_changes if "-> machine_checked" in g.get("detail", ""))
-    downgrades = sum(1 for g in grade_changes if "machine_checked ->" in g.get("detail", ""))
+    downgrades = demoted + regrade_down
     drift_rate = downgrades / active if active else 0
 
     # --- Consolidation efficiency ---
@@ -204,6 +298,22 @@ def compute_metrics() -> Dict[str, Any]:
             "drift_rate": round(drift_rate, 4),
             "grade_changes_total": len(grade_changes),
         },
+        # WINDOWED, and this is the point of the section.
+        #
+        # Every other number here is a lifetime cumulative total or a
+        # this-instant snapshot. A cumulative counter is monotonic: it cannot
+        # go down, so it CANNOT report a regression. If the grader silently
+        # broke tomorrow, upgrades/sleep_runs/journal_entries would keep
+        # climbing and verified_rate would stay flattering, because nothing
+        # was being checked. That is not a hypothetical — it is precisely how
+        # Tutor recorded "fires every session" through 132 sessions in which
+        # it fired zero times, and how drift_rate read 0.00% through 41 real
+        # demotions.
+        #
+        # A rate over a WINDOW can fall. That is the whole property that makes
+        # a change measurable after the day it shipped: this week vs last
+        # week, not since-the-beginning-of-time.
+        "trend": _trend(journal, now),
         "consolidation": {
             "sleep_runs": sleep_run_count,
             "total_actions": total_sleep_actions,
@@ -268,6 +378,26 @@ def print_human(data: Dict):
     print(f"    downgrades:  {d['downgrades']:>4}  (machine_checked -> unverified)")
     print(f"    drift rate:  {d['drift_rate']*100:.2f}%")
     print(f"    total grade changes: {d['grade_changes_total']}")
+
+    # The only block here that can go DOWN, and therefore the only one that
+    # can tell you something broke. Everything else is a lifetime total or a
+    # snapshot; both look healthy forever after a lane dies.
+    t = data.get("trend") or {}
+    if t:
+        w = t.get("window_days", 7)
+        print(f"\n  Trend (last {w:.0f}d vs prior {w:.0f}d)")
+        if not t.get("comparable"):
+            print(f"    not enough history yet — {t.get('history_days', 0)}d of journal, "
+                  f"need {w*2:.0f}d for a baseline. No delta reported rather than a fake one.")
+        else:
+            for ev, cur in t["current"].items():
+                prev = t["previous"][ev]
+                if not cur and not prev:
+                    continue
+                dl = t["delta"][ev]
+                print(f"    {ev:<22} {prev:>6} -> {cur:<6} {dl:+d}")
+            if t.get("dead"):
+                print(f"    ⚠️  STOPPED (ran last window, zero this one): {', '.join(t['dead'])}")
 
     print(f"\n  Consolidation (sleep pass)")
     print(f"    runs:        {c['sleep_runs']:>4}")

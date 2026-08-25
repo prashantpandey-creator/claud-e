@@ -295,8 +295,24 @@ if CommandLine.arguments.count > 1, CommandLine.arguments[1] == "--saytwice" {
     let m = Mouth()
     var starts = 0
     var finishes = 0
-    m.onStart = { starts += 1 }
-    m.onFinish = { finishes += 1 }
+    // The DEAD AIR between the two lines, which is the whole cost of a queued
+    // sentence: the second one was not rendered until the first had finished
+    // playing, so every multi-part answer had a Kokoro render (0.4-0.7s) of
+    // silence sitting in the middle of it.
+    // Print the raw timeline rather than inferring a gap. finished() runs
+    // BEFORE onFinish?(), so once the queued line is pre-rendered its start
+    // is reported before the previous line's finish — a subtraction reads
+    // that as negative and tells you nothing. The sequence tells you
+    // everything: what matters is how long after say() the second line
+    // begins, and whether anything silent sits in between.
+    let twoT0 = Date()
+    var timeline: [String] = []
+    func stamp(_ what: String) {
+        timeline.append(String(format: "%@@%.2fs", what,
+                               Date().timeIntervalSince(twoT0)))
+    }
+    m.onStart = { starts += 1; stamp("start\(starts)") }
+    m.onFinish = { finishes += 1; stamp("finish\(finishes)") }
     m.say("First line, the one you should hear.")
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
         m.say("Second line, which must wait its turn.")
@@ -307,6 +323,7 @@ if CommandLine.arguments.count > 1, CommandLine.arguments[1] == "--saytwice" {
         if finishes >= 2 || Date().timeIntervalSince(t0) > 30 {
             tm.invalidate()
             print("starts=\(starts) finishes=\(finishes)")
+            print("timeline: " + timeline.joined(separator: "  "))
             print(starts == finishes
                   ? "SERIALISED — never two at once"
                   : "OVERLAP — \(starts - finishes) started before the last finished")
