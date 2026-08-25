@@ -219,15 +219,26 @@ AUTO_AWAY_AFTER_S = 20 * 60
 AUTO_MAX_AGENTS = 3          # ~35k boot tokens each before any work happens
 
 
-def auto_should_run(idle_s: Optional[float] = None) -> Dict[str, Any]:
+_READ_IT = object()      # "I brought no reading — go take one"
+
+
+def auto_should_run(idle_s: Any = _READ_IT) -> Dict[str, Any]:
     """Should the heartbeat dispatch right now, and how many agents may it use?
 
     Deterministic and side-effect free so it can be tested without a Mac, a
     fleet, or a night. Fails CLOSED: if idle time cannot be read we assume the
     owner is present. Unknown is not away — the same three-valued rule the
     grader had to learn, applied to a person.
+
+    Three-valued in the SIGNATURE too, and that is the whole repair. `None`
+    used to mean both "unknown" and "no reading supplied", so the one call that
+    meant unknown — auto_should_run(idle_s=None) — quietly took a live reading
+    instead, and on an away machine that reading answered RUN. The unknown
+    branch below was correct and unreachable from the outside; its own test
+    passed only while the owner happened to be at the keyboard. A float is a
+    reading, None is UNKNOWN and holds, and only the sentinel goes to ioreg.
     """
-    if idle_s is None:
+    if idle_s is _READ_IT:
         try:
             import attention
             idle_s = attention.signals().get("idle_s")

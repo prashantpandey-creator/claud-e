@@ -423,6 +423,45 @@ def test_auto_reports_when_it_holds():
     assert d["why"] and "here" in d["why"].lower(), d
 
 
+def _with_idle(value):
+    """Run the gate's own live read against a chosen HIDIdleTime answer."""
+    import attention
+    real = attention.signals
+    attention.signals = lambda: {"idle_s": value}
+    try:
+        return go.auto_should_run()
+    finally:
+        attention.signals = real
+
+
+def test_auto_still_dispatches_when_the_owner_is_measurably_away():
+    """The falsifier for the hold. 'Hold on unknown' is only a gate if it
+    still OPENS on a real reading — otherwise it is 'never run' wearing a
+    gate's clothes, and the heartbeat is dead rather than careful.
+
+    Both doors, because they are separate code paths: a reading handed in, and
+    a reading the gate takes itself."""
+    handed = go.auto_should_run(idle_s=3600.0)
+    assert handed["run"] is True and handed["budget"] > 0, handed
+    taken = _with_idle(3600.0)
+    assert taken["run"] is True and taken["budget"] > 0, taken
+
+
+def test_auto_holds_on_unknown_even_when_the_machine_is_away():
+    """The regression, pinned so it cannot pass by luck.
+
+    idle_s=None means UNKNOWN — it must not be re-read as 'go ask ioreg'. It
+    was: None doubled as 'no reading supplied', so the unknown case took a
+    live reading instead, and while the owner was away that reading said RUN.
+    The old test only passed because the suite was run at the keyboard.
+
+    So: say unknown while the machine reports an hour away, and still hold."""
+    assert _with_idle(3600.0)["run"] is True, "arrange failed — not an away machine"
+    d = go.auto_should_run(idle_s=None)
+    assert d["run"] is False and d["budget"] == 0, "unknown treated as away: %s" % d
+    assert _with_idle(None)["run"] is False, "unreadable ioreg dispatched"
+
+
 def test_dispatch_falls_back_to_HEADLESS_when_the_window_fails():
     """Measured live: the automation fired, the gate opened correctly (away
     115 min), it selected the right work — and dispatched ZERO.
