@@ -29,7 +29,6 @@ sys.path.insert(0, SKILL_DIR)
 import paths
 from coordination import last_file as _last_file
 from projects import rollup as _pj_rollup
-from casper_page import CASPER_PAGE          # the mascot's face
 
 DEFAULT_PORT = 7711
 
@@ -988,9 +987,6 @@ class _Handler(BaseHTTPRequestHandler):
                     d = {"error": "no such goal: %s" % name}
                 body = json.dumps(d).encode()
                 ctype = "application/json"
-            elif self.path == "/casper":
-                body = CASPER_PAGE.encode()
-                ctype = "text/html; charset=utf-8"
             elif self.path == "/":
                 body = PAGE.encode()
                 ctype = "text/html; charset=utf-8"
@@ -1092,13 +1088,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(prog="meditate pulse", description="Live brain server (localhost only)")
     ap.add_argument("--port", type=int, default=DEFAULT_PORT)
     ap.add_argument("--no-open", action="store_true")
-    ap.add_argument("--casper", action="store_true",
-                    help="open the mascot instead of the dashboard")
     args = ap.parse_args(argv)
     try:
         srv = make_server(args.port)
     except OSError:
-        url = "http://127.0.0.1:%d%s" % (args.port, "/casper" if args.casper else "")
+        url = "http://127.0.0.1:%d" % args.port
         print("already running at %s — opening it" % url)
         if not args.no_open:
             os.system("open '%s' 2>/dev/null" % url)

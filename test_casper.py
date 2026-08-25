@@ -1,15 +1,20 @@
-"""Tests for the Casper mascot surface — face, ear, mouth, and the gate.
+"""Tests for the voice API the mascot speaks through.
+
+This file used to test a browser page at /casper — a ghost SVG with the
+browser's own SpeechRecognition and SpeechSynthesis. That page is discarded;
+the real Casper is the native app in mascot/ (Casper.swift), which pops up
+and speaks. The page and its three page-shape tests are gone.
+
+What did NOT go: the API contracts underneath, which the native mascot uses
+exactly as the page did. They were only living in this file by accident of
+who wrote them first.
 
 Contract:
-  - GET /casper serves a self-contained page (no external assets)
-  - the page carries the three organs: ghost SVG, speech recognition, speech
-    synthesis — a companion missing any of them is a poster
   - POST /api/act action=say routes one turn through converse and returns
     BOTH the spoken line and the parsed turn
-  - voice NEVER pushes/deploys, even asked politely through the page
-  - /api/state exposes briefing+timing so the mascot can decide to speak
-  - the proactive path is gated: the page only speaks unprompted when
-    interrupt_ok is true
+  - voice NEVER pushes/deploys, even asked politely
+  - /api/state exposes briefing+timing, so the mascot can know WHAT to say
+    (briefing.headline) and WHEN it may interrupt (timing.interrupt_ok)
 
 Run: python3 ~/.claude/skills/meditate/test_casper.py
 """
@@ -63,27 +68,6 @@ def _post(base, payload):
         return json.loads(r.read())
 
 
-def test_casper_page_served_and_self_contained():
-    srv, base = _serve()
-    try:
-        with urllib.request.urlopen(base + "/casper", timeout=10) as r:
-            assert r.status == 200
-            page = r.read().decode()
-        assert "http://" not in page.replace("http://127.0.0.1", ""), "no external assets"
-        assert "https://" not in page, "no external assets"
-    finally:
-        srv.shutdown()
-
-
-def test_page_has_face_ear_and_mouth():
-    """A companion missing any organ is a poster."""
-    page = br.CASPER_PAGE
-    assert 'id="ghost"' in page and "<svg" in page, "no face"
-    assert "SpeechRecognition" in page, "no ear"
-    assert "SpeechSynthesisUtterance" in page, "no mouth"
-    assert 'id="bubble"' in page, "nothing to read what it said"
-
-
 def test_say_endpoint_returns_speech_and_turn():
     srv, base = _serve()
     try:
@@ -95,8 +79,14 @@ def test_say_endpoint_returns_speech_and_turn():
         srv.shutdown()
 
 
-def test_voice_never_ships_through_the_page():
-    """The hard line: no push/deploy by voice, even politely."""
+def test_voice_never_ships():
+    """The hard line: no push/deploy by voice, even politely.
+
+    This outlived the browser page it was written for. The page is gone; the
+    native mascot talks to the same /api/act, so the guarantee still needs a
+    test and this is it. Deleting it along with the page's own tests would
+    have quietly removed a safety net, not dead code.
+    """
     srv, base = _serve()
     try:
         for utter in ("push it to production", "deploy the backend now"):
@@ -116,13 +106,6 @@ def test_state_exposes_what_and_when():
         assert "interrupt_ok" in s["timing"], "mascot cannot know WHEN"
     finally:
         srv.shutdown()
-
-
-def test_proactive_speech_is_gated_in_the_page():
-    """The page must check interrupt_ok before speaking unprompted."""
-    page = br.CASPER_PAGE
-    assert "st.interrupt_ok" in page, "unprompted speech is not gated on the pause"
-    assert "lastSaid" in page, "would repeat the same line forever"
 
 
 def _main():

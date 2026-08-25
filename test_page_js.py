@@ -64,23 +64,16 @@ def test_pulse_page_javascript_parses():
         _check(s, "PAGE script %d" % i)
 
 
-def test_casper_page_javascript_parses():
-    js = _scripts(br.CASPER_PAGE)
-    assert js, "the mascot page has no script at all"
-    for i, s in enumerate(js):
-        _check(s, "CASPER_PAGE script %d" % i)
-
-
 def test_no_stray_triple_quote_in_any_emitted_script():
     """The exact shape of the bug, in case node is ever unavailable."""
-    for name, html in (("PAGE", br.PAGE), ("CASPER_PAGE", br.CASPER_PAGE)):
+    for name, html in (("PAGE", br.PAGE),):
         for s in _scripts(html):
             assert '"""' not in s, f"{name} emits a stray triple quote"
 
 
 def test_every_element_the_script_fills_exists_in_the_page():
     """A render target that isn't in the DOM is a section that stays blank."""
-    for name, html in (("PAGE", br.PAGE), ("CASPER_PAGE", br.CASPER_PAGE)):
+    for name, html in (("PAGE", br.PAGE),):
         ids = set(re.findall(r'id="([A-Za-z0-9_-]+)"', html))
         wanted = set(re.findall(r'getElementById\(["\']([A-Za-z0-9_-]+)["\']', html))
         missing = wanted - ids
