@@ -34,7 +34,7 @@ import shutil
 import subprocess
 import sys
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 # Env overrides exist so tests (and the hook's own test suite) can isolate —
 # the live presence dir and graded store are shared state, never a scratchpad.
@@ -179,18 +179,110 @@ def _load_index(store_dir: str) -> Dict[str, List[Dict[str, str]]]:
         return {}
 
 
-def facts_for(path: str, served: List[str], store_dir: str = STORE_DIR) -> List[str]:
-    """Machine-checked statements about this exact path, minus already-served."""
+def _load_memories(store_dir: str) -> List[Dict[str, Any]]:
+    """Active memories, for the one-hop expansion. 7ms on a 653-memory store —
+    which is why the caller only pays it when a hop can actually help."""
+    out = []
+    try:
+        with open(os.path.join(store_dir, "memories.jsonl"), errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    m = json.loads(line)
+                except ValueError:
+                    continue
+                if m.get("active"):
+                    out.append(m)
+    except OSError:
+        pass
+    return out
+
+
+def _one_hop(seed_ids: List[str], store_dir: str) -> List[Dict[str, Any]]:
+    """Machine-checked memories one wikilink away from the seeds.
+
+    The same motion projects.attribute_all() already performs for project
+    attribution — where it places 63 facts nothing else can place. This is
+    that hop, reused in the one place that never adopted it.
+
+    GRAPH SURFACES, EVIDENCE GROUNDS. The link decides where to LOOK; it never
+    decides what is true. Every memory returned is independently
+    machine_checked, exactly as a direct hit must be. Treating a wikilink as
+    evidence is what once reported 56% of the store as world-decidable when
+    the honest number was 13% — that error is routed around, not repeated.
+
+    One hop, not two: measured on the live store, hop one reaches 192 more
+    memories (12% -> 46% serveable) and hop two adds 24 before dying.
+    """
+    mems = _load_memories(store_dir)
+    if not mems:
+        return []
+    by_id = {m.get("id"): m for m in mems}
+    owner: Dict[str, List[Dict[str, Any]]] = {}
+    for m in mems:
+        for e in (m.get("evidence") or []):
+            src = str(e.get("source") or "")
+            if src.endswith(".md"):
+                owner.setdefault(os.path.basename(src)[:-3], []).append(m)
+    seen, hits = set(seed_ids), []
+    for sid in seed_ids:
+        for e in ((by_id.get(sid) or {}).get("evidence") or []):
+            loc = str(e.get("locator") or "")
+            if not loc.startswith("wikilink:"):
+                continue
+            target = os.path.basename(loc[9:].strip().strip("[]"))
+            if target.endswith(".md"):
+                target = target[:-3]
+            for n in owner.get(target, ()):
+                nid = n.get("id")
+                if nid in seen:
+                    continue
+                seen.add(nid)
+                if n.get("epistemic", {}).get("evidence_status") == "machine_checked":
+                    hits.append(n)
+    return hits
+
+
+def facts_for(path: str, served: List[str],
+              store_dir: str = STORE_DIR) -> List[Tuple[str, str, str, bool]]:
+    """Machine-checked statements about this path, then one wikilink hop out.
+
+    Returns (key, statement, memory_id, is_direct). is_direct=False marks a
+    one-hop result, so the caller can label its provenance honestly instead of
+    calling it a fact "about this file".
+
+    Exact-path hits are served FIRST and are never displaced — the hop only
+    fills slots the direct lane left empty. Serving was exact-match only, so
+    just 71 of 576 active memories (12%) could ever reach a session; one hop
+    reaches 192 more (46%).
+    """
     idx = _load_index(store_dir)
     entries = idx.get(path) or idx.get(os.path.expanduser(path)) or []
-    out = []
+    out, seeds = [], []
     for e in entries:
         if e.get("status") != "machine_checked":
             continue
+        seeds.append(e.get("id"))
         key = path + "|" + e.get("statement", "")[:60]
         if key in served:
             continue
-        out.append((key, e.get("statement", "").strip(), e.get("id", "")))
+        out.append((key, e.get("statement", "").strip(), e.get("id", ""), True))
+        if len(out) >= FACT_CAP:
+            break
+
+    # Only now, and only if a hop can help: no seed means nothing to hop from,
+    # a full cap means nowhere to put the result. An edit to an unindexed path
+    # — the common case, fired on EVERY write — never loads the store at all.
+    if not seeds or len(out) >= FACT_CAP:
+        return out
+    for n in _one_hop(seeds, store_dir):
+        stmt = (n.get("statement") or "").strip()
+        key = path + "|" + stmt[:60]
+        if key in served or any(k == key for k, _, _, _ in out):
+            continue
+        out.append((key, stmt, n.get("id", ""), False))
         if len(out) >= FACT_CAP:
             break
     return out
@@ -645,8 +737,20 @@ def _hook_edit_locked(payload: Dict[str, Any], ti: Dict[str, Any], path: str,
     # 2. graded facts about this file, once per session per file.
     # The memory id rides in the event log — reinforcement (which knowledge
     # actually gets USED) is computable only if serves are attributable.
-    for key, stmt, mem_id in facts_for(path, me["served"], store_dir):
-        lines.append("GRADED FACT (machine-checked) about this file: %s" % stmt)
+    # Direct hits and one-hop hits are LABELLED DIFFERENTLY on purpose. A
+    # hopped fact is machine-checked and true, but it is not "about this
+    # file" — it is one wikilink away, and saying otherwise overclaims.
+    #
+    # No relevance threshold gates the hop, and that is deliberate: lexical
+    # overlap was measured as a candidate gate and FAILED. Median jaccard
+    # between a hopped statement and its seed is 0.019, yet hand-checking
+    # called 3 of 4 of those genuinely relevant (android-signing -> android
+    # monetization scores near zero and is exactly the right fact). A gate
+    # calibrated on a proxy that disagrees with judgement would suppress the
+    # good hops. Honest provenance beats a fake filter.
+    for key, stmt, mem_id, direct in facts_for(path, me["served"], store_dir):
+        lines.append(("GRADED FACT (machine-checked) about this file: %s" if direct
+                      else "RELATED FACT (machine-checked, one link away): %s") % stmt)
         me["served"].append(key)
         _log_event(coord_dir, "fact_served", sid, path, mem_id=mem_id)
 
