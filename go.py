@@ -272,6 +272,7 @@ def autosplit(projects_root: Optional[str] = None,
               floor: int = SPLIT_FLOOR,
               live_s: float = SPLIT_LIVE_S,
               max_splits: int = SPLIT_MAX,
+              dispatch: bool = False,
               runner: Optional[Callable[..., int]] = None) -> Dict[str, Any]:
     """Split a session that is nearing the context ceiling, without being asked.
 
@@ -302,9 +303,20 @@ def autosplit(projects_root: Optional[str] = None,
     out: Dict[str, Any] = {"split": [], "scanned": 0, "over": []}
     # A suite must never dispatch a real agent. Four side effects have leaked
     # into the owner's live state this way already.
-    if runner is None and os.environ.get("MEDITATE_TESTING"):
+    # DISPATCH IS OPT-IN. The first cut of this defaulted to ON and was wired
+    # into the hourly heartbeat, which meant an unattended `claude -p
+    # --dangerously-skip-permissions` firing on a timer — on a code path
+    # (_headless) with ZERO successful executions in its life:
+    # ~/.claude/meditation/agents/ was empty, and all 13 tests used an
+    # injected fake runner, so nothing had ever exercised the real thing.
+    # Automating a path that has never once run is not automation, it is a
+    # loaded gun on a timer. Detection is measured and correct and stays on;
+    # dispatch needs an explicit ask until _headless is proven live.
+    if not dispatch:
+        runner = None
+    elif runner is None and os.environ.get("MEDITATE_TESTING"):
         return out
-    if runner is None:
+    elif runner is None:
         runner = lambda cwd, prompt, name, **kw: (          # noqa: E731
             0 if _headless(cwd, prompt, name) else 1)
 
@@ -345,6 +357,8 @@ def autosplit(projects_root: Optional[str] = None,
             out["over"].append(sid[:8])
             if sid in already:
                 continue                       # split once, not once per scan
+            if runner is None:
+                continue                       # report-only: detected, not run
             name = "autosplit-%s" % sid[:8]
             cwd = os.path.dirname(d)
             prompt = (
@@ -700,12 +714,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         # whether he is at the keyboard or not — and holding it until he
         # leaves is holding it until after the compaction it exists to beat.
         try:
-            sp = autosplit()
-            for row in sp.get("split", []):
-                print("split %s @ %dk (exit %d)"
-                      % (row["session"], row["context"] // 1000, row["exit"]))
+            sp = autosplit(dispatch=False)
+            for sid in sp.get("over", []):
+                print("near ceiling: %s — run `meditate split %s`" % (sid, sid))
         except Exception as e:
-            print("autosplit skipped: %s" % str(e)[:100])
+            print("ceiling scan skipped: %s" % str(e)[:100])
 
         gate = auto_should_run()
         if not gate["run"]:

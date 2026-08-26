@@ -60,7 +60,7 @@ def test_a_session_under_the_band_is_left_alone():
     with tempfile.TemporaryDirectory() as tmp:
         _transcript(tmp, 120_000)
         led = _ledger(tmp)
-        r = go.autosplit(projects_root=os.path.join(tmp, "projects"),
+        r = go.autosplit(projects_root=os.path.join(tmp, "projects"), dispatch=True,
                          ledger_path=led, runner=lambda *a, **k: 0)
         assert r["split"] == [], r
         assert _rows(led) == [], "a dispatch was recorded for a session under the band"
@@ -71,7 +71,7 @@ def test_a_session_OVER_the_band_is_split():
         _transcript(tmp, 700_000)
         led = _ledger(tmp)
         calls = []
-        r = go.autosplit(projects_root=os.path.join(tmp, "projects"),
+        r = go.autosplit(projects_root=os.path.join(tmp, "projects"), dispatch=True,
                          ledger_path=led,
                          runner=lambda cwd, prompt, name, **k: calls.append(name) or 0)
         assert len(r["split"]) == 1, r
@@ -82,7 +82,7 @@ def test_the_prompt_names_the_session_to_split():
     with tempfile.TemporaryDirectory() as tmp:
         _transcript(tmp, 700_000)
         seen = {}
-        go.autosplit(projects_root=os.path.join(tmp, "projects"),
+        go.autosplit(projects_root=os.path.join(tmp, "projects"), dispatch=True,
                      ledger_path=_ledger(tmp),
                      runner=lambda cwd, prompt, name, **k: seen.update(
                          prompt=prompt, cwd=cwd) or 0)
@@ -96,7 +96,7 @@ def test_the_same_session_is_never_split_TWICE():
     with tempfile.TemporaryDirectory() as tmp:
         _transcript(tmp, 700_000)
         led, calls = _ledger(tmp), []
-        kw = dict(projects_root=os.path.join(tmp, "projects"), ledger_path=led,
+        kw = dict(projects_root=os.path.join(tmp, "projects"), ledger_path=led, dispatch=True,
                   runner=lambda *a, **k: calls.append(1) or 0)
         go.autosplit(**kw)
         go.autosplit(**kw)
@@ -109,7 +109,7 @@ def test_the_OUTCOME_is_recorded_not_just_the_launch():
     with tempfile.TemporaryDirectory() as tmp:
         _transcript(tmp, 700_000)
         led = _ledger(tmp)
-        go.autosplit(projects_root=os.path.join(tmp, "projects"),
+        go.autosplit(projects_root=os.path.join(tmp, "projects"), dispatch=True,
                      ledger_path=led, runner=lambda *a, **k: 0)
         rows = _rows(led)
         assert len(rows) == 2, rows
@@ -122,7 +122,7 @@ def test_a_FAILED_split_records_a_nonzero_exit():
     with tempfile.TemporaryDirectory() as tmp:
         _transcript(tmp, 700_000)
         led = _ledger(tmp)
-        go.autosplit(projects_root=os.path.join(tmp, "projects"),
+        go.autosplit(projects_root=os.path.join(tmp, "projects"), dispatch=True,
                      ledger_path=led, runner=lambda *a, **k: 3)
         fin = [r for r in _rows(led) if r.get("event") == "finished"]
         assert fin and fin[0]["exit"] == 3, _rows(led)
@@ -135,7 +135,7 @@ def test_a_CRASHING_runner_still_records_an_outcome():
         led = _ledger(tmp)
         def boom(*a, **k):
             raise RuntimeError("launcher died")
-        go.autosplit(projects_root=os.path.join(tmp, "projects"),
+        go.autosplit(projects_root=os.path.join(tmp, "projects"), dispatch=True,
                      ledger_path=led, runner=boom)
         fin = [r for r in _rows(led) if r.get("event") == "finished"]
         assert fin and fin[0]["exit"] != 0, _rows(led)
@@ -147,7 +147,7 @@ def test_metrics_can_read_what_autosplit_wrote():
     with tempfile.TemporaryDirectory() as tmp:
         _transcript(tmp, 700_000)
         led = _ledger(tmp)
-        go.autosplit(projects_root=os.path.join(tmp, "projects"),
+        go.autosplit(projects_root=os.path.join(tmp, "projects"), dispatch=True,
                      ledger_path=led, runner=lambda *a, **k: 0)
         a = metrics.agent_stats(led)
         assert a["dispatched"] == 1 and a["with_outcome"] == 1, a
@@ -160,7 +160,7 @@ def test_an_unreadable_transcript_is_silent_not_split():
     with tempfile.TemporaryDirectory() as tmp:
         d = os.path.join(tmp, "projects", "-tmp-proj"); os.makedirs(d)
         open(os.path.join(d, "sid-no-usage.jsonl"), "w").write("{}\n")
-        r = go.autosplit(projects_root=os.path.join(tmp, "projects"),
+        r = go.autosplit(projects_root=os.path.join(tmp, "projects"), dispatch=True,
                          ledger_path=_ledger(tmp), runner=lambda *a, **k: 0)
         assert r["split"] == [], r
 
@@ -175,7 +175,7 @@ def test_a_DEAD_session_is_not_split():
         p = _transcript(tmp, 700_000)
         old = _t.time() - 48 * 3600
         os.utime(p, (old, old))
-        r = go.autosplit(projects_root=os.path.join(tmp, "projects"),
+        r = go.autosplit(projects_root=os.path.join(tmp, "projects"), dispatch=True,
                          ledger_path=_ledger(tmp), runner=lambda *a, **k: 0)
         assert r["split"] == [], "a 48h-dead session was split"
 
@@ -187,14 +187,14 @@ def test_the_per_run_cap_stops_a_stampede():
         for i in range(5):
             _transcript(tmp, 700_000, sid="sid-%d-aaaa-bbbb-cccc-dddddddddddd" % i)
         calls = []
-        go.autosplit(projects_root=os.path.join(tmp, "projects"),
+        go.autosplit(projects_root=os.path.join(tmp, "projects"), dispatch=True,
                      ledger_path=_ledger(tmp), max_splits=2,
                      runner=lambda *a, **k: calls.append(1) or 0)
         assert len(calls) == 2, "the cap did not hold: %d agents" % len(calls)
 
 
 def test_a_missing_projects_root_is_empty_not_an_error():
-    r = go.autosplit(projects_root="/nonexistent/xyz",
+    r = go.autosplit(projects_root="/nonexistent/xyz", dispatch=True,
                      ledger_path="/nonexistent/l.jsonl", runner=lambda *a, **k: 0)
     assert r["split"] == []
 
@@ -208,10 +208,50 @@ def test_it_never_runs_during_tests_without_an_injected_runner():
         os.environ["MEDITATE_TESTING"] = "1"
         try:
             r = go.autosplit(projects_root=os.path.join(tmp, "projects"),
-                             ledger_path=_ledger(tmp))
+                             dispatch=True, ledger_path=_ledger(tmp))
             assert r["split"] == [], "a live agent would have been dispatched from a test"
         finally:
             os.environ.pop("MEDITATE_TESTING", None)
+
+
+def test_passing_a_runner_does_NOT_imply_dispatch():
+    """One switch, not two. `dispatch=True` is the only thing that arms it —
+    inferring intent from the presence of a runner is how a default flips back
+    on by accident."""
+    with tempfile.TemporaryDirectory() as tmp:
+        _transcript(tmp, 700_000)
+        calls = []
+        go.autosplit(projects_root=os.path.join(tmp, "projects"),
+                     ledger_path=_ledger(tmp),
+                     runner=lambda *a, **k: calls.append(1) or 0)
+        assert calls == [], "a runner alone armed the dispatch"
+
+
+def test_DISPATCH_IS_OFF_BY_DEFAULT():
+    """The defect I shipped and had to strip an hour later.
+
+    The first cut defaulted dispatch ON and wired it into the hourly
+    heartbeat — an unattended `claude -p --dangerously-skip-permissions`
+    firing on a timer, on a code path with ZERO successful executions in its
+    life (~/.claude/meditation/agents/ was empty) and ZERO tests touching it
+    (all 13 used an injected fake). Automating a path that has never once run
+    is a loaded gun on a timer, not automation.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        led = _ledger(tmp)
+        _transcript(tmp, 700_000)
+        r = go.autosplit(projects_root=os.path.join(tmp, "projects"), ledger_path=led)
+        assert r["over"] == ["abcd1234"], r          # detection still works
+        assert r["split"] == [], "dispatch fired without being asked"
+        assert _rows(led) == [], "a default call wrote to the ledger"
+
+
+def test_the_heartbeat_path_never_dispatches():
+    """Whatever else changes, the hourly timer must not spawn agents."""
+    import inspect
+    src = inspect.getsource(go.main)
+    assert "autosplit(dispatch=False)" in src, \
+        "the heartbeat calls autosplit without dispatch=False"
 
 
 def _main():
