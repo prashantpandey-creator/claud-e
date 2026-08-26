@@ -222,6 +222,163 @@ AUTO_MAX_AGENTS = 3          # ~35k boot tokens each before any work happens
 _READ_IT = object()      # "I brought no reading — go take one"
 
 
+SPLIT_LEDGER = os.path.join(MEDITATION_DIR, "dispatch.jsonl")
+SPLIT_FLOOR = 600_000          # the top CEILING_BAND floor in coordination.py
+
+
+def _ledger_write(path: str, row: Dict[str, Any]) -> None:
+    try:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        with open(path, "a") as f:
+            f.write(json.dumps(row) + "\n")
+    except OSError:
+        pass                                   # a ledger must never break a run
+
+
+def _context_of(transcript: str) -> int:
+    """Live context from a transcript's LAST usage row, or 0 for unreadable.
+
+    0 means UNMEASURABLE, not small. Splitting on a number you could not read
+    is the same can't-say-I-don't-know defect this project keeps finding.
+    """
+    try:
+        size = os.path.getsize(transcript)
+        with open(transcript, "rb") as fh:
+            if size > 400_000:
+                fh.seek(-400_000, 2)
+            chunk = fh.read().decode("utf-8", "replace")
+    except OSError:
+        return 0
+    for line in reversed(chunk.splitlines()):
+        if '"usage"' not in line:
+            continue
+        try:
+            u = (json.loads(line).get("message") or {}).get("usage") or {}
+        except Exception:
+            continue
+        c = (u.get("input_tokens", 0) + u.get("cache_read_input_tokens", 0)
+             + u.get("cache_creation_input_tokens", 0))
+        if c:
+            return c
+    return 0
+
+
+SPLIT_LIVE_S = 2 * 3600        # a transcript touched this recently is IN USE
+SPLIT_MAX = 2                  # per run; the heartbeat is hourly
+
+
+def autosplit(projects_root: Optional[str] = None,
+              ledger_path: str = SPLIT_LEDGER,
+              floor: int = SPLIT_FLOOR,
+              live_s: float = SPLIT_LIVE_S,
+              max_splits: int = SPLIT_MAX,
+              runner: Optional[Callable[..., int]] = None) -> Dict[str, Any]:
+    """Split a session that is nearing the context ceiling, without being asked.
+
+    coordination.ceiling_check() has been MEASURING this all along and then
+    telling the human to go run `/meditate <sid>` themselves. A nudge is not a
+    mechanism: it fired repeatedly through a 672k-token session and the split
+    happened only because someone read the line and typed the command.
+
+    Safe to automate because it does not touch the live session — it reads the
+    transcript, groups the threads, and writes continuation .md files beside
+    it. Nothing is modified or deleted. If it never runs, the cost is exactly
+    what already happens: a compaction summary flattening the threads.
+
+    TWO GUARDS, both from the dry run rather than imagined. Unguarded, the
+    first pass found 21 transcripts over the floor and would have spawned 21
+    headless agents at once. Of those 21 only 2 had been touched in the last
+    two hours; 16 were over 24h old. Splitting a session that ended last week
+    costs an agent and delivers nothing — the whole value is splitting a LIVE
+    one before it compacts. So: a liveness window, and a hard per-run cap.
+
+    AND IT RECORDS THE OUTCOME. Measured 2026-08-26: 28 dispatches, ZERO
+    outcome rows, 22 with no trace at all. Adding a 29th blind dispatch would
+    be building the defect this repo had just finished measuring, so every
+    split writes a `finished` row with an exit code that metrics.agent_stats
+    reads back.
+    """
+    root = projects_root or os.path.expanduser("~/.claude/projects")
+    out: Dict[str, Any] = {"split": [], "scanned": 0, "over": []}
+    # A suite must never dispatch a real agent. Four side effects have leaked
+    # into the owner's live state this way already.
+    if runner is None and os.environ.get("MEDITATE_TESTING"):
+        return out
+    if runner is None:
+        runner = lambda cwd, prompt, name, **kw: (          # noqa: E731
+            0 if _headless(cwd, prompt, name) else 1)
+
+    already = set()
+    try:
+        with open(ledger_path, errors="replace") as f:
+            for line in f:
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    continue
+                if str(r.get("kind")) == "autosplit" and r.get("session"):
+                    already.add(r["session"])
+    except OSError:
+        pass
+
+    try:
+        dirs = [os.path.join(root, d) for d in os.listdir(root)]
+    except OSError:
+        return out
+    for d in dirs:
+        if not os.path.isdir(d):
+            continue
+        for fn in os.listdir(d):
+            if not fn.endswith(".jsonl"):
+                continue
+            tp = os.path.join(d, fn)
+            out["scanned"] += 1
+            try:
+                if (time.time() - os.path.getmtime(tp)) > live_s:
+                    continue                   # ended already; nothing to save
+            except OSError:
+                continue
+            ctx = _context_of(tp)
+            if ctx < floor:
+                continue
+            sid = fn[:-6]
+            out["over"].append(sid[:8])
+            if sid in already:
+                continue                       # split once, not once per scan
+            name = "autosplit-%s" % sid[:8]
+            cwd = os.path.dirname(d)
+            prompt = (
+                "Run the meditate split for session %s. Read it with "
+                "`python3 ~/.claude/skills/meditate/sessions.py --session %s --json` "
+                "(never read the raw transcript — they reach 37 MB), find the "
+                "distinct threads inside it, and write one continuation chat per "
+                "LIVE thread under ~/.claude/meditation/sessions/, plus an "
+                "INDEX.md. This session crossed %dk tokens; a compaction summary "
+                "loses thread fidelity and a split does not. Write files only — "
+                "change nothing else." % (sid, sid, ctx // 1000))
+            _ledger_write(ledger_path, {
+                "kind": "autosplit", "session": sid, "name": name,
+                "context_tokens": ctx, "ts_epoch": time.time(),
+                "ts": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime())})
+            try:
+                code = int(runner(cwd, prompt, name) or 0)
+            except Exception as e:
+                code = 1
+                _ledger_write(ledger_path, {"event": "finished", "name": name,
+                                            "exit": code, "error": str(e)[:120],
+                                            "ts": time.strftime(
+                                                "%Y-%m-%dT%H:%M:%S+00:00", time.gmtime())})
+            else:
+                _ledger_write(ledger_path, {"event": "finished", "name": name,
+                                            "exit": code,
+                                            "ts": time.strftime(
+                                                "%Y-%m-%dT%H:%M:%S+00:00", time.gmtime())})
+            out["split"].append({"session": sid[:8], "context": ctx, "exit": code})
+            if len(out["split"]) >= max_splits:
+                return out
+    return out
+
+
 def auto_should_run(idle_s: Any = _READ_IT) -> Dict[str, Any]:
     """Should the heartbeat dispatch right now, and how many agents may it use?
 
@@ -536,6 +693,20 @@ def main(argv: Optional[List[str]] = None) -> int:
         # This is the connection: gated on absence, capped, and honest when it
         # declines, because a gate that holds silently reads as "there was
         # nothing to do".
+        # BEFORE the away-gate, deliberately. Splitting a session near the
+        # ceiling is the one job that must happen while the owner is PRESENT,
+        # because that is exactly when the session is filling. It writes
+        # continuation files and touches nothing live, so it is safe to run
+        # whether he is at the keyboard or not — and holding it until he
+        # leaves is holding it until after the compaction it exists to beat.
+        try:
+            sp = autosplit()
+            for row in sp.get("split", []):
+                print("split %s @ %dk (exit %d)"
+                      % (row["session"], row["context"] // 1000, row["exit"]))
+        except Exception as e:
+            print("autosplit skipped: %s" % str(e)[:100])
+
         gate = auto_should_run()
         if not gate["run"]:
             print("holding — %s" % gate["why"])
