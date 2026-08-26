@@ -195,6 +195,58 @@ def test_direct_and_hopped_facts_are_DISTINGUISHABLE():
         assert flags["beta fact reached by link"] is False, "hopped fact claimed as direct"
 
 
+def test_a_hopped_fact_is_served_ONCE_PER_SESSION_not_per_file():
+    """The hub-bias fix, and the reason there is no relevance threshold.
+
+    Measured before this: 80 hopped facts came from 34 memories, and one —
+    "User strongly prefers fully automated paths" — landed on 13 of 109 paths
+    because the dedup key was path-scoped, so the same fact was "new" on every
+    file. That is the hub pull the graph-memory literature warns about in PPR
+    systems, arriving through a much dumber door.
+
+    Repetition is a defect on its OWN terms, so it needs no relevance
+    calibration to fix. Both ranking gates I measured were rejected: lexical
+    overlap (median jaccard 0.019 while 3 of 4 hand-checked hops were
+    relevant) and in-degree (good hop 48, bad hop 37 — no separation).
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        a = _mem("m_a", "fact about a.py", MD, links=["beta"])
+        c = _mem("m_c", "fact about c.py", MD3, links=["beta"])
+        b = _mem("m_b", "the hub fact", MD2)
+        idx = {"/work/a.py": [{"id": "m_a", "statement": a["statement"],
+                               "status": "machine_checked"}],
+               "/work/c.py": [{"id": "m_c", "statement": c["statement"],
+                               "status": "machine_checked"}]}
+        d = _store(tmp, [a, b, c], idx)
+        session = []
+        first = coordination.facts_for("/work/a.py", session, d)
+        session += [k for k, _, _, _ in first]
+        assert "the hub fact" in [s for _, s, _, _ in first], first
+
+        second = coordination.facts_for("/work/c.py", session, d)
+        assert "the hub fact" not in [s for _, s, _, _ in second], \
+            "the same hopped fact was served again on a different file"
+        assert "fact about c.py" in [s for _, s, _, _ in second], \
+            "the direct fact for the second file was lost"
+
+
+def test_a_DIRECT_fact_keeps_its_per_file_key():
+    """The direct lane must NOT inherit session-scoping: a fact about file A
+    and a fact about file B are different serves even with the same text."""
+    with tempfile.TemporaryDirectory() as tmp:
+        a = _mem("m_a", "same statement", MD)
+        idx = {"/work/a.py": [{"id": "m_a", "statement": "same statement",
+                               "status": "machine_checked"}],
+               "/work/b.py": [{"id": "m_a", "statement": "same statement",
+                               "status": "machine_checked"}]}
+        d = _store(tmp, [a], idx)
+        s1 = coordination.facts_for("/work/a.py", [], d)
+        keys = [k for k, _, _, _ in s1]
+        s2 = coordination.facts_for("/work/b.py", keys, d)
+        assert [x[1] for x in s2] == ["same statement"], \
+            "a direct fact about a different file was wrongly suppressed"
+
+
 def test_a_missing_store_does_not_raise():
     assert coordination.facts_for("/work/a.py", [], "/nonexistent/store") == []
 

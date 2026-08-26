@@ -279,7 +279,28 @@ def facts_for(path: str, served: List[str],
         return out
     for n in _one_hop(seeds, store_dir):
         stmt = (n.get("statement") or "").strip()
-        key = path + "|" + stmt[:60]
+        # SESSION-scoped, not path-scoped — deliberately unlike the direct key
+        # above. A direct fact is about THIS file, so it earns a per-file slot.
+        # A hopped fact is one link away and about something else, so serving
+        # it again on the next file is pure repetition.
+        #
+        # This is the hub-bias fix the graph-memory literature warns about
+        # (PPR's pull toward well-connected nodes). Measured here before the
+        # fix: 80 hopped facts came from only 34 memories; one — "User
+        # strongly prefers fully automated paths" — was served on 13 of 109
+        # paths, and the top 3 accounted for 34%.
+        #
+        # Two ranking gates were measured as alternatives and BOTH REJECTED.
+        # Lexical overlap: median jaccard 0.019, yet 3 of 4 hand-checked hops
+        # were genuinely relevant. In-degree: the GOOD astrology hop scores 48
+        # and the BAD job-copilot hop 37, so it does not separate. Path-reach
+        # did separate (bad 13/3, good 2/1) but on n=4 hand-judged cases,
+        # which is an anecdote, not a calibration.
+        #
+        # So: no relevance threshold. Repetition is a defect on its own terms,
+        # independent of whether the fact is relevant, and it needs no
+        # calibration to fix — one serve per session, per fact.
+        key = "hop|" + stmt[:60]
         if key in served or any(k == key for k, _, _, _ in out):
             continue
         out.append((key, stmt, n.get("id", ""), False))
