@@ -148,6 +148,111 @@ def _trend(journal: List[Dict], now: Optional[datetime] = None,
     }
 
 
+def agent_stats(ledger_path: Optional[str] = None) -> Dict[str, Any]:
+    """Agents dispatched vs. agents accounted for.
+
+    Measured 2026-08-26: 28 dispatches over 3 days (4, 10, 14 — accelerating),
+    ZERO outcomes recorded, and 22 of 28 carrying neither a window id nor a
+    log. The ledger recorded intent and called it a record, so "are we
+    retiring agents?" had no answer the system could give.
+
+    A dispatch with no outcome row is UNACCOUNTED — never counted as a
+    success. Reading silence as success is the defect this repo keeps finding
+    in itself; here it would quietly report a fleet that works.
+    """
+    p = ledger_path or os.path.expanduser("~/.claude/meditation/dispatch.jsonl")
+    # A dispatch is a ROW, not a goal. Keying on `goal` collapsed 28 real
+    # dispatches into 5 because the same goal is dispatched repeatedly — the
+    # live report said 5 while a hand count said 28, which is how this was
+    # caught. Identity is name -> ts_epoch -> ts, in that order.
+    launched, outcomes = [], {}
+    try:
+        with open(p, errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    continue
+                key = r.get("name") or r.get("ts_epoch") or r.get("ts")
+                if r.get("event") in ("finished", "exited", "outcome"):
+                    outcomes[key] = r
+                else:
+                    launched.append((key, r))
+    except OSError:
+        return {"dispatched": 0, "with_outcome": 0, "unaccounted": 0,
+                "succeeded": 0, "failed": 0, "traceable": 0}
+    keys = {k for k, _ in launched}
+    done = {k: v for k, v in outcomes.items() if k in keys}
+    return {
+        "dispatched": len(launched),
+        "with_outcome": len(done),
+        "unaccounted": len(launched) - len(done),
+        "succeeded": sum(1 for v in done.values() if v.get("exit") == 0),
+        "failed": sum(1 for v in done.values() if v.get("exit") not in (0, None)),
+        # neither an outcome row nor a window id: no trace at all exists
+        "traceable": sum(1 for k, v in launched
+                         if v.get("window_id") or k in done),
+    }
+
+
+def serving_stats(store_dir: Optional[str] = None) -> Dict[str, Any]:
+    """How much of the store can EVER reach a session, and how evenly.
+
+    Measured by hand first, which is why it is here now: 71 of 576 active
+    memories (12%) were reachable by exact path, +192 by one wikilink hop
+    (46%), and before the dedup key became session-scoped a single memory
+    landed on 13 of 109 paths.
+    """
+    S = store_dir or STORE_DIR
+    try:
+        mems = [json.loads(l) for l in open(os.path.join(S, "memories.jsonl"),
+                                            errors="replace") if l.strip()]
+        idx = json.load(open(os.path.join(S, "path_index.json")))
+    except (OSError, ValueError):
+        return {"active": 0, "direct": 0, "one_hop": 0, "unreachable": 0,
+                "reach_pct": 0}
+    act = {m["id"]: m for m in mems if m.get("active")}
+    direct = {e.get("id") for es in idx.values() for e in es
+              if e.get("status") == "machine_checked" and e.get("id") in act}
+    owner: Dict[str, set] = {}
+    for m in act.values():
+        for e in (m.get("evidence") or []):
+            src = str(e.get("source") or "")
+            if src.endswith(".md"):
+                owner.setdefault(os.path.basename(src)[:-3], set()).add(m["id"])
+    hop = set()
+    for sid in direct:
+        for e in ((act.get(sid) or {}).get("evidence") or []):
+            loc = str(e.get("locator") or "")
+            if not loc.startswith("wikilink:"):
+                continue
+            t = os.path.basename(loc[9:].strip().strip("[]"))
+            t = t[:-3] if t.endswith(".md") else t
+            for n in owner.get(t, ()):
+                if n not in direct and act[n]["epistemic"].get(
+                        "evidence_status") == "machine_checked":
+                    hop.add(n)
+    n = len(act) or 1
+    return {"active": len(act), "direct": len(direct), "one_hop": len(hop),
+            "unreachable": len(act) - len(direct) - len(hop),
+            "reach_pct": round((len(direct) + len(hop)) / n * 100)}
+
+
+def _safe(fn, *a) -> Dict[str, Any]:
+    """One broken sub-measurement must not take the whole report down.
+
+    metrics feeds the dashboard and the hook. A section that raises used to
+    mean no report at all, and no report is worse than one missing number.
+    """
+    try:
+        return fn(*a)
+    except Exception as e:
+        return {"checked": False, "error": str(e)[:120]}
+
+
 def compute_metrics(journal: Optional[List[Dict]] = None,
                     memories: Optional[List[Dict]] = None,
                     now: Optional[datetime] = None) -> Dict[str, Any]:
@@ -314,6 +419,15 @@ def compute_metrics(journal: Optional[List[Dict]] = None,
         # a change measurable after the day it shipped: this week vs last
         # week, not since-the-beginning-of-time.
         "trend": _trend(journal, now),
+
+        # The four sections added 2026-08-26. Every one was produced by a
+        # throwaway bash script first and then lost; a number you must
+        # re-derive by hand is an anecdote, not a measurement. All are
+        # REPORTS, never gates — none fails a build.
+        "serving":    _safe(serving_stats),
+        "warranty":   _safe(lambda: __import__("repair").index_warranty()),
+        "agents":     _safe(agent_stats),
+        "assessment": _safe(lambda: __import__("projects").assessment_gaps()),
         "consolidation": {
             "sleep_runs": sleep_run_count,
             "total_actions": total_sleep_actions,
@@ -398,6 +512,31 @@ def print_human(data: Dict):
                 print(f"    {ev:<22} {prev:>6} -> {cur:<6} {dl:+d}")
             if t.get("dead"):
                 print(f"    ⚠️  STOPPED (ran last window, zero this one): {', '.join(t['dead'])}")
+
+    sv, wr, ag, asm = (data.get(k) or {} for k in
+                       ("serving", "warranty", "agents", "assessment"))
+    if sv.get("active"):
+        print(f"\n  Serving reach (can a memory EVER reach a session?)")
+        print(f"    direct (exact path): {sv['direct']:>4}")
+        print(f"    + one wikilink hop : {sv['one_hop']:>4}   -> {sv['reach_pct']}% of {sv['active']}")
+        print(f"    unreachable        : {sv['unreachable']:>4}")
+    if wr.get("lines"):
+        n = wr["lines"]
+        print(f"\n  Warranty (what an agent could re-check in MEMORY.md)")
+        print(f"    world-checkable    : {wr['world']:>4} / {n}  {_bar(wr['world']/n)} {wr['world']/n*100:.0f}%")
+        print(f"    unfalsifiable      : {wr['unwarrantied']:>4}   (green forever, no world evidence)")
+        print(f"    ungraded / broken  : {wr['ungraded']:>4} / {wr['broken']}")
+    if ag.get("dispatched"):
+        print(f"\n  Agents")
+        print(f"    dispatched         : {ag['dispatched']:>4}")
+        print(f"    with an outcome    : {ag['with_outcome']:>4}   succeeded {ag['succeeded']}, failed {ag['failed']}")
+        print(f"    UNACCOUNTED        : {ag['unaccounted']:>4}   (no outcome row — unknown, not success)")
+        print(f"    leaving any trace  : {ag['traceable']:>4}")
+    if asm.get("tracked"):
+        print(f"\n  Assessment (is the work being judged?)")
+        print(f"    projects tracked   : {asm['tracked']:>4}   ({asm['real_projects']} real)")
+        print(f"    with a goal        : {asm['assessed']:>4}")
+        print(f"    unassessed         : {len(asm['unassessed']):>4}   no yardstick at all")
 
     print(f"\n  Consolidation (sleep pass)")
     print(f"    runs:        {c['sleep_runs']:>4}")
