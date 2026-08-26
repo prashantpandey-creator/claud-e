@@ -350,6 +350,26 @@ def _check_assessment() -> Dict[str, Any]:
         return {"checked": False, "error": str(e)[:120]}
 
 
+def _check_warranty() -> Dict[str, Any]:
+    """How much of MEMORY.md an agent could actually re-check.
+
+    MEMORY.md is ~54% of an agent's opening context and is loaded into every
+    session by Claude Code's own harness. A line backed only by quote-scoped
+    evidence is permanently green and permanently unfalsifiable — the
+    difference between this project's 56% and 13%.
+    """
+    try:
+        sys.path.insert(0, SKILL_DIR)
+        import repair
+        w = repair.index_warranty()
+        n = w["lines"] or 1
+        return {"checked": True, "lines": w["lines"], "world": w["world"],
+                "unwarrantied": w["unwarrantied"], "ungraded": w["ungraded"],
+                "broken": w["broken"], "world_pct": round(w["world"] / n * 100)}
+    except Exception as e:
+        return {"checked": False, "error": str(e)[:120]}
+
+
 def run(run_tests: bool = True) -> Dict[str, Any]:
     """run_tests=False returns the same envelope without executing 26 suites.
     test_doctor.py calls run() three times to check STRUCTURE; making it
@@ -366,6 +386,7 @@ def run(run_tests: bool = True) -> Dict[str, Any]:
     index = _check_index()
     coverage = _check_memory_coverage()
     assessment = _check_assessment()
+    warranty = _check_warranty()
 
     issues = []
     if not all(p["ok"] for p in prereqs):
@@ -411,6 +432,7 @@ def run(run_tests: bool = True) -> Dict[str, Any]:
         "index": index,
         "coverage": coverage,
         "assessment": assessment,
+        "warranty": warranty,
         "output": output,
         "nidra": nidra,
     }

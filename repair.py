@@ -189,6 +189,102 @@ def _index_status(store_dir: str) -> Dict[str, str]:
     return worst
 
 
+_SCOPE_RANK = {"world": 3, "internal": 2, "quote": 1, "none": 0}
+
+
+def _index_scopes(store_dir: str) -> Dict[str, Optional[str]]:
+    """basename of a memory file -> the BEST evidence_scope backing it.
+
+    Best, not worst: warranty asks "can ANYTHING here be re-checked", so one
+    world-scoped memory is enough. Returns None for a file the grader has
+    never seen — a third value, distinct from both "checkable" and "broken".
+    """
+    try:
+        from ask import _load
+        mems = _load(store_dir)
+    except Exception:
+        return {}
+    best: Dict[str, Optional[str]] = {}
+    for m in mems:
+        if not m.get("active"):
+            continue
+        scope = (m.get("epistemic") or {}).get("evidence_scope") or "none"
+        for e in (m.get("evidence") or []):
+            src = str(e.get("source") or "")
+            if not src.endswith(".md"):
+                continue
+            b = os.path.basename(src)
+            cur = best.get(b)
+            if cur is None or _SCOPE_RANK.get(scope, 0) > _SCOPE_RANK.get(cur, 0):
+                best[b] = scope
+    return best
+
+
+def index_warranty(memory_dir: Optional[str] = None,
+                   store_dir: str = STORE_DIR) -> Dict[str, Any]:
+    """How much of MEMORY.md an agent could actually re-check.
+
+    MEMORY.md is ~5,118 of the ~9,488 tokens in an agent's opening context —
+    54% — and is loaded into EVERY session by Claude Code's own harness. The
+    graded lane that carries receipts delivers ~90 tokens a day. An agent
+    cannot verify its own context, so it acts on a line written six weeks ago
+    with the confidence it gives one verified this morning.
+
+    stale_index_lines() answers "which lines are BROKEN" and flags zero today.
+    This answers the question that one cannot: "which are CHECKABLE AT ALL".
+    A line backed only by quote-scoped memories is not broken and never will
+    be — its evidence is that a sentence exists in a file, which no change in
+    the world can falsify. That is unfalsifiability, not health, and the
+    distinction is the whole difference between this project's 56% and 13%.
+
+    Reports only. It never writes to MEMORY.md — a report that edits what it
+    measures manufactures its own good news.
+    """
+    if memory_dir is None:
+        try:
+            from nidra_bridge import _memory_dirs
+            dirs = _memory_dirs()
+        except Exception:
+            return {"lines": 0, "world": 0, "unwarrantied": 0, "ungraded": 0,
+                    "broken": 0, "detail": []}
+        tot = {"lines": 0, "world": 0, "unwarrantied": 0, "ungraded": 0,
+               "broken": 0, "detail": []}
+        for d in dirs:
+            w = index_warranty(d, store_dir)
+            for k in ("lines", "world", "unwarrantied", "ungraded", "broken"):
+                tot[k] += w[k]
+            tot["detail"].extend(w["detail"])
+        return tot
+
+    try:
+        with open(os.path.join(memory_dir, "MEMORY.md"), errors="replace") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return {"lines": 0, "world": 0, "unwarrantied": 0, "ungraded": 0,
+                "broken": 0, "detail": []}
+
+    scopes = _index_scopes(store_dir)
+    bad = {d["target"]: d["reason"] for d in stale_index_lines(memory_dir, store_dir)}
+    out = {"lines": 0, "world": 0, "unwarrantied": 0, "ungraded": 0,
+           "broken": 0, "detail": []}
+    for n, line in enumerate(lines, 1):
+        for target in _LINK.findall(line):
+            if "://" in target:
+                continue
+            out["lines"] += 1
+            scope = scopes.get(os.path.basename(target))
+            if target in bad:
+                out["broken"] += 1
+            elif scope is None:
+                out["ungraded"] += 1
+            elif scope == "world":
+                out["world"] += 1
+            else:
+                out["unwarrantied"] += 1
+            out["detail"].append({"line": n, "target": target, "scope": scope})
+    return out
+
+
 def stale_index_lines(memory_dir: Optional[str] = None,
                       store_dir: str = STORE_DIR) -> List[Dict[str, Any]]:
     """MEMORY.md lines whose target is demoted, drifted, or not on disk.
