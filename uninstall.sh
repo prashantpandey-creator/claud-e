@@ -48,6 +48,19 @@ else
     echo "  [skip] no launchd agent installed"
 fi
 
+# ---- 1b. the kept-warm servers ----------------------------------------------
+# These are KeepAlive agents. Step 2 below pkills the processes, which without
+# this step launchd simply restarts — "uninstalled" with the voice server back
+# up within seconds. Unload the job before killing the process.
+for label in com.meditate.tts com.meditate.brain com.meditate.ollama; do
+    p="$HOME/Library/LaunchAgents/$label.plist"
+    if [ -f "$p" ]; then
+        say "stop and remove the kept-warm service ($label)"
+        run launchctl unload "$p" 2>/dev/null || true
+        run rm -f "$p"
+    fi
+done
+
 # ---- 2. the running companion -----------------------------------------------
 #
 # Only what belongs to THIS home, matched on the full installed path.

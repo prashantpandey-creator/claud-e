@@ -227,8 +227,40 @@ def _dispatch_label(s, dispatched) -> str:
     return ""
 
 
+_STATE_LOCK = threading.Lock()
+_STATE_SNAPSHOT: Dict[str, Any] = {"at": 0.0, "data": None}
+STATE_TTL_S = 2.0
+
+
 def state() -> Dict[str, Any]:
-    """Every organ, one dict, all from durable stores — computed per request."""
+    """One computation at a time, shared by every caller.
+
+    The per-component caches below each fixed a slow ORGAN. None of them
+    stopped a stampede: state() was computed per request, the page polls every
+    4s, and a cold start costs ~7s — so poll N+1 begins before poll N finishes,
+    the browser aborts at its own timeout and immediately retries, and every
+    abandoned request keeps a thread scanning 100MB+ of transcripts. Measured
+    2026-08-29 on a restart under a live dashboard: 87 threads, 64 open
+    transcript fds, 120% CPU, and /api/state never answered in 4 minutes,
+    while the same build with one client answered in 6.9s cold / 0.7s warm.
+
+    The lock is the whole fix: one scan at a time, and whoever was waiting
+    gets the result that scan just produced instead of starting another.
+    """
+    snap = _STATE_SNAPSHOT["data"]
+    if snap and time.time() - _STATE_SNAPSHOT["at"] < STATE_TTL_S:
+        return snap
+    with _STATE_LOCK:
+        snap = _STATE_SNAPSHOT["data"]
+        if snap and time.time() - _STATE_SNAPSHOT["at"] < STATE_TTL_S:
+            return snap
+        d = _state_uncached()
+        _STATE_SNAPSHOT.update({"at": time.time(), "data": d})
+        return d
+
+
+def _state_uncached() -> Dict[str, Any]:
+    """Every organ, one dict, all from durable stores."""
     import goals as gl
     import report as rp
     from drive import fleet_status

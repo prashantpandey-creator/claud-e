@@ -167,6 +167,34 @@ def test_install_and_uninstall_are_a_matched_pair():
     assert "--dry-run" in un, "removal must be inspectable before it runs"
 
 
+def test_every_service_label_supervises_the_program_it_names():
+    """A launchd label is a promise about which program it restarts.
+
+    com.meditate.brain ran `ollama serve` for four days while brain.py itself
+    ran unsupervised — so `launchctl kickstart com.meditate.brain` restarted
+    the model server, an edit to brain.py never reached the live Pulse, and
+    the command reported success the whole time. Checked statically against
+    doctor.SERVICES so the installer and the health check cannot drift apart.
+    """
+    sys.path.insert(0, SKILL)
+    import doctor
+
+    inst = open(os.path.join(SKILL, "install.sh")).read()
+    calls = re.findall(r"^\s*_svc\s+(\S+)\s+\S+\s+(.*)$", inst, re.M)
+    assert calls, "install.sh installs no services — did _svc get renamed?"
+    for label, program in calls:
+        expects = doctor.SERVICES.get(label)
+        assert expects, "install.sh installs %s, doctor does not check it" % label
+        # lowercased: the program is usually a shell var ("$OLLAMA") whose name
+        # is the upper-case of the thing it runs.
+        assert expects in program.lower(), \
+            "%s runs %r — it must run %s" % (label, program.strip(), expects)
+
+    un = open(os.path.join(SKILL, "uninstall.sh")).read()
+    for label in doctor.SERVICES:
+        assert label in un, "uninstall leaves the KeepAlive job %s running" % label
+
+
 def test_uninstall_spares_other_tools_hooks():
     """The expensive mistake: taking someone's other hooks out with you."""
     home = tempfile.mkdtemp()

@@ -393,29 +393,42 @@ if python3 "$SKILL_DIR/dashboard.py" > /dev/null 2>&1; then
     fi
 fi
 
-# ---- 6a. The two local servers become services
+# ---- 6a. The three local servers become services
 #
-# Kokoro (voice) and ollama (the brain) used to start on demand and die with
-# whatever launched them. That is why the voice was cold, fell back to a
-# different speaker mid-conversation, and why an answer took seconds instead
-# of milliseconds. Keeping them up is the whole difference between this and a
-# hosted API.
+# Kokoro (voice), ollama (the model) and Pulse (brain.py, the console) used to
+# start on demand and die with whatever launched them. That is why the voice
+# was cold, fell back to a different speaker mid-conversation, and why an
+# answer took seconds instead of milliseconds. Keeping them up is the whole
+# difference between this and a hosted API.
+#
+# ONE LABEL, ONE PROGRAM. com.meditate.brain used to run `ollama serve` —
+# because an earlier comment here called ollama "the brain" — while the thing
+# actually named brain.py ran unsupervised, started by hand, reparented to
+# pid 1. Measured 2026-08-29: `launchctl list` showed com.meditate.brain at
+# pid 83090 = `ollama serve`, and brain.py at 21690 with PPID 1. So
+# `launchctl kickstart -k gui/$UID/com.meditate.brain` restarted ollama, an
+# edit to brain.py never reached the running server, and /api/state kept
+# reporting the old code. ollama is now com.meditate.ollama; brain is brain.py.
 #
 # ProcessType Interactive, deliberately: a first attempt used Background,
 # which launchd CPU-throttles, and a render measured at 0.86s by hand took
 # 7.8-10.1s as a throttled service.
 if [ "$(uname)" = "Darwin" ] && command -v launchctl >/dev/null 2>&1; then
     PY310="$(command -v python3.10 || true)"
+    PY3="$(command -v python3 || true)"
     OLLAMA="$(command -v ollama || true)"
     mkdir -p "$HOME/Library/LaunchAgents"
-    _svc() {   # label, program, args...
-        local label="$1"; shift
+    _svc() {   # label, keepalive(always|crash), program, args...
+        local label="$1"; local keep="$2"; shift 2
         local plist="$HOME/Library/LaunchAgents/$label.plist"
-        python3 - "$plist" "$label" "$@" <<'PYSVC'
+        python3 - "$plist" "$label" "$keep" "$@" <<'PYSVC'
 import plistlib, sys
-plist, label = sys.argv[1], sys.argv[2]
-d = {"Label": label, "ProgramArguments": sys.argv[3:],
-     "RunAtLoad": True, "KeepAlive": True,
+plist, label, keep = sys.argv[1], sys.argv[2], sys.argv[3]
+# "crash": restart on failure only. A server that exits 0 because its port is
+# already held by a hand-started copy must not be respawned forever.
+d = {"Label": label, "ProgramArguments": sys.argv[4:],
+     "RunAtLoad": True,
+     "KeepAlive": True if keep == "always" else {"SuccessfulExit": False},
      "ProcessType": "Interactive", "Nice": -5,
      "EnvironmentVariables": {"PATH": "/opt/homebrew/bin:/usr/bin:/bin"},
      "StandardOutPath": "/tmp/%s.log" % label,
@@ -428,15 +441,34 @@ PYSVC
             && echo "  [ok]  $label kept warm" \
             || echo "  [--]  $label could not be loaded"
     }
+
+    # Migration: retire a com.meditate.brain that still runs ollama, so the
+    # label is free for the program it names.
+    _OLD_BRAIN="$HOME/Library/LaunchAgents/com.meditate.brain.plist"
+    if [ -f "$_OLD_BRAIN" ] && \
+       plutil -p "$_OLD_BRAIN" 2>/dev/null | grep -q '"ollama"\|/ollama"'; then
+        launchctl unload "$_OLD_BRAIN" 2>/dev/null || true
+        rm -f "$_OLD_BRAIN"
+        echo "  [ok]  com.meditate.brain no longer points at ollama (migrated)"
+    fi
+
     if [ -n "$PY310" ] && [ -f "$SKILL_DIR/tts.py" ]; then
-        _svc com.meditate.tts "$PY310" "$SKILL_DIR/tts.py" --serve
+        _svc com.meditate.tts always "$PY310" "$SKILL_DIR/tts.py" --serve
     else
         echo "  [--]  voice server needs python3.10 (onnxruntime has no 3.14 wheel)"
     fi
     if [ -n "$OLLAMA" ]; then
-        _svc com.meditate.brain "$OLLAMA" serve
+        _svc com.meditate.ollama always "$OLLAMA" serve
     else
         echo "  [--]  no ollama — answers fall back to the slow path"
+    fi
+    if [ -n "$PY3" ] && [ -f "$SKILL_DIR/brain.py" ]; then
+        # A hand-started Pulse holds port 7711 and would make the service exit
+        # 0 on load; stop ours first so the supervised copy is the live one.
+        case "$SKILL_DIR" in
+            "$HOME"/*) pkill -U "$(id -u)" -f "$SKILL_DIR/brain.py" 2>/dev/null || true ;;
+        esac
+        _svc com.meditate.brain crash "$PY3" "$SKILL_DIR/brain.py" --no-open
     fi
 fi
 

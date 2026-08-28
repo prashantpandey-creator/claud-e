@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import plistlib
 import shutil
 import subprocess
 import sys
@@ -222,6 +223,45 @@ def _check_heartbeat() -> Dict[str, Any]:
             "stale": stale, "never_beat": exists and loaded and age_s is None}
 
 
+# A launchd label is a promise about which program it supervises. Break that
+# promise and every restart command lies: com.meditate.brain ran `ollama serve`
+# for four days (measured 2026-08-29 — launchctl list said pid 83090 = ollama),
+# so kickstarting "brain" restarted the model server while brain.py itself sat
+# unsupervised at PPID 1, and code changes never reached the running Pulse.
+# Each entry is label -> a fragment that MUST appear in ProgramArguments.
+SERVICES = {
+    "com.meditate.brain":  "brain.py",
+    "com.meditate.tts":    "tts.py",
+    "com.meditate.ollama": "ollama",
+}
+
+
+def _check_services() -> List[Dict[str, Any]]:
+    out = []
+    try:
+        r = subprocess.run(["launchctl", "list"], capture_output=True,
+                           text=True, timeout=10)
+        listing = r.stdout
+    except Exception:
+        listing = ""
+    for label, must_contain in SERVICES.items():
+        plist = os.path.expanduser("~/Library/LaunchAgents/%s.plist" % label)
+        exists = os.path.isfile(plist)
+        program, mismatched = None, False
+        if exists:
+            try:
+                with open(plist, "rb") as f:
+                    argv = plistlib.load(f).get("ProgramArguments") or []
+                program = " ".join(argv)
+                mismatched = must_contain not in program
+            except Exception:
+                pass
+        out.append({"label": label, "plist_exists": exists,
+                    "loaded": label in listing, "program": program,
+                    "expects": must_contain, "mismatched": mismatched})
+    return out
+
+
 def _check_stillness() -> Dict[str, Any]:
     if not os.path.isfile(STILLNESS_PATH):
         # A new install has never run a stilling pass. "Overdue" says the
@@ -386,6 +426,7 @@ def run(run_tests: bool = True) -> Dict[str, Any]:
         "all_pass": True, "files": [], "skipped": "run_tests=False"}
     hook = _check_hook()
     heartbeat = _check_heartbeat()
+    services = _check_services()
     stillness = _check_stillness()
     output = _check_output()
     nidra = _check_nidra()
@@ -407,6 +448,10 @@ def run(run_tests: bool = True) -> Dict[str, Any]:
         issues.append("heartbeat_never_ran")
     elif heartbeat.get("stale"):
         issues.append("heartbeat_stale")
+    if any(s["mismatched"] for s in services):
+        # A label supervising the wrong program is worse than a missing one:
+        # restart commands report success and change nothing.
+        issues.append("service_label_mismatch")
     if index.get("stale"):
         issues.append("memory_index_stale")
     if assessment.get("not_projects"):
@@ -434,6 +479,7 @@ def run(run_tests: bool = True) -> Dict[str, Any]:
         "tests": tests,
         "hook": hook,
         "heartbeat": heartbeat,
+        "services": services,
         "stillness": stillness,
         "index": index,
         "coverage": coverage,
@@ -485,6 +531,21 @@ def main(argv: List[str]) -> int:
     print(f"\nHeartbeat:")
     print(f"  [{'ok' if hb.get('loaded') else 'MISSING':>7}]  launchd com.meditate.grade "
           f"(last beat: {hb.get('last_beat') or 'never'})")
+
+    svcs = d.get("services", [])
+    if svcs:
+        print(f"\nServices:")
+        for s in svcs:
+            if s["mismatched"]:
+                mark = "WRONG"
+                detail = "runs %r, expected %s" % (s["program"], s["expects"])
+            elif not s["plist_exists"]:
+                mark = "absent"
+                detail = "no plist (run install.sh)"
+            else:
+                mark = "ok" if s["loaded"] else "STOPPED"
+                detail = s["expects"]
+            print(f"  [{mark:>7}]  {s['label']:22} {detail}")
 
     print(f"\nStillness:")
     if d["stillness"]["exists"]:
