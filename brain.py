@@ -490,6 +490,226 @@ def _recent_events(n: int = 10) -> List[Dict[str, str]]:
     return rows[-n:][::-1]
 
 
+REPORT_PAGE = """<!doctype html><meta charset="utf-8">
+<title>What is on your plate</title>
+<style>
+  :root{
+    --bg:#0b0a08; --panel:#100e0b; --line:#231f19; --line-soft:#191611;
+    --ink:#e6e0d2; --ink-dim:#8a8578; --ink-faint:#6b6557;
+    --gold:#E3B140; --gold-soft:#c9973a; --alert:#c96442;
+    --r:12px;
+  }
+  *{box-sizing:border-box}
+  body{background:var(--bg);color:var(--ink);margin:0;
+       font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,sans-serif;
+       padding:40px 44px 80px;max-width:900px;-webkit-font-smoothing:antialiased}
+  .eyebrow{letter-spacing:.32em;font-size:10.5px;color:var(--ink-faint);
+           text-transform:uppercase}
+  h1{font-size:26px;font-weight:600;margin:14px 0 4px;letter-spacing:-.01em}
+  .lede{font-size:16px;line-height:1.6;color:var(--ink-dim);max-width:66ch;
+        margin:0 0 26px}
+  .row{background:var(--panel);border:1px solid var(--line);
+       border-radius:var(--r);padding:15px 17px;margin-bottom:11px;
+       display:grid;grid-template-columns:22px 1fr;gap:14px;align-items:start;
+       transition:border-color .15s,background .15s}
+  .row:hover{border-color:#2e2820}
+  .row.on{border-color:var(--gold-soft);background:#13100b}
+  .row input{appearance:none;width:17px;height:17px;margin-top:2px;
+             border:1.5px solid #3a342a;border-radius:5px;cursor:pointer;
+             transition:all .15s}
+  .row input:checked{background:var(--gold);border-color:var(--gold)}
+  .row input:checked::after{content:"";display:block;width:5px;height:9px;
+        border:solid #0b0a08;border-width:0 2px 2px 0;transform:rotate(42deg);
+        margin:1px 0 0 5px}
+  .say{font-size:15px;line-height:1.5}
+  .meta{margin-top:6px;font-size:12.5px;color:var(--ink-faint)}
+  .tag{display:inline-block;font-size:10.5px;letter-spacing:.14em;
+       text-transform:uppercase;color:var(--ink-faint);
+       border:1px solid var(--line);border-radius:999px;padding:2px 9px;
+       margin-right:8px}
+  .tag.repair{color:var(--alert);border-color:#3a251d}
+  .tag.goal{color:var(--gold-soft);border-color:#3a3020}
+  .detail{margin-top:9px;font-size:13px;color:var(--ink-dim);
+          border-left:2px solid var(--line);padding-left:11px;line-height:1.55}
+  .bar{position:sticky;bottom:0;background:linear-gradient(transparent,var(--bg) 26%);
+       padding:26px 0 4px;margin-top:26px;display:flex;gap:10px;align-items:center}
+  .b{cursor:pointer;border:1px solid var(--line);background:transparent;
+     color:var(--gold);border-radius:9px;padding:9px 17px;font-size:13.5px;
+     transition:background .15s,border-color .15s}
+  .b:hover{background:#1b1710;border-color:var(--gold-soft)}
+  .b.primary{background:var(--gold);color:#0b0a08;border-color:var(--gold);
+             font-weight:600}
+  .b.primary:hover{background:#f0bd48}
+  .b[disabled]{opacity:.35;cursor:default}
+  .count{color:var(--ink-faint);font-size:12.5px;margin-left:auto}
+  h2{font-size:12px;letter-spacing:.22em;text-transform:uppercase;
+     color:var(--ink-faint);font-weight:500;margin:44px 0 13px}
+  .parked{background:transparent;border:1px dashed var(--line);
+          border-radius:10px;padding:12px 15px;margin-bottom:9px;
+          display:flex;gap:12px;align-items:center;color:var(--ink-dim)}
+  .parked .b{padding:5px 11px;font-size:12px;margin-left:auto}
+  .empty{color:var(--ink-faint);font-style:italic}
+  #flash{position:fixed;left:44px;bottom:22px;background:var(--panel);
+         border:1px solid var(--gold-soft);border-radius:9px;padding:10px 16px;
+         color:var(--ink);opacity:0;transition:opacity .25s;pointer-events:none}
+  #flash.show{opacity:1}
+</style>
+<div class="eyebrow">Report</div>
+<h1>What is on your plate</h1>
+<p class="lede">Tick the ones you are actually going to do. Everything you
+leave unticked goes to the backlog — not deleted, not finished, just put down
+on purpose, and it stops being offered until you bring it back.</p>
+<div id="live"></div>
+<div class="bar">
+  <button class="b primary" id="commit" disabled>Keep ticked, backlog the rest</button>
+  <button class="b" id="all">Tick all</button>
+  <button class="b" id="none">Tick none</button>
+  <span class="count" id="count"></span>
+</div>
+<h2>Put down</h2>
+<div id="parked"></div>
+<div id="flash"></div>
+<script>
+const esc = t => String(t == null ? "" : t).replace(/[&<>"]/g,
+  c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+let DATA = {live: [], backlog: []};
+
+function flash(msg){
+  const f = document.getElementById("flash");
+  f.textContent = msg; f.classList.add("show");
+  setTimeout(() => f.classList.remove("show"), 2600);
+}
+
+function render(){
+  const live = document.getElementById("live");
+  live.innerHTML = DATA.live.length ? "" :
+    '<p class="empty">Nothing is waiting on you.</p>';
+  DATA.live.forEach((r, i) => {
+    const d = document.createElement("div");
+    d.className = "row";
+    d.innerHTML = '<input type="checkbox" id="c' + i + '">' +
+      '<div><div class="say">' + esc(r.say) + '</div>' +
+      '<div class="meta"><span class="tag ' + esc(r.kind) + '">' +
+        esc(r.kind) + '</span>' + (r.progress ? esc(r.progress) : "") + '</div>' +
+      (r.detail ? '<div class="detail">' + esc(r.detail) + '</div>' : '') +
+      '</div>';
+    const box = d.querySelector("input");
+    box.addEventListener("change", () => {
+      d.classList.toggle("on", box.checked); recount();
+    });
+    live.appendChild(d);
+  });
+
+  const parked = document.getElementById("parked");
+  parked.innerHTML = DATA.backlog.length ? "" :
+    '<p class="empty">Nothing put down yet.</p>';
+  DATA.backlog.forEach(b => {
+    const d = document.createElement("div");
+    d.className = "parked";
+    d.innerHTML = '<span>' + esc(b.say || b.key) + '</span>' +
+      '<span style="color:var(--ink-faint);font-size:12px">' +
+      esc(b.days) + 'd</span>' +
+      '<button class="b">Bring back</button>';
+    d.querySelector("button").addEventListener("click", async () => {
+      await act("unbacklog", b.key, "");
+      flash("brought back"); await load();
+    });
+    parked.appendChild(d);
+  });
+  recount();
+}
+
+function ticked(){
+  return DATA.live.filter((_, i) => document.getElementById("c" + i).checked);
+}
+function recount(){
+  const n = ticked().length, total = DATA.live.length;
+  document.getElementById("count").textContent =
+    total ? n + " of " + total + " ticked — " + (total - n) + " to backlog" : "";
+  // Enabled even at zero: backlogging everything is a real answer, and the
+  // button says what it will do.
+  document.getElementById("commit").disabled = total === 0;
+}
+
+async function act(action, arg, value){
+  const r = await fetch("/api/act", {method:"POST",
+    headers:{"Content-Type":"application/json","X-Meditate":"1"},
+    body: JSON.stringify({action, arg, value})});
+  return r.json();
+}
+
+async function load(){
+  const r = await fetch("/api/report", {headers:{"X-Meditate":"1"}});
+  DATA = await r.json(); render();
+}
+
+document.getElementById("all").addEventListener("click", () => {
+  DATA.live.forEach((_, i) => {
+    const b = document.getElementById("c" + i);
+    b.checked = true; b.dispatchEvent(new Event("change"));
+  });
+});
+document.getElementById("none").addEventListener("click", () => {
+  DATA.live.forEach((_, i) => {
+    const b = document.getElementById("c" + i);
+    b.checked = false; b.dispatchEvent(new Event("change"));
+  });
+});
+document.getElementById("commit").addEventListener("click", async () => {
+  const keep = new Set(ticked().map(r => r.key));
+  const drop = DATA.live.filter(r => !keep.has(r.key));
+  for (const r of drop) await act("backlog", r.key, r.say);
+  flash(drop.length ? "backlogged " + drop.length : "kept everything");
+  await load();
+});
+load();
+</script>
+"""
+
+
+def report_data() -> Dict[str, Any]:
+    """Everything the report shows, in one call.
+
+    The live list, each item with WHY it is there and what acting on it
+    means — plus what is already put down. The mascot could only ever read
+    four sentences aloud; nothing let him see them together, weigh them
+    against each other, and decide which ones he was actually going to do.
+    """
+    import voice as _v
+    import backlog as _b
+    live = []
+    for it in _v.agenda():
+        if not (it.get("action") or ""):
+            continue
+        row = {"say": it.get("say", ""), "action": it.get("action", ""),
+               "kind": it.get("kind", ""), "goal": it.get("goal", ""),
+               "milestone": it.get("milestone", ""),
+               "key": _b.key_for(it), "detail": "", "progress": ""}
+        if row["kind"] == "goal" and row["goal"]:
+            try:
+                from goals import detail as _detail
+                d = _detail(row["goal"]) or {}
+                row["progress"] = ("%d of %d done" % (d.get("done", 0),
+                                                      d.get("total", 0)))
+                nxt = next((m for m in d.get("milestones", [])
+                            if not m.get("done")), None)
+                if nxt:
+                    bits = []
+                    if nxt.get("verdict"):
+                        bits.append(str(nxt["verdict"]))
+                    if nxt.get("evidence"):
+                        bits.append(str(nxt["evidence"])[:280])
+                    row["detail"] = " — ".join(bits)
+                if (d.get("agent") or {}).get("message"):
+                    row["detail"] = (row["detail"] + "  Someone is on it: "
+                                     + d["agent"]["message"][:200]).strip()
+            except Exception:
+                pass
+        live.append(row)
+    return {"live": live, "backlog": _b.items(),
+            "generated": time.strftime("%A %-d %B, %H:%M")}
+
+
 PAGE = """<!doctype html><meta charset="utf-8">
 <title>Pulse — your Claude, live</title>
 <style>
@@ -921,6 +1141,21 @@ class _Handler(BaseHTTPRequestHandler):
                                       else "stopped %d agent(s)" % r["count"])}
                 except Exception as e:
                     res = {"started": False, "output": "could not stop: %s" % e}
+            elif action in ("backlog", "unbacklog"):
+                # Putting something down is a decision, and the tool has to
+                # remember it. Every item used to be re-offered forever and
+                # the only way to stop one was to finish it.
+                try:
+                    import backlog as _b
+                    r = (_b.add(arg, str(req.get("value") or ""))
+                         if action == "backlog" else _b.remove(arg))
+                    res = {"started": r["ok"],
+                           "output": ("put down — %d in the backlog" % r["total"])
+                           if r["ok"] and action == "backlog" else
+                           ("brought back — %d left" % r["total"])
+                           if r["ok"] else r["why"]}
+                except Exception as e:
+                    res = {"started": False, "output": str(e)[:160]}
             elif action == "tick":
                 # Close the milestone you were just told about, from wherever
                 # you are. Being told about work you cannot act on is nagging.
@@ -1026,6 +1261,12 @@ class _Handler(BaseHTTPRequestHandler):
                     d = {"error": "no such goal: %s" % name}
                 body = json.dumps(d).encode()
                 ctype = "application/json"
+            elif self.path == "/api/report":
+                body = json.dumps(report_data()).encode()
+                ctype = "application/json"
+            elif self.path == "/report":
+                body = REPORT_PAGE.encode()
+                ctype = "text/html; charset=utf-8"
             elif self.path == "/":
                 body = PAGE.encode()
                 ctype = "text/html; charset=utf-8"

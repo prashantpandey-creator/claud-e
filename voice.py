@@ -441,6 +441,19 @@ def agenda(meditation_dir: str = MEDITATION_DIR, store_dir: str = STORE_DIR,
                    "are piling up.",
             "action": "/meditate", "kind": "sessions"})
 
+    # Anything he has looked at and deliberately put down stops being
+    # offered. Without this the companion has no memory of his judgement: it
+    # re-offers the same item every time, forever, and the only way to make
+    # one stop is to finish it. That is the difference between a tool that
+    # helps and one that nags.
+    try:
+        import backlog
+        parked = backlog.keys()
+        if parked:
+            items = [it for it in items if backlog.key_for(it) not in parked]
+    except Exception:
+        pass          # a backlog that cannot be read must not hide the list
+
     if not items:
         items.append({"say": "Nothing's broken and nothing's waiting on you.",
                       "action": "", "kind": "clear"})

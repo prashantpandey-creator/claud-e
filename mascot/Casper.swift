@@ -188,11 +188,17 @@ final class Meditate {
     /// order. Returns everything that was said, so callers that want the
     /// whole text still get it.
     @discardableResult
-    static func adviseStreaming(_ question: String,
+    static func adviseStreaming(_ question: String, screen: String = "",
                                 onSentence: @escaping (String) -> Void) -> String {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        p.arguments = ["python3", skillDir + "/advisor.py", "--stream", question]
+        // --screen carries the list he is looking at. Without it "summarise
+        // them" reaches the model with no "them" in the prompt: measured, it
+        // answered about Mila's local models instead of the four items on the
+        // card, confidently, which reads as not listening.
+        var argv = ["python3", skillDir + "/advisor.py", "--stream"]
+        if !screen.isEmpty { argv += ["--screen", screen] }
+        p.arguments = argv + [question]
         p.currentDirectoryURL = URL(fileURLWithPath: skillDir)
         let pipe = Pipe()
         p.standardOutput = pipe
@@ -2348,8 +2354,22 @@ final class App: NSObject, NSApplicationDelegate {
         // One word followed by a pause is not somebody addressing you. The
         // end-of-turn gap is 1.1s, so "Also" counts as a complete utterance
         // unless there is a floor on what a turn even is.
+        // A list is on screen: he can ask about it without saying the name.
+        //
+        // He is looking at four things HE was just shown. Requiring "Casper,
+        // summarise them" to talk about a card the companion put there is the
+        // difference between a conversation and a form. The name gate still
+        // guards everything else, which is what stops him narrating your
+        // meetings back at you.
+        let looking = !agendaItems.filter { !$0.action.isEmpty }.isEmpty
+                      && !yesBtn.isHidden
         let words = raw.split(whereSeparator: { $0 == " " || $0 == "\n" }).count
-        guard armed || words >= 3 else { return }
+        guard armed || looking || words >= 3 else { return }
+        if looking, !armed, addressedQuestion(raw, armed: false) == nil,
+           raw.trimmingCharacters(in: .whitespaces).count > 2 {
+            route(raw.trimmingCharacters(in: .whitespaces))
+            return
+        }
         guard let question = addressedQuestion(raw, armed: armed) else {
             return          // heard, not for him — and silence is the answer
         }
@@ -2387,7 +2407,16 @@ final class App: NSObject, NSApplicationDelegate {
             break
         }
 
-        // open question: the LLM phrases an answer over verified facts
+        // open question: the LLM phrases an answer over verified facts —
+        // AND over whatever he is looking at while he asks it.
+        //
+        // The list lived only in this process, so "summarise them", "just the
+        // top one", "read me all of them" all reached the model with the
+        // items missing. It answered about whatever the facts made prominent
+        // instead. Measured: without the list, "summarise them for me" came
+        // back about Mila's local models; with it, all four in order.
+        let shown = agendaItems.filter { !$0.action.isEmpty }
+            .map { $0.say }.joined(separator: "\n")
         busy = true
         setBubble("\u{201C}" + question + "\u{201D}")
         DispatchQueue.global().async {
@@ -2395,7 +2424,7 @@ final class App: NSObject, NSApplicationDelegate {
             // serialises and pre-renders, so the later sentences queue behind
             // this one and follow it with no seam.
             var spokeAnything = false
-            let answer = Meditate.adviseStreaming(question) { sentence in
+            let answer = Meditate.adviseStreaming(question, screen: shown) { sentence in
                 DispatchQueue.main.async {
                     // The FIRST sentence is a new thought and replaces
                     // whatever was waiting. Every one after it is the rest of
@@ -2608,6 +2637,18 @@ final class App: NSObject, NSApplicationDelegate {
         if let u = URL(string: Notifier.dashboard) { NSWorkspace.shared.open(u) }
     }
 
+    /// The list, on a page, where it can be weighed instead of only heard.
+    ///
+    /// Four sentences read aloud is not a way to decide what you are actually
+    /// going to do. The report shows the same items side by side with what is
+    /// known about each, and what you leave unticked goes to the backlog —
+    /// still there, no longer offered.
+    @objc func openReport() {
+        if let u = URL(string: "http://127.0.0.1:7711/report") {
+            NSWorkspace.shared.open(u)
+        }
+    }
+
     @objc func showAbout() {
         let a = NSAlert()
         a.messageText = "Casper"
@@ -2668,6 +2709,8 @@ final class App: NSObject, NSApplicationDelegate {
         show.target = self
         m.addItem(show)
         m.addItem(NSMenuItem.separator())
+        m.addItem(withTitle: "Open the report", action: #selector(openReport),
+                  keyEquivalent: "").target = self
         m.addItem(withTitle: "Open dashboard", action: #selector(openDashboard),
                   keyEquivalent: "").target = self
         m.addItem(withTitle: "About Casper", action: #selector(showAbout),

@@ -127,6 +127,27 @@ def _talk_write(question: str, answer: str, now: Optional[float] = None) -> None
         pass          # a transcript that cannot be written is not an error
 
 
+def _screen_block(screen: str) -> str:
+    """What he is LOOKING AT, so a question about it can be answered.
+
+    The mascot shows two to four things and then had no way to talk about
+    them. "Summarise them", "just the top one", "read me all of them", "what
+    about the second" — every one of those was sent to the model with the
+    items missing, because the list lives in the app and the prompt was built
+    from the question alone. The model answered about whatever the facts made
+    prominent instead, confidently, which reads as not listening.
+    """
+    items = [l.strip() for l in (screen or "").split("\n") if l.strip()]
+    if not items:
+        return ""
+    out = ["ON HIS SCREEN RIGHT NOW, in this order. When he says 'them', "
+           "'the top one', 'the first', 'all of them' or 'the second', he "
+           "means these and nothing else:"]
+    for i, it in enumerate(items, 1):
+        out.append("  %d. %s" % (i, it))
+    return "\n".join(out) + "\n"
+
+
 def _talk_block(turns: List[Dict[str, str]]) -> str:
     if not turns:
         return ""
@@ -444,7 +465,8 @@ def ask_apple(question: str, facts: str, mem: str = "", talk: str = "",
 
 
 def advise(question: str, timeout_s: int = TIMEOUT_S,
-           model: str = MODEL, on_sentence=None) -> Dict[str, Any]:
+           model: str = MODEL, on_sentence=None,
+           screen: str = "") -> Dict[str, Any]:
     """Answer, and remember having answered.
 
     The recording happens HERE rather than at each return inside _advise,
@@ -453,14 +475,15 @@ def advise(question: str, timeout_s: int = TIMEOUT_S,
     forgetting would be worse than none: "why that one?" would sometimes mean
     the last thing he said and sometimes mean nothing.
     """
-    res = _advise(question, timeout_s, model, on_sentence)
+    res = _advise(question, timeout_s, model, on_sentence, screen)
     if res.get("ok") and res.get("speech"):
         _talk_write(question, res["speech"])
     return res
 
 
 def _advise(question: str, timeout_s: int = TIMEOUT_S,
-            model: str = MODEL, on_sentence=None) -> Dict[str, Any]:
+            model: str = MODEL, on_sentence=None,
+            screen: str = "") -> Dict[str, Any]:
     """Reason over the graded facts. Returns {speech, source, ok}."""
     q = (question or "").strip()
     if len(q) < 3:
@@ -473,7 +496,9 @@ def _advise(question: str, timeout_s: int = TIMEOUT_S,
     # This machine first. It is ~50x faster to first token than the harness,
     # and it is the only lane that keeps his answers on the laptop.
     _say_doing("thinking")
-    local = ask_local(q, facts, mem, _talk_block(_talk_read()),
+    onscreen = _screen_block(screen)
+    local = ask_local(q, facts, mem,
+                      onscreen + _talk_block(_talk_read()),
                       on_sentence=on_sentence)
     if local:
         _say_doing("")
@@ -481,7 +506,8 @@ def _advise(question: str, timeout_s: int = TIMEOUT_S,
 
     # Nothing installed? Use the model that came with the Mac.
     _say_doing("thinking")
-    apple = ask_apple(q, facts, mem, _talk_block(_talk_read()),
+    apple = ask_apple(q, facts, mem,
+                      onscreen + _talk_block(_talk_read()),
                       on_sentence=on_sentence)
     if apple:
         _say_doing("")
@@ -494,7 +520,8 @@ def _advise(question: str, timeout_s: int = TIMEOUT_S,
     # The slow lane gets the same conversation the fast one does. Two lanes
     # that remember different things is worse than neither remembering.
     prompt = ("%s\n\nFACTS (the only ground truth you have):\n%s\n%s\n\n%s\n"
-              "The user asks: %s" % (system, facts, mem, _talk_block(_talk_read()), q))
+              "The user asks: %s" % (system, facts, mem,
+                                     _screen_block(screen) + _talk_block(_talk_read()), q))
     _say_doing("thinking it through")
     try:
         r = subprocess.run(["claude", "-p", "--model", model],
@@ -531,6 +558,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(prog="meditate advise", description="Casper reasons over your work")
     ap.add_argument("question", nargs="*")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--screen", default="",
+                    help="what is on his screen right now — the list he is "
+                         "looking at. Without it 'summarise them' has no "
+                         "'them': the items live in the mascot and the model "
+                         "never saw them, so every follow-up about the card "
+                         "was answered about something else.")
     ap.add_argument("--stream", action="store_true",
                     help="print each sentence the moment it is finished, "
                          "flushed, so the mascot can speak it while the rest "
@@ -546,7 +579,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             sys.stdout.write(s + "\n")
             sys.stdout.flush()
 
-        res = advise(q, on_sentence=emit)
+        res = advise(q, on_sentence=emit, screen=a.screen)
         # The fallback lanes (the harness, then facts-only) do not stream —
         # they hand back one finished string. Emitting it here keeps ONE
         # output contract for the caller: whatever answered, the answer
@@ -556,7 +589,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             emit(res["speech"])
         return 0
 
-    res = advise(q)
+    res = advise(q, screen=a.screen)
     if a.json:
         print(json.dumps({"tool_name": "meditate_advisor", "success": res["ok"],
                           "data": res, "metadata": {"model": MODEL},
