@@ -386,6 +386,22 @@ def agenda(meditation_dir: str = MEDITATION_DIR, store_dir: str = STORE_DIR,
     The briefing picks the single highest-leverage thing to interrupt with.
     This is the other half: when a person ASKS what's on the list, they want
     the list — short, ordered, and in words they would use themselves.
+
+    Each item carries WHAT IT IS, not only what to say about it:
+
+        say        the sentence, for the mouth
+        action     the shell verb that dispatches work on it
+        kind       goal | repair | sessions | clear
+        goal       which goal file it came from, when it came from one
+        milestone  which checkbox line inside that file
+
+    Those last three used to be dropped here, and dropping them is why the
+    companion could only ever offer to START work. An item that is prose plus
+    a command string has no identity, so "yes" had exactly one possible
+    meaning — run the command — and `meditate go` dispatches agents. Saying
+    yes to close a task launched an agent instead, because there was nothing
+    on screen that knew which file or which line "it" was. A Close button
+    would not have fixed that; the identity has to survive this function.
     """
     import status as st
     d = st.gather(meditation_dir=meditation_dir, store_dir=store_dir,
@@ -405,7 +421,7 @@ def agenda(meditation_dir: str = MEDITATION_DIR, store_dir: str = STORE_DIR,
             "say": ("Some of what you told me has stopped being true"
                     + ((" — starting with: " + what) if len(what) > 20 else "")
                     + "." + n),
-            "action": "meditate fix"})
+            "action": "meditate fix", "kind": "repair"})
 
     for g in (d.get("dispatchable") or [])[:2]:
         # Goal titles are written for a file: a short name, an em-dash, then
@@ -414,18 +430,20 @@ def agenda(meditation_dir: str = MEDITATION_DIR, store_dir: str = STORE_DIR,
         nxt = _as_idea((g.get("next") or "").strip()) or "the open milestone"
         items.append({
             "say": "On %s, the next step is %s." % (title, nxt),
-            "action": "meditate go"})
+            "action": "meditate go", "kind": "goal",
+            "goal": g.get("name", ""),
+            "milestone": (g.get("next") or "").strip()})
 
     days = d.get("still_days")
     if days is None or days > 3:
         items.append({
             "say": "We haven't cleared the decks in a while — the sessions "
                    "are piling up.",
-            "action": "/meditate"})
+            "action": "/meditate", "kind": "sessions"})
 
     if not items:
         items.append({"say": "Nothing's broken and nothing's waiting on you.",
-                      "action": ""})
+                      "action": "", "kind": "clear"})
     return items[:4]
 
 
@@ -498,8 +516,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                               "data": {"items": rows}, "metadata": {},
                               "errors": []}, indent=2))
         else:
+            # Tab-separated, and the columns are fixed: the reader on the
+            # other side is Swift, splitting on tabs. Empty is empty, never
+            # absent, or column 4 becomes column 3 on the item that has no
+            # milestone.
             for r in rows:
-                print(r["say"] + "\t" + r["action"])
+                print("\t".join([r["say"], r.get("action", ""),
+                                 r.get("kind", ""), r.get("goal", ""),
+                                 r.get("milestone", "")]))
         return 0
 
     b = briefing()

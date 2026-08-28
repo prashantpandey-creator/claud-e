@@ -212,6 +212,68 @@ def test_the_kickoff_tells_an_agent_the_facts_exist():
         assert "stale" in k["prompt"], "must say what to do when a fact is wrong"
 
 
+MULTILINE_MD = """---
+name: wrapped
+title: A goal whose milestone wraps
+---
+## Milestones
+- [x] first thing
+- [ ] ship the thing — **CORRECTED 2026-08-25: was not a queue wait**
+      the rest of the note, indented, on its own line
+- [ ] ship the other thing
+"""
+
+
+def test_a_wrapped_milestone_is_read_whole_and_spoken_short():
+    """The next step is READ ALOUD, so a half-sentence is a real defect.
+
+    Only the checkbox line was parsed, so a milestone carrying an indented
+    note under it came out cut mid-word with the bold marker still open:
+    "iOS subscriptions approved — **CORRECTED 2026-08-25: was NOT a queue
+    wait, that". The full text has to survive for anything that reads it, and
+    the SPOKEN form has to stop before the note starts.
+    """
+    with tempfile.TemporaryDirectory() as t:
+        gdir, hist = _world(t, MULTILINE_MD, "wrapped.md")
+        g = gl.scan(goals_dir=gdir, history_path=hist)[0]
+        assert g["next"] == "ship the thing", g["next"]
+        ms = [m for m in g["milestones"] if not m["done"]][0]
+        assert "the rest of the note" in ms["text"], ms["text"]
+        assert "**" not in g["next"], "an unclosed bold marker gets spoken"
+
+
+def test_closing_a_milestone_ticks_exactly_one_box():
+    """Yes on a milestone must CLOSE it, not dispatch an agent at it.
+
+    Every agenda item's action was `meditate go`, which runs go.py, which
+    dispatches. So yes had one meaning and it was the wrong one: saying yes
+    to close a task started an agent and left the task open.
+    """
+    with tempfile.TemporaryDirectory() as t:
+        gdir, hist = _world(t, MULTILINE_MD, "wrapped.md")
+        before = open(os.path.join(gdir, "wrapped.md")).read()
+        r = gl.tick("wrapped", goals_dir=gdir)
+        after = open(os.path.join(gdir, "wrapped.md")).read()
+        assert r["ok"] and r["closed"] == "ship the thing", r
+        assert sum(a != b for a, b in zip(before, after)) == 1, \
+            "closing a milestone must change one character, not rewrite a file"
+        assert "the rest of the note" in after, "somebody's notes were eaten"
+        assert gl.scan(goals_dir=gdir, history_path=hist)[0]["next"] \
+            == "ship the other thing"
+
+
+def test_closing_refuses_rather_than_guessing():
+    """A tick on the wrong line looks exactly like a tick on the right one."""
+    with tempfile.TemporaryDirectory() as t:
+        gdir, hist = _world(t, MULTILINE_MD, "wrapped.md")
+        r = gl.tick("wrapped", "ship the", goals_dir=gdir)
+        assert not r["ok"] and "matches 2" in r["why"], r
+        assert gl.tick("wrapped", "nonsense", goals_dir=gdir)["ok"] is False
+        assert not gl.tick("no-such-goal", goals_dir=gdir)["ok"]
+        # ...and none of those refusals wrote anything
+        assert open(os.path.join(gdir, "wrapped.md")).read().count("[x]") == 1
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

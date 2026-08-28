@@ -89,13 +89,46 @@ final class Meditate {
 
     /// The short list of things worth attention — one spoken line each, with
     /// the command that would deal with it.
-    static func agenda() -> [(say: String, action: String)] {
+    /// One thing worth your attention, and enough about it to ACT on it.
+    ///
+    /// `say` and `action` were the whole of this. That is why the only answer
+    /// the mascot could offer was "yes", and why yes could only ever mean run
+    /// the command — which for a goal is `meditate go`, which dispatches
+    /// agents. Saying yes to close a task started one instead. The item now
+    /// carries which goal and which milestone it is, so "done" has something
+    /// to close and "look" has something to look at.
+    struct Item {
+        let say: String
+        let action: String
+        let kind: String        // goal | repair | sessions | clear
+        let goal: String
+        let milestone: String
+        /// Only a goal milestone can be ticked. Nothing else on the list is a
+        /// checkbox: a broken memory is repaired, sessions are tidied.
+        var closable: Bool { kind == "goal" && !goal.isEmpty }
+    }
+
+    static func agenda() -> [Item] {
         let out = run([skillDir + "/voice.py", "--agenda"], timeout: 40)
         return out.split(separator: "\n").compactMap { line in
-            let parts = String(line).components(separatedBy: "\t")
-            guard let first = parts.first, !first.isEmpty else { return nil }
-            return (say: first, action: parts.count > 1 ? parts[1] : "")
+            let p = String(line).components(separatedBy: "\t")
+            guard let first = p.first, !first.isEmpty else { return nil }
+            func at(_ i: Int) -> String { p.count > i ? p[i] : "" }
+            return Item(say: first, action: at(1), kind: at(2),
+                        goal: at(3), milestone: at(4))
         }
+    }
+
+    /// Close one milestone. The thing "yes" could never do.
+    static func closeMilestone(_ goal: String, _ milestone: String) -> String {
+        postAct("tick", arg: goal, value: milestone)
+            ?? "I couldn't reach the server to close it."
+    }
+
+    /// Look at one goal properly — every open milestone checked against real
+    /// evidence. goals.detail() already did this; nothing on screen reached it.
+    static func lookAt(_ goal: String) -> String {
+        postAct("look", arg: goal) ?? "I couldn't reach the server to look."
     }
 
     /// What the slow step running right now is doing. Read straight off the
@@ -197,7 +230,7 @@ final class Meditate {
         if action.hasPrefix("clear") {
             let goal = action.dropFirst("clear".count)
                 .trimmingCharacters(in: .whitespaces)
-            return postAct("clear", goal) ?? "Couldn't reach the console."
+            return postAct("clear", arg: goal) ?? "Couldn't reach the console."
         }
         let verb = action.contains("fix") ? "fix"
                  : action.contains("grade") ? "grade" : "go"
@@ -212,7 +245,12 @@ final class Meditate {
     }
 
     /// POST to the local Pulse server. nil when it isn't running.
-    static func postAct(_ verb: String, _ arg: String = "") -> String? {
+    /// `value` carries the second argument some verbs need — which milestone
+    /// to tick, for instance. Without it "tick this goal" can only ever mean
+    /// its first open milestone, which is right for the card on screen and
+    /// wrong the moment anything asks for a specific one.
+    static func postAct(_ verb: String, arg: String = "",
+                        value: String = "") -> String? {
         guard let url = URL(string: "http://127.0.0.1:7711/api/act") else { return nil }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
@@ -220,7 +258,7 @@ final class Meditate {
         req.setValue("1", forHTTPHeaderField: "X-Meditate")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try? JSONSerialization.data(
-            withJSONObject: ["action": verb, "arg": arg])
+            withJSONObject: ["action": verb, "arg": arg, "value": value])
         var result: String? = nil
         let sem = DispatchSemaphore(value: 0)
         URLSession.shared.dataTask(with: req) { data, _, _ in
@@ -1387,6 +1425,7 @@ final class App: NSObject, NSApplicationDelegate {
     var bubbleBox: NSView!
     var yesBtn: NSButton!
     var noBtn: NSButton!
+    var lookBtn: NSButton!
     var askBtn: NSButton!
     var fleetBtn: NSButton!
     var stopBtn: NSButton!
@@ -1445,7 +1484,10 @@ final class App: NSObject, NSApplicationDelegate {
     var pendingAction = ""
     /// What "Yes" means at this moment: read the list, or run the command.
     var pendingKind = ""
-    var agendaItems: [(say: String, action: String)] = []
+    var agendaItems: [Meditate.Item] = []
+    /// The item the card is currently about. pendingAction alone was a shell
+    /// string with no idea what it referred to.
+    var pending: Meditate.Item?
     var lastSpoken = ""
     var busy = false
     var muteGraceFrames = 0
@@ -1528,18 +1570,25 @@ final class App: NSObject, NSApplicationDelegate {
         //   slot 1   Not now  / Ask
         //   slot 2   Mute            (always present)
         //   slot 3   Start|Stop N    (always present, pinned right)
-        let slot = App.rowX(["Hearing", "Not now", "Muted", "Stop 88"],
+        // Five slots now. "Look" is the fifth: being shown a milestone and
+        // having no way to ask about it without leaving the card is what made
+        // this a notification rather than a conversation.
+        let slot = App.rowX(["Hearing", "Not now", "Look", "Muted", "Stop 88"],
                             font: bf, width: W)
         let offerX = slot, ctrlX = slot
-        let muteX = (slot[2].0, slot[2].1)
-        let fleetXPos = slot[3].0
-        let fleetW = slot[3].1
+        let lookX = (slot[2].0, slot[2].1)
+        let muteX = (slot[3].0, slot[3].1)
+        let fleetXPos = slot[4].0
+        let fleetW = slot[4].1
 
         yesBtn = button("Yes", x: offerX[0].0, w: offerX[0].1)
         yesBtn.target = self; yesBtn.action = #selector(sayYes)
         yesBtn.keyEquivalent = "\r"                 // the obvious answer is the default
         noBtn = button("Not now", x: offerX[1].0, w: offerX[1].1)
         noBtn.target = self; noBtn.action = #selector(sayNo)
+        lookBtn = button("Look", x: lookX.0, w: lookX.1)
+        lookBtn.target = self; lookBtn.action = #selector(lookCloser)
+        lookBtn.toolTip = "What is actually true about this one"
         askBtn = button("Ask", x: ctrlX[1].0, w: ctrlX[1].1)
         askBtn.target = self; askBtn.action = #selector(askSomething)
         fleetBtn = button("Start", x: fleetXPos, w: fleetW)
@@ -1579,7 +1628,7 @@ final class App: NSObject, NSApplicationDelegate {
             .foregroundColor: NSColor(calibratedWhite: 0.85, alpha: 1),
             .font: NSFont.systemFont(ofSize: 12, weight: .medium)])
         closeBtn.toolTip = "Hide Casper — the ghost in the menu bar brings him back"
-        [yesBtn, noBtn, askBtn, micBtn, closeBtn].forEach { root.addSubview($0!) }
+        [yesBtn, noBtn, lookBtn, askBtn, micBtn, closeBtn].forEach { root.addSubview($0!) }
         refreshMuteButton()
         showOffer(false)
         refreshMicButton()
@@ -1875,6 +1924,11 @@ final class App: NSObject, NSApplicationDelegate {
     func showOffer(_ on: Bool) {
         yesBtn.isHidden = !on
         noBtn.isHidden = !on
+        // Look only appears for something that CAN be looked at — offerFor()
+        // decides that per item. Hiding it here unconditionally when the row
+        // goes up would put it on the repair and sessions cards too, where it
+        // has nothing to open.
+        if !on { lookBtn.isHidden = true }
         askBtn.isHidden = on          // one row, two states — never four buttons
         micBtn.isHidden = on
         // Mute does NOT hide with the row. He is asking you something, out
@@ -2038,12 +2092,41 @@ final class App: NSObject, NSApplicationDelegate {
             }
             line += item.say + " "
         }
+        // The first item becomes the one on the card, and the card offers
+        // every answer that item can actually take — not just "yes".
+        //
+        // "Yes" used to be the only answer, and it meant run `meditate go`,
+        // which dispatches agents. So saying yes to close a task started one
+        // instead. A milestone is a checkbox in a file; the honest answers to
+        // being shown one are that it is finished, that you want to see the
+        // detail, or that you want someone put on it. Three different things,
+        // and only the third was ever wired.
+        pending = real[0]
         pendingAction = real[0].action
         pendingKind = "run"
-        line += real.count == 1 ? "Want me to get on it?"
-                                : "Want me to start with the first one?"
+        line += real[0].closable
+            ? "Is that done, or do you want a closer look?"
+            : (real.count == 1 ? "Want me to get on it?"
+                               : "Want me to start with the first one?")
         say(line)
-        style(yesBtn, title: "Yes, do it", accent: true)
+        offerFor(real[0])
+    }
+
+    /// Put the right buttons on the card for THIS item.
+    func offerFor(_ item: Meditate.Item) {
+        pending = item
+        pendingAction = item.action
+        pendingKind = "run"
+        // Only a goal milestone is a checkbox. A broken memory gets repaired
+        // and sessions get tidied — offering "Done" on those would be a
+        // button that lies about what it does.
+        // Yes IS the close. Dispatch already has its own button — the fleet
+        // strip's Start — so adding a second way to dispatch would be two
+        // controls for one act, and the one the owner reaches for would still
+        // be the wrong one.
+        style(yesBtn, title: item.closable ? "Done" : "Yes, do it",
+              accent: true)
+        lookBtn.isHidden = !item.closable
         showOffer(true)
     }
 
@@ -2119,6 +2202,26 @@ final class App: NSObject, NSApplicationDelegate {
         return false
     }
 
+    /// Analyse the thing on the card, here, without going anywhere.
+    ///
+    /// goals.detail() has always checked every open milestone against real
+    /// evidence — a verdict and what it was based on. Nothing on screen could
+    /// reach it, so the only way to find out whether a milestone was actually
+    /// true was to open a markdown file. Being shown a claim you cannot
+    /// interrogate is a notification, not a conversation.
+    ///
+    /// The offer stays up: looking is not answering.
+    @objc func lookCloser() {
+        noticedYou()
+        guard let item = pending, item.closable else { return }
+        let goal = item.goal
+        setBubble("Looking…")
+        DispatchQueue.global().async {
+            let out = Meditate.lookAt(goal)
+            DispatchQueue.main.async { self.say(out) }
+        }
+    }
+
     @objc func sayYes() {
         noticedYou()
         if pendingKind == "agenda" {          // "Yes, tell me" — read the list
@@ -2127,7 +2230,33 @@ final class App: NSObject, NSApplicationDelegate {
             readAgenda()
             return
         }
+        // A milestone on screen: yes means IT IS DONE, and it closes the
+        // checkbox in the file it came from.
+        //
+        // This is the whole bug the owner reported. Yes had one meaning —
+        // run pendingAction — and for a goal that action is `meditate go`,
+        // which dispatches agents. So saying yes to close a task started one
+        // instead, and the task stayed open. Dispatch is still one click
+        // away: the fleet strip's Start button, which has always meant that.
+        if let item = pending, item.closable {
+            let goal = item.goal, ms = item.milestone
+            pending = nil
+            pendingKind = ""
+            showOffer(false)
+            setBubble("Closing it…")
+            DispatchQueue.global().async {
+                let out = Meditate.closeMilestone(goal, ms)
+                DispatchQueue.main.async {
+                    if !App.didNothing(out) { self.ghost.celebrate() }
+                    self.say(out)
+                    self.agendaItems = Meditate.agenda()
+                }
+            }
+            return
+        }
+
         let action = pendingAction
+        pending = nil
         pendingKind = ""
         showOffer(false)
         setBubble("On it…")
@@ -2337,12 +2466,29 @@ final class App: NSObject, NSApplicationDelegate {
         // main thread for up to 8s every 2s — a diagnostic that freezes the
         // thing it is diagnosing is not a diagnostic.
         parts.append("server=" + serverState)
-        let vis = [("mic", micBtn), ("ask", askBtn), ("yes", yesBtn)]
+        // X, not Y. These all sit in ONE row, so they share their vertical
+        // extent and reporting it can never show the thing this line exists
+        // to catch — two controls landing on the same spot. Ask was drawn on
+        // top of Mute for a while and this report said nothing, because both
+        // were at the same Y and that was correct.
+        let vis = [("mic", micBtn), ("ask", askBtn), ("yes", yesBtn),
+                   ("no", noBtn), ("look", lookBtn), ("mute", muteBtn)]
             .map { n, b -> String in
                 let f = b?.frame ?? .zero
-                return "\(n):\(b?.isHidden == false ? "shown" : "hidden")@\(Int(f.minY))-\(Int(f.maxY))"
+                return "\(n):\(b?.isHidden == false ? "shown" : "hidden")"
+                     + "@\(Int(f.minX))-\(Int(f.maxX))"
             }.joined(separator: ",")
         parts.append("btns=" + vis)
+        // Any two SHOWN buttons sharing horizontal space is a bug, always.
+        let shown = [micBtn, askBtn, yesBtn, noBtn, lookBtn, muteBtn]
+            .compactMap { $0 }.filter { !$0.isHidden }.map { $0.frame }
+        var clash = 0
+        for i in 0..<shown.count {
+            for j in (i + 1)..<shown.count where shown[i].intersects(shown[j]) {
+                clash += 1
+            }
+        }
+        parts.append("overlap=" + String(clash))
         parts.append("root=" + String(Int(window.contentView?.bounds.height ?? 0)))
         parts.append("hotkey=" + Hotkey.shared.describe + ":" + String(Hotkey.shared.fires))
         parts.append("said=" + String(bubble.stringValue.prefix(70)))

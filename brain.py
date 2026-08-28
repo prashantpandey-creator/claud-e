@@ -921,6 +921,45 @@ class _Handler(BaseHTTPRequestHandler):
                                       else "stopped %d agent(s)" % r["count"])}
                 except Exception as e:
                     res = {"started": False, "output": "could not stop: %s" % e}
+            elif action == "tick":
+                # Close the milestone you were just told about, from wherever
+                # you are. Being told about work you cannot act on is nagging.
+                try:
+                    import goals as _g
+                    r = _g.tick(arg, str(req.get("value") or "") or None)
+                    res = {"started": r["ok"],
+                           "output": ("closed “%s” on %s — %d left"
+                                      % (r["closed"], r["goal"], r["remaining"]))
+                           if r["ok"] else r["why"]}
+                except Exception as e:
+                    res = {"started": False, "output": "could not close: %s" % e}
+            elif action == "look":
+                # Analyse it here rather than sending them to a file. detail()
+                # already runs each open milestone past check_milestone, so
+                # this is a wiring job, not a new judgement.
+                try:
+                    import goals as _g
+                    d = _g.detail(arg)
+                    if not d:
+                        res = {"started": False, "output": "no goal called %s" % arg}
+                    else:
+                        nxt = next((m for m in d.get("milestones", [])
+                                    if not m["done"]), None)
+                        bits = ["%s is %d of %d done."
+                                % (d["title"], d["done"], d["total"])]
+                        if nxt:
+                            bits.append("Next: %s."
+                                        % (nxt.get("headline") or nxt["text"]))
+                            if nxt.get("verdict"):
+                                bits.append("Checking it: %s." % nxt["verdict"])
+                            if nxt.get("evidence"):
+                                bits.append(str(nxt["evidence"])[:200])
+                        if d.get("agent", {}).get("message"):
+                            bits.append("Someone is on it: %s"
+                                        % d["agent"]["message"][:160])
+                        res = {"started": True, "output": " ".join(bits)}
+                except Exception as e:
+                    res = {"started": False, "output": "could not look: %s" % e}
             elif action in ACTIONS:
                 res = ACT_RUNNER(action, arg)
             else:

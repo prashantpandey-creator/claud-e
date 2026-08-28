@@ -52,6 +52,37 @@ HISTORY_PATH = os.path.expanduser("~/.claude/meditation/goals-history.jsonl")
 _BOX = re.compile(r"^\s*-\s*\[( |x|X)\]\s*(.+?)\s*$")
 
 
+def _headline(text: str) -> str:
+    """The speakable part of a milestone.
+
+    Milestones accumulate research notes — dates, states, build numbers, file
+    names, a paragraph of what was checked and by whom. All of that earns its
+    place in the file. None of it belongs in a sentence read aloud as "your
+    next step is...". The headline is whatever comes before the first em dash
+    or bold marker, which is where the note reliably starts.
+
+        "iOS subscriptions approved — **CORRECTED 2026-08-25: ...**  Live
+         `submit.py status`: version 1.2 state = REJECTED, ..."
+      -> "iOS subscriptions approved"
+
+    Only those markers end it. Cutting at a parenthesis as well looked tidier
+    and was wrong: "mitigation in place (scheduled prune / storage fix) and
+    survives one week" became "mitigation in place", which drops the very
+    condition that decides whether the milestone is met.
+    """
+    cut = len(text)
+    for sep in (" — ", " – ", " -- ", "**"):
+        i = text.find(sep)
+        if 3 < i < cut:
+            cut = i
+    out = text[:cut].strip().rstrip("—–-:,;").strip()
+    # A milestone with no note marker at all can still be a paragraph. Read
+    # aloud, that is a monologue; cut it at a word.
+    if len(out) > 110:
+        out = out[:110].rsplit(" ", 1)[0] + "…"
+    return out
+
+
 def _parse(path: str) -> Optional[Dict[str, Any]]:
     try:
         with open(path, encoding="utf-8", errors="replace") as f:
@@ -71,17 +102,37 @@ def _parse(path: str) -> Optional[Dict[str, Any]]:
     done = total = 0
     nxt = None
     milestones = []          # kept, so a goal can be opened and read
-    for line in body.splitlines():
+    lines = body.splitlines()
+    for i, line in enumerate(lines):
         m = _BOX.match(line)
         if not m:
             continue
         total += 1
         is_done = m.group(1).lower() == "x"
-        milestones.append({"text": m.group(2), "done": is_done})
+        # A milestone can run over several lines: the checkbox, then indented
+        # continuation under it. Reading only the first line cut this one off
+        # mid-sentence, unclosed bold and all —
+        #
+        #   "iOS subscriptions approved — **CORRECTED 2026-08-25: was NOT a
+        #    queue wait, that"
+        #
+        # and that string is not just displayed, it is what the companion
+        # SAYS OUT LOUD as your next step.
+        text = m.group(2).strip()
+        for cont in lines[i + 1:]:
+            if not cont.strip() or _BOX.match(cont):
+                break
+            if not cont.startswith((" ", "\t")):
+                break
+            text += " " + cont.strip()
+        milestones.append({"text": text, "headline": _headline(text),
+                           "done": is_done})
         if is_done:
             done += 1
         elif nxt is None:
-            nxt = m.group(2)
+            # The HEADLINE, not the whole note. The full text stays in
+            # milestones for anything that wants to read it.
+            nxt = _headline(text)
     if total == 0:
         return None
     name = meta.get("name") or os.path.basename(path)[:-3]
@@ -277,6 +328,70 @@ def detail(name: str, goals_dir: str = GOALS_DIR,
     except Exception:
         pass
     return g
+
+
+def tick(name: str, milestone: Optional[str] = None,
+         goals_dir: str = GOALS_DIR) -> Dict[str, Any]:
+    """Close a milestone from wherever you happen to be.
+
+    Until this existed, the companion could tell you a thing was your next
+    step and then had no way to let you say it was finished — you had to go
+    and find a markdown file. Being told about work you cannot act on is the
+    definition of nagging.
+
+    Flips exactly one checkbox and says which. Deliberately narrow:
+
+    - By default it closes the FIRST OPEN milestone, which is the one the
+      companion just named as your next step. That is the only one it could
+      have been talking about.
+    - Given text, it closes the open milestone that text uniquely identifies,
+      and refuses when the text matches more than one. A tick on the wrong
+      line is silent and looks exactly like a tick on the right one, so
+      guessing is not an acceptable failure mode.
+    - Only the checkbox line is touched. A milestone can carry indented
+      continuation lines beneath it and those are somebody's notes.
+
+    Reversible by hand: it changes one character in a file the owner owns.
+    """
+    rows = scan(goals_dir=goals_dir)
+    g = next((r for r in rows if r.get("name") == name), None)
+    if not g:
+        return {"ok": False, "why": "no goal called %s" % name}
+    path = g["file"]
+    try:
+        lines = open(path).read().splitlines(keepends=True)
+    except OSError as e:
+        return {"ok": False, "why": str(e)}
+
+    open_idx = [i for i, l in enumerate(lines)
+                if (m := _BOX.match(l)) and m.group(1).lower() != "x"]
+    if not open_idx:
+        return {"ok": False, "why": "everything on %s is already done" % g["title"]}
+
+    if milestone:
+        want = milestone.strip().lower()
+        hits = [i for i in open_idx
+                if want in _BOX.match(lines[i]).group(2).strip().lower()]
+        if not hits:
+            return {"ok": False, "why": "nothing open matches %r" % milestone}
+        if len(hits) > 1:
+            return {"ok": False,
+                    "why": "%r matches %d open milestones — say which"
+                           % (milestone, len(hits))}
+        i = hits[0]
+    else:
+        i = open_idx[0]
+
+    text = _headline(_BOX.match(lines[i]).group(2).strip())
+    lines[i] = lines[i].replace("[ ]", "[x]", 1)
+    try:
+        with open(path, "w") as f:
+            f.writelines(lines)
+    except OSError as e:
+        return {"ok": False, "why": str(e)}
+    left = len(open_idx) - 1
+    return {"ok": True, "goal": g["title"], "closed": text,
+            "remaining": left, "file": path}
 
 
 def kickoff(name: str, goals_dir: str = GOALS_DIR,
