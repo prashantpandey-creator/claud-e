@@ -151,6 +151,99 @@ def test_totals_are_reported():
     assert gaps["real_projects"] == 2
 
 
+def test_a_project_with_history_but_nothing_recent_is_DORMANT():
+    """"Started and left" is a THIRD state, not an absence.
+
+    Before the scan was widened, `_repo_dirs` read `_CONTAINERS[:2]` and found
+    26 of 71 real repos; `commit_history` then covered 11 projects. A project
+    untouched for 31 days reported a plain 0 and was indistinguishable from
+    one that never existed — so airun (118 commits, last touched June),
+    mila-english, bro-os, fluency-bridge and orchestrator-first were invisible
+    to the fleet. Measured after the fix: 42 repos, history for 40, 10 dormant.
+    """
+    g = projects.assessment_gaps()
+    assert "dormant" in g, "dormant is not reported at all"
+    assert isinstance(g["dormant"], list)
+    for d in g["dormant"]:
+        assert d["commits"] > 5, "a project with almost no history was called dormant"
+
+
+def test_the_scan_reaches_past_the_first_two_containers():
+    """The one-line defect: `_CONTAINERS[:2]` skipped ~/Documents and ~.
+
+    Behavioural, not a source grep — the first cut of this test grepped
+    `_repo_dirs` for the literal slice and failed on the COMMENT that explains
+    why the slice was removed. A test that reads the prose instead of the
+    behaviour tells you nothing about the behaviour.
+    """
+    sliced = projects._repo_dirs(containers=projects._CONTAINERS[:2])
+    full = projects._repo_dirs()
+    assert len(full) > len(sliced), \
+        "full scan found %d, sliced found %d — the later containers are dark" \
+        % (len(full), len(sliced))
+    assert set(sliced) <= set(full)
+
+
+def test_a_third_party_checkout_is_not_called_MY_abandoned_project():
+    """FALSIFIER for dormancy.
+
+    comfyui (4686 commits, ~/ComfyUI) topped the first dormant list. It is a
+    third-party tool that happens to sit under a scanned container — telling
+    the owner he abandoned it is a false finding, and the loudest one, since
+    the list is ranked by commit count. Same for airun: 118 of 118 commits by
+    Jed White, a clone, not abandoned work.
+    """
+    g = projects.assessment_gaps()
+    names = {d["project"] for d in g["dormant"]}
+    for theirs in ("comfyui", "airun"):
+        assert theirs not in names, "%s is someone else's repo, reported as abandoned work" % theirs
+    for d in g["dormant"]:
+        assert d.get("mine") != 0, "%s has zero commits by any identity of this machine" % d["project"]
+
+
+def test_ownership_survives_MULTIPLE_git_identities():
+    """FALSIFIER, and the reason the first rule was thrown out.
+
+    `git config user.email` returns ONE address. The owner has committed
+    under at least four — a GitHub noreply, a personal gmail, a work address,
+    and badenath@Prashants-MacBook-Pro.local. Filtering on the configured one
+    dropped `flight postman` (16 of 16 his) and `gurugpt-next` (12 of 12) from
+    the dormant list while claiming to remove only third-party checkouts:
+    10 dormant became 5, and 3 of the 5 removals were wrong.
+
+    The replacement derives identity from repo SPREAD — an address seen in >=3
+    of your repos is yours; comfyanonymous has 2416 commits in exactly one.
+    """
+    hist = projects.commit_history()
+    ids = projects._my_identities({n: projects._authors(p)
+                                   for n, p in projects._repo_dirs().items()})
+    assert len(ids) >= 2, "only %d identity derived — the multi-email case is unhandled" % len(ids)
+    for own in ("flight-postman", "gurugpt-next"):
+        h = hist.get(own)
+        if h:
+            assert h["commits_mine"] == h["commits"], \
+                "%s: %s of %s commits credited — an identity was missed" \
+                % (own, h["commits_mine"], h["commits"])
+
+
+def test_unknowable_ownership_does_NOT_exclude():
+    """not-checkable is not false. With too few repos to derive an identity,
+    commits_mine is None and the repo stays in — the same rule grade() follows
+    when it cannot reach a source."""
+    assert projects._my_identities({"solo": {"a@b.c": 9}}) == set()
+    hist = projects.commit_history(containers=[], ttl_s=0)
+    assert hist == {} or all(h["commits_mine"] is None for h in hist.values())
+
+
+def test_a_container_name_is_not_reported_as_dormant():
+    """`bin`, `claude-sync` and `skills` are directories that hold work. The
+    same _is_product rule that guards the unassessed list guards this one."""
+    g = projects.assessment_gaps()
+    for d in g["dormant"]:
+        assert projects._is_product(d["project"]), \
+            "%s is a container, not a dormant product" % d["project"]
+
+
 def test_live_machine_reports_without_crashing():
     g = projects.assessment_gaps()
     print("       live: %d tracked, %d real, %d assessed, %d unassessed, %d not-projects"

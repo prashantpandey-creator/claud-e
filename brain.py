@@ -284,6 +284,11 @@ def state() -> Dict[str, Any]:
         "briefing": _casper_briefing(),
         "timing": _casper_timing(),
         "projects": _projects_rollup(),
+        # What was started and left. Git-derived, so it moves on the scale of
+        # days — but until it was in this payload the fleet, the page and
+        # Casper could none of them see a project the owner had not opened
+        # this month, and 8 of them were invisible.
+        "dormant": _dormant_cached(),
         "projects_window_days": _window_days_cached(),
         "facts_unattributed": getattr(_pj_rollup, "facts_unattributed", 0),
         "fleet_running": _fleet_running(),
@@ -304,6 +309,29 @@ def state() -> Dict[str, Any]:
     except Exception:
         d["brief"] = []
     return d
+
+
+_DORMANT_CACHE: Dict[str, Any] = {"at": 0.0, "data": []}
+
+
+def _dormant_cached(ttl_s: float = 3600.0) -> List[Dict[str, Any]]:
+    """Started and left — cached for an hour.
+
+    Costs ~8s cold: it walks 42 repos and shells out per repo for the commit
+    count, the author list and the last subject. The window it reports is 30
+    days wide, so an hour of staleness cannot change an answer. Uncached in a
+    4-second poll it would have been the entire cost of /api/state, the same
+    way _casper_briefing was before it was capped.
+    """
+    if time.time() - _DORMANT_CACHE["at"] < ttl_s and _DORMANT_CACHE["data"]:
+        return _DORMANT_CACHE["data"]
+    try:
+        import projects as _pj
+        cards = _pj.revival_cards(limit=8)
+    except Exception:
+        cards = []
+    _DORMANT_CACHE.update({"at": time.time(), "data": cards})
+    return cards
 
 
 _BRIEFING_CACHE: Dict[str, Any] = {"at": 0.0, "data": None}

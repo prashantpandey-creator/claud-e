@@ -242,6 +242,9 @@ def window_days(root: Optional[str] = None) -> int:
     return max(1, int(oldest / 86400))
 
 
+_DIRS_CACHE: Dict[str, Any] = {"at": 0.0, "data": {}}
+
+
 def _repo_dirs(containers: Optional[List[str]] = None,
                max_depth: int = 2) -> Dict[str, str]:
     """cleaned-name -> path for every REAL repo under the containers.
@@ -250,8 +253,22 @@ def _repo_dirs(containers: Optional[List[str]] = None,
     as a repo would count the same commits twice (wt-glyph-sweep is a branch
     of purangpt-next, not a second project). Only a .git DIRECTORY counts.
     """
+    # Memoised for the default scan. Three call sites hit this uncached, one
+    # of them (repo_of_sha) inside a per-sha loop that shells out once per
+    # repo — so widening 26 repos to 42 cost compute_metrics 9.7s -> 14.2s
+    # warm, and pushed test_metrics.py past its 150s cap. The walk itself is
+    # ~10ms; the cost was doing it again and again.
+    if containers is None and max_depth == 2 \
+            and time.time() - _DIRS_CACHE["at"] < 300.0 and _DIRS_CACHE["data"]:
+        return _DIRS_CACHE["data"]
     out: Dict[str, str] = {}
-    roots = containers if containers is not None else _CONTAINERS[:2]
+    # ALL containers, not _CONTAINERS[:2]. The slice scanned only ~/projects
+    # and ~/.claude/skills, so ~/Documents and ~ were never looked at.
+    # Measured 2026-08-26: 71 real repos on disk, 26 found. The ones it missed
+    # are the OLD ones — airun (118 commits, last touched June), mila-english
+    # (180, July), bro-os, fluency-bridge, orchestrator-first. A project the
+    # scan cannot see is a project the fleet can never grow.
+    roots = containers if containers is not None else _CONTAINERS
     frontier = [(r, 0) for r in roots if os.path.isdir(r)]
     while frontier:
         base, depth = frontier.pop()
@@ -280,7 +297,10 @@ def _repo_dirs(containers: Optional[List[str]] = None,
                     out["__exact_" + name] = e.path
             elif not os.path.exists(git) and depth + 1 < max_depth:
                 frontier.append((e.path, depth + 1))    # container, look inside
-    return {k: v for k, v in out.items() if not k.startswith("__exact_")}
+    out = {k: v for k, v in out.items() if not k.startswith("__exact_")}
+    if containers is None and max_depth == 2:
+        _DIRS_CACHE.update({"at": time.time(), "data": out})
+    return out
 
 
 def _git_out(repo: str, *args: str) -> str:
@@ -294,6 +314,40 @@ def _git_out(repo: str, *args: str) -> str:
 
 
 _HISTORY_CACHE: Dict[str, Any] = {"at": 0.0, "data": {}}
+_SHORTLOG = re.compile(r"^\s*(\d+)\s+(.*?)\s+<(.*?)>\s*$")
+
+
+def _authors(repo: str) -> Dict[str, int]:
+    """email -> commits authored, across all branches of one repo."""
+    out: Dict[str, int] = {}
+    for line in _git_out(repo, "shortlog", "-sne", "--branches").splitlines():
+        m = _SHORTLOG.match(line)
+        if m:
+            out[m.group(3).lower()] = out.get(m.group(3).lower(), 0) + int(m.group(1))
+    return out
+
+
+def _my_identities(per_repo: Dict[str, Dict[str, int]], min_repos: int = 3) -> set:
+    """Which git identities belong to the person using this machine?
+
+    Derived from the data, not configured. `git config user.email` was tried
+    first and was WRONG: it returns one address, and the owner has committed
+    under at least four (a GitHub noreply, a personal gmail, a work address,
+    and `badenath@Prashants-MacBook-Pro.local`). Filtering on the single
+    configured one threw out `flight postman` — 16 of 16 commits his — while
+    claiming to remove only third-party checkouts.
+
+    The signal that actually separates them: YOUR identities appear across
+    MANY of your repos; a third party's appear in the one checkout you cloned.
+    comfyanonymous has 2416 commits in exactly one repo here; the owner's
+    laptop identity shows up in dozens. So: an identity seen in >= min_repos
+    distinct repos is this machine's.
+    """
+    seen: Dict[str, int] = {}
+    for authors in per_repo.values():
+        for email in authors:
+            seen[email] = seen.get(email, 0) + 1
+    return {e for e, n in seen.items() if n >= min_repos}
 
 
 def commit_history(recent_days: int = 30,
@@ -311,6 +365,7 @@ def commit_history(recent_days: int = 30,
             and _HISTORY_CACHE["data"]:
         return _HISTORY_CACHE["data"]
     out: Dict[str, Dict[str, Any]] = {}
+    per_repo: Dict[str, Dict[str, int]] = {}
     for name, path in _repo_dirs(containers).items():
         # --branches, not HEAD: the checked-out branch here sat at Jul 21
         # while a month of work lived on worktree branches in the same repo.
@@ -320,9 +375,17 @@ def commit_history(recent_days: int = 30,
         recent = _git_out(path, "rev-list", "--count",
                           "--since=%d.days" % recent_days, "--branches")
         since = _git_out(path, "log", "--max-parents=0", "--format=%as")
+        per_repo[name] = _authors(path)
         out[name] = {"commits": int(total),
                      "commits_recent": int(recent or 0),
                      "since": (since.splitlines() or [""])[-1]}
+    mine_set = _my_identities(per_repo)
+    for name, row in out.items():
+        # None = cannot tell whose repo this is (too few repos to derive an
+        # identity from). Never read as 0 — a repo is not filtered on a
+        # question git could not answer.
+        row["commits_mine"] = (sum(c for e, c in per_repo[name].items()
+                                   if e in mine_set) if mine_set else None)
     if containers is None:
         _HISTORY_CACHE.update({"at": _t.time(), "data": out})
     return out
@@ -743,6 +806,94 @@ def _is_product(name: str) -> bool:
     return name.lower() not in _container_names()
 
 
+def _readme_headline(path: str) -> Optional[str]:
+    """The first line of README prose — what this repo says it is."""
+    for cand in ("README.md", "readme.md", "README.MD", "Readme.md"):
+        f = os.path.join(path, cand)
+        if not os.path.exists(f):
+            continue
+        try:
+            text = open(f, errors="ignore").read()
+        except OSError:
+            return None
+        for line in text.splitlines():
+            line = line.strip()
+            if not line or line.startswith(("#", "!", "[", "<", "---", "===", "|", "```")):
+                continue
+            return re.sub(r"[*_`]", "", line)[:110]
+        for line in text.splitlines():          # H1 only, no prose under it
+            if line.startswith("# "):
+                return line[2:].strip()[:110]
+    return None
+
+
+def _boilerplate_headlines(dirs: Optional[Dict[str, str]] = None) -> set:
+    """README opening lines that say nothing, derived rather than listed.
+
+    "This is a Next.js project bootstrapped with create-next-app" is what the
+    generator wrote, not what the owner is building. The rule that separates
+    it from a real description is the same one that separates a third-party
+    checkout from your own work: a line that appears in MORE THAN ONE repo
+    came from a template. No pattern list to maintain, and it adapts to
+    whatever scaffolds this machine actually uses.
+    """
+    seen: Dict[str, int] = {}
+    for path in (dirs if dirs is not None else _repo_dirs()).values():
+        h = _readme_headline(path)
+        if h:
+            seen[h] = seen.get(h, 0) + 1
+    return {h for h, n in seen.items() if n > 1}
+
+
+def revival_cards(names: Optional[List[str]] = None,
+                  limit: Optional[int] = None) -> List[Dict[str, Any]]:
+    """What you started and left, in the words already on disk.
+
+    MEASURED FIRST, 2026-08-26, because the obvious design does not work:
+    deriving goals from unchecked `- [ ]` boxes found milestones in 3 of 19
+    repos, and two of those three (carrymate, flight postman) had the SAME 47
+    boxes — a copy-pasted README template, not direction. A goal synthesised
+    from that is fiction with a citation.
+
+    What survived the same check: the last commit subject, present and
+    specific in 8 of 8 dormant repos ("EN/RU language switcher — full Russian
+    localization", "gate trust verify behind admin role"). So a card carries
+    only quoted evidence — last commit, its age, the README's own first line
+    when that line is not boilerplate — and NEVER a synthesised goal. The tool
+    surfaces what is there; deciding where a project goes next stays with the
+    owner, which is also the only place the answer actually exists.
+    """
+    dirs = _repo_dirs()
+    hist = commit_history()
+    boiler = _boilerplate_headlines(dirs)
+    if names is None:
+        names = [d["project"] for d in assessment_gaps()["dormant"]]
+    out: List[Dict[str, Any]] = []
+    for name in names:
+        path = dirs.get(name)
+        if not path:
+            continue          # no repo on disk — nothing to quote, so no card
+        h = hist.get(name, {})
+        last = _git_out(path, "log", "-1", "--format=%s\x1f%ar\x1f%as", "--branches")
+        subject, ago, when = (last.split("\x1f") + ["", "", ""])[:3]
+        head = _readme_headline(path)
+        out.append({
+            "project": name,
+            "path": path,
+            "commits": h.get("commits"),
+            "mine": h.get("commits_mine"),
+            "idle": ago,
+            "last_commit": subject,
+            "last_commit_date": when,
+            # None means the README said nothing of its own — reported as a
+            # gap, not filled in with the scaffold's sentence.
+            "what": None if (not head or head in boiler) else head,
+            "has_goal": False,
+        })
+    out.sort(key=lambda c: -(c["commits"] or 0))
+    return out[:limit] if limit else out
+
+
 def assessment_gaps(rows: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     """Where is meditate silent about your work, and why?
 
@@ -762,9 +913,15 @@ def assessment_gaps(rows: Optional[List[Dict[str, Any]]] = None) -> Dict[str, An
                      not quality, and silence about the other ~20 products
                      reads as health.
 
-    Dormant projects are never reported. Zero sessions means you are not
-    working there, and manufacturing work out of silence is the same
-    can't-say-I-don't-know defect this tool keeps finding in itself.
+      dormant      — real commit history, nothing in the last 30 days. Reported
+                     since 2026-08-26. Not a nag: it is the answer to "what did
+                     I start and leave", which the tool could not previously
+                     give because a project it never scanned and a project with
+                     no activity both printed the same zero.
+
+    A project with zero SESSIONS is still never listed as unassessed — silence
+    in the transcripts is not a task. Dormancy is read from git, which is the
+    durable record; sessions only reach back ~23 days.
     """
     if rows is None:
         rows = rollup()          # returns a LIST of rows, not an envelope
@@ -781,6 +938,31 @@ def assessment_gaps(rows: Optional[List[Dict[str, Any]]] = None) -> Dict[str, An
         elif sessions:
             unassessed.append({"project": name, "sessions": sessions,
                                "facts": p.get("facts") or 0})
+    # DORMANT — real history, nothing recent. Before this they read as a plain
+    # zero and were indistinguishable from a project that never existed, so
+    # the fleet could never see them. Measured 2026-08-26 once the scan was
+    # widened: 10 of them, airun at 118 commits and untouched since June.
+    # "Started and left" is a THIRD state, not an absence.
+    dormant = []
+    try:
+        hist = commit_history()
+        for name, h in hist.items():
+            if (h.get("commits") or 0) <= 5 or (h.get("commits_recent") or 0):
+                continue
+            if not _is_product(name):
+                continue
+            # Somebody else's checkout that happens to live under the same
+            # container. `commits_mine` None means git could not say — and an
+            # unanswerable question is not a no, so it stays in.
+            mine = h.get("commits_mine")
+            if mine == 0:
+                continue
+            dormant.append({"project": name, "commits": h["commits"],
+                            "mine": mine, "since": h.get("since") or ""})
+        dormant.sort(key=lambda d: -d["commits"])
+    except Exception:
+        dormant = []
+
     unassessed.sort(key=lambda g: -g["sessions"])
     not_products.sort(key=lambda g: -g["sessions"])
     return {
@@ -789,13 +971,38 @@ def assessment_gaps(rows: Optional[List[Dict[str, Any]]] = None) -> Dict[str, An
         "assessed": assessed,
         "unassessed": unassessed,
         "not_projects": not_products,
+        "dormant": dormant,
     }
 
 
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(prog="meditate projects", description="Per-project attention and tasks")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--revive", action="store_true",
+                    help="what you started and left — dormant repos, quoted from disk")
     args = ap.parse_args(argv)
+    if args.revive:
+        cards = revival_cards()
+        if args.json:
+            print(json.dumps({"tool_name": "meditate_projects_revive", "success": True,
+                              "data": {"count": len(cards), "cards": cards},
+                              "metadata": {}, "errors": []}, indent=2))
+            return 0
+        if not cards:
+            print("Nothing dormant. Every repo with history has been touched in 30 days.")
+            return 0
+        print("Started and left — %d repos, no commit in 30 days" % len(cards))
+        print("=" * 72)
+        for c in cards:
+            print("\n  %s  · %s commits · last touched %s"
+                  % (c["project"], c["commits"], c["idle"]))
+            print("    stopped at: %s" % c["last_commit"][:80])
+            if c["what"]:
+                print("    it says:    %s" % c["what"][:80])
+            print("    %s" % c["path"])
+        print("\n  These are quotes from each repo, not a plan. To give one a yardstick:")
+        print("    write ~/claude-sync/goals/<name>.md  (see `meditate goals`)")
+        return 0
     rows = rollup()
     if args.json:
         print(json.dumps({"tool_name": "meditate_projects", "success": True,

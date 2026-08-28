@@ -345,7 +345,13 @@ def _check_assessment() -> Dict[str, Any]:
                 "unassessed": len(g["unassessed"]),
                 "not_projects": len(g["not_projects"]),
                 "top_unassessed": [x["project"] for x in g["unassessed"][:5]],
-                "needs_alias": [x["project"] for x in g["not_projects"][:5]]}
+                "needs_alias": [x["project"] for x in g["not_projects"][:5]],
+                # Started and left — real history, nothing in 30 days. Added
+                # 2026-08-26 with the widened scan; before it, a repo the tool
+                # never looked at and a repo with no activity both read as 0.
+                "dormant": len(g["dormant"]),
+                "top_dormant": ["%s (%d)" % (x["project"], x["commits"])
+                                for x in g["dormant"][:5]]}
     except Exception as e:
         return {"checked": False, "error": str(e)[:120]}
 
@@ -487,6 +493,31 @@ def main(argv: List[str]) -> int:
         print(f"  [{status:>7}]  STILLNESS.md — {age:.1f} days old (threshold: {MAX_AGE_DAYS}d)")
     else:
         print(f"  [MISSING]  STILLNESS.md — run /meditate to create")
+
+    # Assessment / warranty / coverage were computed into the JSON and never
+    # printed — so a person running `doctor` saw a green report while ~25
+    # products had no yardstick and half of MEMORY.md was unfalsifiable.
+    a = d.get("assessment", {})
+    if a.get("checked"):
+        print(f"\nAssessment:")
+        print(f"  {a['real_projects']} products · {a['assessed']} with a goal · "
+              f"{a['unassessed']} without · {a['not_projects']} name-fragments")
+        if a.get("top_unassessed"):
+            print(f"  no yardstick: {', '.join(a['top_unassessed'])}")
+        if a.get("dormant"):
+            print(f"  started and left ({a['dormant']}): {', '.join(a.get('top_dormant', []))}")
+
+    w = d.get("warranty", {})
+    if w.get("checked"):
+        print(f"\nMEMORY.md warranty:")
+        print(f"  {w['lines']} lines · {w['world']} re-checkable ({w['world_pct']}%) · "
+              f"{w['unwarrantied']} unwarrantied · {w['ungraded']} ungraded · "
+              f"{w['broken']} broken")
+
+    c = d.get("coverage", {})
+    if c.get("auto_linkable"):
+        print(f"\nMemory dirs: {len(c['auto_linkable'])} unlinked but auto-linkable "
+              f"(meditate paths --link-memory)")
 
     print(f"\nOutput:")
     o = d["output"]

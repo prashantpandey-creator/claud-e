@@ -205,6 +205,13 @@ def _facts_from_server(timeout_s: float = 4.0) -> Optional[str]:
     for r in (d.get("projects") or [])[:4]:
         lines.append("PROJECT %s: %s messages of your attention, %s facts."
                      % (r.get("project"), r.get("messages"), r.get("facts")))
+    # Started and left. Quoted from each repo's own last commit — Casper can
+    # name where the work stopped, which is the only honest thing to say about
+    # a project nobody has written a goal for.
+    for c in (d.get("dormant") or [])[:3]:
+        lines.append("LEFT UNFINISHED %s: %s commits, untouched %s. Stopped at: %s"
+                     % (c.get("project"), c.get("commits"), c.get("idle"),
+                        (c.get("last_commit") or "")[:90]))
     return "\n".join(lines) or None
 
 
