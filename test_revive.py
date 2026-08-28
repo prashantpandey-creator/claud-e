@@ -207,6 +207,20 @@ def test_the_kickoff_hands_down_NO_task():
     assert cards[0]["last_commit"][:30] in k, "the kickoff drops the one real signal"
 
 
+
+def test_a_bad_project_name_is_REFUSED_not_reported_as_started():
+    """revive detaches with Popen, so the runner can never see the launch
+    fail. Live check on 2026-08-29: POSTing revive with a name that is not a
+    project answered `started: true, opening a window on zzz-not-dormant`.
+    A started:true over nothing is the lie didNothing() exists to catch, so
+    the name is checked before anything detaches."""
+    import brain
+    calls = []
+    r = brain._default_runner("revive", "zzz-definitely-not-a-project")
+    assert r["started"] is False, "a nonexistent project reported as opening"
+    assert "isn't one of the projects you left" in r["output"]
+
+
 def _agenda_items():
     """The agenda in a CLEAN state, so the dormant item is actually present.
 

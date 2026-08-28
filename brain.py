@@ -80,6 +80,19 @@ def _default_runner(action: str, arg: str) -> Dict[str, Any]:
         return {"started": True,
                 "output": "grading in background — numbers refresh as it lands"}
     if action == "revive":
+        # Check the name BEFORE detaching. Popen cannot see a failure, so
+        # without this the console answered "opening a window on
+        # zzz-not-dormant" for a project that does not exist — started:true
+        # over nothing, which is the exact lie didNothing() exists to catch.
+        # The lookup is cached, so this costs nothing.
+        try:
+            import projects as _pj
+            if arg and arg not in {c["project"] for c in _pj.revival_cards()}:
+                return {"started": False,
+                        "output": "%s isn't one of the projects you left — "
+                                  "nothing to open" % arg}
+        except Exception:
+            pass          # cannot check is not "no"; fall through and try
         # launch_claude polls up to 45s for the TUI to come up, so this can
         # never finish inside the 25s cap below. Reporting "still running,
         # check the fleet" would be a wrong instruction, not just a slow one.
