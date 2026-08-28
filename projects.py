@@ -894,6 +894,51 @@ def revival_cards(names: Optional[List[str]] = None,
     return out[:limit] if limit else out
 
 
+def revival_kickoff(card: Dict[str, Any]) -> str:
+    """The prompt that reopens a project nobody has touched in months.
+
+    It deliberately does NOT hand down a task. Nothing on this machine knows
+    what the next step in a dormant repo is — that was measured: unchecked
+    checkboxes existed in 3 of 19 repos and two of those three held the same
+    copied template. So the kickoff gives the agent the three facts that ARE
+    known (how long it sat, where it stopped, where it lives) and asks it to
+    read the repo and report where it stands. Discovery, in the repo, by
+    someone looking — not a plan invented here and dressed as one.
+    """
+    name = card.get("project") or "this project"
+    return (
+        "This repo has been sitting untouched for %s. I want to know whether "
+        "it is worth picking back up.\n\n"
+        "What is known, and it is not much:\n"
+        "  - last commit: %s\n"
+        "  - %s commits in total, the last of them on %s\n"
+        "%s"
+        "\nRead the repo — README, recent commits, whatever build or test it "
+        "has — and tell me three things: what it actually does today, what "
+        "state it was left in mid-stream, and what the single next step would "
+        "be if it were picked up. If it looks finished, or abandoned for a "
+        "good reason, say that instead; do not manufacture work. Do not "
+        "change any code until we have agreed what the next step is."
+        % ((card.get("idle") or "a while").replace(" ago", ""),
+           card.get("last_commit") or "(unknown)",
+           card.get("commits"), card.get("last_commit_date") or "(unknown)",
+           ("  - the README says: %s\n" % card["what"]) if card.get("what") else "")
+    ).replace("this project", name)
+
+
+def open_revival(project: str) -> Dict[str, Any]:
+    """Open a real interactive session in a dormant repo. Returns what happened."""
+    cards = {c["project"]: c for c in revival_cards()}
+    card = cards.get(project)
+    if not card:
+        # A name that is not on the dormant list is not an error to guess at.
+        return {"opened": False, "reason": "%s is not a dormant project" % project}
+    import launch
+    ok = launch.launch_claude(card["path"], revival_kickoff(card),
+                              "revive:" + project)
+    return {"opened": bool(ok), "project": project, "cwd": card["path"]}
+
+
 def assessment_gaps(rows: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     """Where is meditate silent about your work, and why?
 
@@ -980,7 +1025,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--revive", action="store_true",
                     help="what you started and left — dormant repos, quoted from disk")
+    ap.add_argument("--revive-open", metavar="PROJECT",
+                    help="open a session in one of them")
     args = ap.parse_args(argv)
+    if args.revive_open:
+        r = open_revival(args.revive_open)
+        print("opened a session in %s" % r["cwd"] if r["opened"]
+              else "could not open: %s" % r.get("reason", "terminal did not come up"))
+        return 0 if r["opened"] else 1
     if args.revive:
         cards = revival_cards()
         if args.json:

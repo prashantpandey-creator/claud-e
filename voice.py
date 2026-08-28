@@ -372,6 +372,35 @@ def briefing(meditation_dir: str = MEDITATION_DIR, store_dir: str = STORE_DIR,
                             "before the next big push." % how_long,
                 "action": "/meditate", "kind": "still", "next": ""}
 
+    # 5. nothing is broken and nothing is waiting — so reach for what was
+    # started and left. This rung is where it belongs: an eight-week-old
+    # repo must never interrupt a repair or a live milestone, but it is far
+    # better than "nothing needs you", which was a lie every time eight
+    # unfinished projects were sitting there unseen.
+    try:
+        import projects as pj
+        from distill_speech import distill_dormant
+        cards = pj.revival_cards(limit=3)
+        if cards:
+            # the one you left MOST RECENTLY — closest to still being in your
+            # head, so the cheapest to pick back up. Oldest-first would open
+            # with whatever you abandoned hardest.
+            card = sorted(cards, key=lambda c: c.get("last_commit_date") or "",
+                          reverse=True)[0]
+            line = distill_dormant(card)
+            if line:
+                rest = ("" if len(cards) == 1 else
+                        " There are %d others like it." % (len(cards) - 1))
+                # "revive <project>", not a CLI string. Casper's perform()
+                # maps an action to a verb by substring and falls through to
+                # "go" — so "meditate projects --revive" would have made YES
+                # launch the entire fleet on unrelated goals.
+                return {"headline": _greeting(meditation_dir) + line + rest,
+                        "action": "revive " + (card.get("project") or ""),
+                        "kind": "dormant", "next": card.get("project", "")}
+    except Exception:
+        pass
+
     return {"headline": _greeting(meditation_dir) +
                         "Nothing needs you. What I know holds up, the work's "
                         "moving, and I've got nothing to flag.",
@@ -440,6 +469,26 @@ def agenda(meditation_dir: str = MEDITATION_DIR, store_dir: str = STORE_DIR,
             "say": "We haven't cleared the decks in a while — the sessions "
                    "are piling up.",
             "action": "/meditate", "kind": "sessions"})
+
+    # One thing you started and left, last — never ahead of live work, and
+    # only ever one, so the list stays a list of what needs you rather than
+    # an inventory of everything you have ever begun. It is parkable like
+    # any other item (keyed per project, see backlog.key_for), which is what
+    # makes surfacing old work an offer instead of a nag.
+    try:
+        import projects as pj
+        from distill_speech import distill_dormant
+        cards = pj.revival_cards(limit=3)
+        if cards:
+            card = sorted(cards, key=lambda c: c.get("last_commit_date") or "",
+                          reverse=True)[0]
+            line = distill_dormant(card)
+            if line:
+                items.append({"say": line,
+                              "action": "revive " + (card.get("project") or ""),
+                              "kind": "dormant", "project": card.get("project", "")})
+    except Exception:
+        pass
 
     # Anything he has looked at and deliberately put down stops being
     # offered. Without this the companion has no memory of his judgement: it

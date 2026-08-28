@@ -135,6 +135,98 @@ def test_no_card_claims_a_goal_it_does_not_have():
         assert c["has_goal"] is False
 
 
+
+# ---------------------------------------------------------------------------
+# the wiring — surfacing it is useless if "yes" cannot act on it
+# ---------------------------------------------------------------------------
+
+def test_the_action_is_a_VERB_the_runner_knows():
+    """The defect this catches was live for one commit.
+
+    Casper's perform() maps an action string to a verb by substring and falls
+    through to "go" when nothing matches — and "go" launches the whole fleet.
+    So an action of "meditate projects --revive" meant saying YES to "pick
+    bro-os back up?" would have started agents on four unrelated goals. The
+    action has to NAME a verb brain.ACTIONS can dispatch.
+    """
+    import brain
+    dormant = [it for it in _agenda_items() if it.get("kind") == "dormant"]
+    assert dormant, "no dormant item on a clean agenda — this test proves nothing"
+    for it in dormant:
+        verb = (it.get("action") or "").split(" ")[0]
+        assert verb in brain.ACTIONS, \
+            "%r is not a verb the runner knows — it would fall through to go" % verb
+        assert (it.get("action") or "").split(" ", 1)[1:], \
+            "the verb carries no project — revive would not know which repo"
+
+
+def test_the_swift_side_matches_that_verb_by_PREFIX_not_substring():
+    """Casper is the one consumer written in another language, so its copy of
+    the mapping cannot be checked by importing it. Reading the source is the
+    honest second best — and prefix, not contains, is the whole point: the
+    fall-through is a fleet launch."""
+    import os
+    src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "mascot", "Casper.swift"), errors="ignore").read()
+    assert 'action.hasPrefix("revive")' in src, \
+        "Casper has no revive branch — YES on a dormant offer launches the fleet"
+
+
+def test_each_dormant_project_parks_SEPARATELY():
+    """backlog.key_for returns the bare kind for non-goal items, so all eight
+    dormant projects would have shared one key: putting bro-os down would
+    silence flight-postman and six others, permanently and invisibly."""
+    import backlog
+    a = backlog.key_for({"kind": "dormant", "project": "bro-os"})
+    b = backlog.key_for({"kind": "dormant", "project": "fluency-bridge"})
+    assert a != b, "two different projects share a backlog key: %r" % a
+    assert "bro-os" in a
+
+
+def test_the_offer_is_asked_ONCE():
+    """distill_dormant used to end with 'Want to pick it back up?' and Casper
+    appends its own offer — two questions in a row, and the button answers
+    only one of them."""
+    from distill_speech import distill_dormant
+    line = distill_dormant({"project": "x", "idle": "6 weeks ago",
+                            "last_commit": "did a thing"})
+    assert "?" not in line, "the sentence asks its own question: %r" % line
+
+
+def test_the_kickoff_hands_down_NO_task():
+    """Nothing on this machine knows the next step in a dormant repo — that
+    was measured. The kickoff must ask the agent to find out, and must not
+    invent one."""
+    import projects as pj
+    cards = pj.revival_cards(limit=1)
+    if not cards:
+        return
+    k = pj.revival_kickoff(cards[0])
+    assert "do not manufacture work" in k.lower()
+    assert "ago ago" not in k and "for  " not in k
+    assert cards[0]["last_commit"][:30] in k, "the kickoff drops the one real signal"
+
+
+def _agenda_items():
+    """The agenda in a CLEAN state, so the dormant item is actually present.
+
+    voice.agenda() caps at four and live work outranks dormancy, so on a busy
+    machine the real list has no dormant row at all — and a test that loops
+    over it passes by finding nothing. That is a vacuous green, which is the
+    same defect as every other one in this file: an absent answer read as a
+    present one.
+    """
+    import tempfile
+    import voice
+    d, s_, g = tempfile.mkdtemp(), tempfile.mkdtemp(), tempfile.mkdtemp()
+    with open(os.path.join(d, "STILLNESS.md"), "w") as f:
+        f.write("# fresh\n")
+    try:
+        return voice.agenda(meditation_dir=d, store_dir=s_, goals_dir=g)
+    except Exception:
+        return []
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

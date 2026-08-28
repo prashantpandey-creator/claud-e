@@ -238,6 +238,16 @@ final class Meditate {
                 .trimmingCharacters(in: .whitespaces)
             return postAct("clear", arg: goal) ?? "Couldn't reach the console."
         }
+        // Pick a dormant project back up. Prefix + argument, like clear —
+        // NOT substring matching, because the fall-through below is "go" and
+        // "go" launches the whole fleet. An action string that does not name
+        // a verb this function knows becomes a fleet launch, which is how
+        // "yes, reopen bro-os" would have started work on four other goals.
+        if action.hasPrefix("revive") {
+            let project = action.dropFirst("revive".count)
+                .trimmingCharacters(in: .whitespaces)
+            return postAct("revive", arg: project) ?? "Couldn't reach the console."
+        }
         let verb = action.contains("fix") ? "fix"
                  : action.contains("grade") ? "grade" : "go"
         if let viaServer = postAct(verb) { return viaServer }
@@ -2168,8 +2178,11 @@ final class App: NSObject, NSApplicationDelegate {
                 self.lastSpoken = b.headline
                 self.pendingAction = b.action
                 self.ghost.startle()      // notice it before saying it
-                let offer = b.action.isEmpty ? "" :
-                    "  Want me to \(b.action.contains("fix") ? "fix it" : "get someone on it")?"
+                // Interpolation cannot span lines, so name the phrase first.
+                let doWhat = b.action.contains("fix") ? "fix it"
+                           : b.action.hasPrefix("revive") ? "pick it back up"
+                           : "get someone on it"
+                let offer = b.action.isEmpty ? "" : "  Want me to \(doWhat)?"
                 if !b.action.isEmpty { self.pendingKind = "run" }
                 // Stamp the HEADLINE, which is what alreadyDelivered() checks.
                 // say() stamped "headline + offer", so the check never matched
@@ -2183,7 +2196,9 @@ final class App: NSObject, NSApplicationDelegate {
                 // the last offer wrote — a dispatch question under a button
                 // reading "Stop tracking".
                 self.style(self.yesBtn,
-                           title: b.action.contains("fix") ? "Yes, fix it" : "Yes",
+                           title: b.action.contains("fix") ? "Yes, fix it"
+                                : b.action.hasPrefix("revive") ? "Yes, open it"
+                                : "Yes",
                            accent: true)
                 self.showOffer(!b.action.isEmpty)
             }

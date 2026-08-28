@@ -136,3 +136,62 @@ def distill_portfolio(rows: List[Dict[str, Any]]) -> str:
         parts.append("%d fact%s across your work stopped checking out"
                      % (rot, "s" if rot != 1 else ""))
     return "; ".join(parts).capitalize() + "."
+
+
+def _spoken_commit(subject: str) -> str:
+    """A commit subject, said out loud.
+
+    Commit subjects are written for `git log`: a conventional-commit prefix, a
+    scope in brackets, then the real sentence, then often an em-dash aside.
+    "fix(security): gate trust verify/flag/recalculate behind admin role" is
+    unspeakable as-is; "gate trust verify behind admin role" is the thought.
+
+    It is a QUOTE, so the wording is not rewritten — only the notation around
+    it is removed. Rewriting would make it a claim about what the work was,
+    and the whole point of quoting is that nobody has to trust the tool's
+    reading of it.
+    """
+    import re
+    s = (subject or "").strip()
+    s = re.sub(r"^\w+(\([^)]*\))?!?:\s*", "", s)      # feat(scope): / fix!:
+    for stop in (" — ", " – ", " -- "):               # the aside starts here
+        i = s.find(stop)
+        if 12 < i:
+            s = s[:i]
+            break
+    s = re.sub(r"\([^)]*\)", "", s)                   # leftover parentheticals
+    s = re.sub(r"\s{2,}", " ", s).strip(" .;,-")
+    return s
+
+
+def _cap(s: str) -> str:
+    """Uppercase the first letter only. `.capitalize()` also lowercases
+    the rest, which flattens a name like GuruGPT into Gurugpt."""
+    return s[:1].upper() + s[1:]
+
+
+def distill_dormant(card: Dict[str, Any]) -> str:
+    """One spoken sentence about a project that was started and left.
+
+    Rule 1 of this module — STUCK beats PROGRESS — applied to the oldest case
+    there is. The commit count stays out of the sentence: it is a count, and
+    by rule 3 the cost is what matters, which here is the time.
+
+    The frame is "you stopped at: <quote>" rather than a rewrite, because a
+    commit subject may be a verb phrase ("gate trust verify behind admin
+    role") or a noun phrase ("EN/RU language switcher") and no single
+    generated sentence reads well for both. Quoting reads well for both and
+    is also the honest form.
+    """
+    name = (card.get("project") or "").replace("-", " ")
+    idle = (card.get("idle") or "").replace(" ago", "").strip()
+    what = _spoken_commit(card.get("last_commit") or "")
+    if not name:
+        return ""
+    when = ("for %s" % idle) if idle else "for a while"
+    if not what:
+        return "%s has been sitting %s." % (_cap(name), when)
+    # No offer here. Every caller appends its own — Casper adds "Want me to
+    # get someone on it?" after the headline, so building one in produced two
+    # questions in a row.
+    return "%s has been sitting %s — you stopped at: %s." % (_cap(name), when, what)

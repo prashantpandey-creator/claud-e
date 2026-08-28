@@ -45,6 +45,12 @@ ACTIONS = {
     # look" forever, because a milestone that does not exist can never tick.
     "clear": lambda arg: ["python3", os.path.join(SKILL_DIR, "fleet.py"), "clear"]
                          + ([arg] if arg else []),
+    # Pick a dormant project back up. Without this verb the mascot could
+    # surface eight abandoned repos and do nothing about any of them —
+    # "yes" had no meaning, which is exactly the dead end the agenda
+    # docstring warns about a few files over.
+    "revive": lambda arg: ["python3", os.path.join(SKILL_DIR, "projects.py"),
+                           "--revive-open", arg or ""],
     "tell":  lambda arg: ["python3", os.path.join(SKILL_DIR, "inbox.py"), "send"]
                          + (arg.split(" ", 1) if " " in (arg or "") else [arg or "", ""]),
 }
@@ -65,13 +71,23 @@ def _default_runner(action: str, arg: str) -> Dict[str, Any]:
     it detaches and says so. Never push/deploy: those gates stay with the
     owner in the terminal."""
     _note({"go": "starting the fleet", "fix": "repairing what broke",
-           "grade": "re-checking every memory"}.get(action, "running " + action))
+           "grade": "re-checking every memory",
+           "revive": "opening the project you left"}.get(action, "running " + action))
     cmd = ACTIONS[action](arg)
     if action == "grade":
         subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
                          stderr=subprocess.DEVNULL, start_new_session=True)
         return {"started": True,
                 "output": "grading in background — numbers refresh as it lands"}
+    if action == "revive":
+        # launch_claude polls up to 45s for the TUI to come up, so this can
+        # never finish inside the 25s cap below. Reporting "still running,
+        # check the fleet" would be a wrong instruction, not just a slow one.
+        subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True)
+        return {"started": True,
+                "output": "opening a window on %s — it takes a few seconds to "
+                          "come up" % (arg or "it")}
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=25)
         out = (r.stdout or r.stderr or "").strip() or "(no output)"

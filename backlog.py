@@ -39,6 +39,12 @@ def key_for(item: Dict[str, str]) -> str:
     ms = (item.get("milestone") or "").strip()
     if kind == "goal":
         return "goal:%s:%s" % (goal, ms)
+    if kind == "dormant":
+        # There are eight of these, one per project you started and left.
+        # Keying them all on the kind would mean putting bro-os down also
+        # silences flight-postman and the six others — permanently, and
+        # invisibly. Identity is the project.
+        return "dormant:%s" % (item.get("project") or goal or "").strip()
     # repair and sessions are singular — there is only ever one of each on the
     # list, so the kind IS the identity.
     return kind or "unknown"
