@@ -63,6 +63,56 @@ def test_cli_envelope_does_not_apply_by_default():
     assert cd.current_interval_s() == before, "plist was modified without --apply"
 
 
+
+def test_the_heartbeat_survives_the_machine_SLEEPING():
+    """StartInterval alone silently loses every firing slept through.
+
+    launchd.plist(5), verbatim: "If the system is asleep during the time of
+    the next scheduled interval firing, that interval will be missed due to
+    shortcomings in kqueue(3)." No catch-up. Measured from goals-history.jsonl
+    on 2026-08-29: 60 heartbeat runs in 7 days where hourly would be ~168, and
+    dead stretches of 60.9h, 20.8h, 20.7h, 15.4h.
+
+    StartCalendarInterval is the opposite — "launchd will start the job the
+    next time the computer wakes up". Both keys together: the interval stays
+    the tunable cadence, the calendar entries are a floor.
+    """
+    import plistlib, os
+    p = os.path.expanduser("~/Library/LaunchAgents/com.meditate.grade.plist")
+    if not os.path.exists(p):
+        return                      # not installed here; nothing to assert
+    d = plistlib.load(open(p, "rb"))
+    assert d.get("StartCalendarInterval"), \
+        "no calendar floor — a sleeping machine loses the heartbeat entirely"
+    assert d.get("StartInterval"), "the tunable cadence was dropped"
+
+
+def test_tuning_the_cadence_does_not_DROP_the_sleep_floor():
+    """cadence.apply rewrites the plist. It mutates the loaded dict rather
+    than rebuilding it, which is what keeps the calendar key alive — this
+    pins that, because rebuilding would silently undo the sleep fix on the
+    next tune."""
+    import plistlib, tempfile, os
+    import cadence
+    with tempfile.NamedTemporaryFile(suffix=".plist", delete=False) as f:
+        plistlib.dump({"Label": "x", "ProgramArguments": ["/bin/true"],
+                       "StartInterval": 3600,
+                       "StartCalendarInterval": [{"Hour": 7, "Minute": 7}]}, f)
+        path = f.name
+    try:
+        old = cadence.PLIST
+        cadence.PLIST = path
+        try:
+            cadence.apply(7200)
+        finally:
+            cadence.PLIST = old
+        d = plistlib.load(open(path, "rb"))
+        assert d.get("StartCalendarInterval"), "tuning the cadence wiped the sleep floor"
+        assert d["StartInterval"] == 7200
+    finally:
+        os.unlink(path)
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

@@ -274,9 +274,26 @@ try:
         interval = int(plistlib.load(fh).get("StartInterval") or interval)
 except (OSError, ValueError, plistlib.InvalidFileException):
     pass
+# StartInterval ALONE loses every firing the machine sleeps through, and the
+# man page is explicit about it: "If the system is asleep during the time of
+# the next scheduled interval firing, that interval will be missed due to
+# shortcomings in kqueue(3)." No catch-up, ever. Measured on this machine
+# 2026-08-29 from goals-history.jsonl: 60 heartbeat runs in 7 days where
+# hourly would be ~168, with dead stretches of 60.9h, 20.8h, 20.7h and 15.4h.
+#
+# StartCalendarInterval behaves the opposite way — "launchd will start the job
+# the next time the computer wakes up", coalescing whatever was missed into
+# one run. So keep BOTH: the interval stays the tunable cadence for a machine
+# that is awake (cadence.py rewrites it in place and preserves this key), and
+# the calendar entries are a floor that guarantees a pass after any sleep.
+# Neither key WAKES the machine; that would need pmset, which is the owner's
+# call and not something an installer should be scheduling.
+floor = [{"Hour": h, "Minute": 7} for h in (7, 19)]
 plistlib.dump({"Label": "com.meditate.grade",
                "ProgramArguments": ["/bin/bash", "-lc", cmd],
-               "StartInterval": interval, "RunAtLoad": False},
+               "StartInterval": interval,
+               "StartCalendarInterval": floor,
+               "RunAtLoad": False},
               open(plist, "wb"))
 print("  [ok]  heartbeat interval: %ds%s" % (
     interval, "" if interval == 21600 else " (preserved from cadence tuning)"))
