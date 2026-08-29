@@ -83,7 +83,7 @@ void main(){
   <div id="sections"></div>
 
   <div class="sec"><h3>GOAL TRAJECTORIES <span style="color:var(--faint)">every stamped snapshot</span></h3>
-    <div class="body"><svg id="chart" width="1016" height="230"></svg>
+    <div class="body"><svg id="chart" style="width:100%"></svg>
     <div class="basis" id="chart-basis"></div></div></div>
 
   <div class="sec"><h3>LIVE</h3><div class="body feed" id="feed"></div></div>
@@ -102,7 +102,7 @@ const MARK = [
 "   ╚═════╝ ╚══════╝╚═╝  ╚═╝  ╚═════╝  ╚═════╝        ╚══════╝"].join("\n");
 document.getElementById("mark").textContent = MARK;
 const esc = s => { const d=document.createElement("i"); d.textContent = s==null?"":String(s); return d.innerHTML; };
-let SECTIONS = [], STATE = {}, uni = null;
+let SECTIONS = [], STATE = {}, uni = null, LAST_SERIES = null;
 
 async function act(action, arg){
   const say = document.getElementById("say");
@@ -147,38 +147,97 @@ function drawChart(series){
   const svg = d3.select("#chart"); svg.selectAll("*").remove();
   const names = Object.keys(series.goals||{});
   if(!names.length) return;
-  const W = 1016, Hh = 230, M = {t:12,r:150,b:22,l:30};
-  const pts = [];
-  names.forEach(n => (series.goals[n]||[]).forEach(p => {
-    const t = new Date(p.ts + (p.ts.endsWith("Z")?"":"Z"));
-    // ts carried through: the tooltip reads p.ts and the first cut dropped
-    // it here, so every point threw undefined.slice and the whole chart
-    // vanished while the data behind it was perfect.
-    if(!isNaN(t)) pts.push({n, t, ts:p.ts, pct: p.total ? 100*p.done/p.total : 0,
-                            done:p.done, total:p.total});
-  }));
-  if(!pts.length) return;
-  const x = d3.scaleTime().domain(d3.extent(pts, d=>d.t)).range([M.l, W-M.r]);
-  const y = d3.scaleLinear().domain([0,100]).range([Hh-M.b, M.t]);
-  const color = d3.scaleOrdinal(names, ["#E3B140","#c98f2e","#9c7bd8","#4fb08a","#d3653f","#7fa9d8"]);
+
+  // SMALL MULTIPLES, not six lines on one axis.
+  //
+  // The first cut drew all six as overlapping steps in near-identical golds
+  // and it hid the thing that matters: the records are wildly uneven.
+  // market-ready has 14 snapshots over 3 days; three goals were last measured
+  // on 08-23. Sharing one axis drew those three flat to today, which reads as
+  // "still being tracked at this level" when the truth is "nobody has
+  // measured this in six days" — an absence rendered as a present value, the
+  // one defect this tool exists to refuse. Each goal gets its own row, its
+  // line stops where its record stops, and the gap after it is drawn as a
+  // dotted rule that says so.
+  const rows = names.map(n => {
+    const seen = new Set();
+    const pts = (series.goals[n]||[]).map(p => {
+      const t = new Date(p.ts + (p.ts.endsWith("Z")?"":"Z"));
+      return isNaN(t) ? null : {t, ts:p.ts, done:p.done, total:p.total,
+                                pct: p.total ? 100*p.done/p.total : 0};
+    }).filter(Boolean).sort((a,b)=>a.t-b.t)
+      // identical consecutive snapshots are the same fact recorded twice;
+      // plotting both stacks dots and invents activity
+      .filter(p => { const k = p.done+"/"+p.total+"@"+(+p.t); if(seen.has(k)) return false;
+                     seen.add(k); return true; });
+    return {n, pts};
+  }).filter(r => r.pts.length);
+  if(!rows.length) return;
+
+  const all = rows.flatMap(r=>r.pts);
+  const now = new Date();
+  // WIDTH FROM THE CONTAINER, not a constant. Hardcoded 1016 put the
+  // done/total and "last measured" labels off the right edge in an 800px
+  // pane — the two facts each row exists to deliver, invisible.
+  const W = Math.max(560, (document.querySelector("#chart").parentElement.clientWidth || 1016));
+  const narrow = W < 780;
+  const RH = 34, M = {t:8, r: narrow?152:210, b:20, l: narrow?150:196};
+  const Hh = M.t + rows.length*RH + M.b;
+  svg.attr("height", Hh).attr("width", W)
+     .attr("viewBox", `0 0 ${W} ${Hh}`).attr("preserveAspectRatio","xMinYMin meet");
+  const x = d3.scaleTime().domain([d3.min(all,d=>d.t), now]).range([M.l, W-M.r]);
   svg.append("g").attr("class","axis").attr("transform",`translate(0,${Hh-M.b})`)
      .call(d3.axisBottom(x).ticks(5).tickFormat(d3.timeFormat("%b %-d")));
-  svg.append("g").attr("class","axis").attr("transform",`translate(${M.l},0)`)
-     .call(d3.axisLeft(y).ticks(3).tickFormat(d=>d+"%"));
-  const line = d3.line().x(d=>x(d.t)).y(d=>y(d.pct)).curve(d3.curveStepAfter);
-  names.forEach(n => {
-    const g = pts.filter(p=>p.n===n).sort((a,b)=>a.t-b.t);
-    if(!g.length) return;
-    svg.append("path").datum(g).attr("fill","none").attr("stroke",color(n))
-       .attr("stroke-width",1.6).attr("opacity",.9).attr("d",line);
-    g.forEach(p => svg.append("circle").attr("cx",x(p.t)).attr("cy",y(p.pct)).attr("r",2.4)
-       .attr("fill",color(n)).append("title").text(`${n} — ${p.done}/${p.total} on ${p.ts.slice(0,10)}`));
-    const last = g[g.length-1];
-    svg.append("text").attr("x", W-M.r+8).attr("y", y(last.pct)+3).attr("fill",color(n))
-       .attr("font-size",11).text(`${n} ${last.done}/${last.total}`);
+
+  rows.forEach((r,i) => {
+    const top = M.t + i*RH, y = d3.scaleLinear().domain([0,100]).range([top+RH-9, top+5]);
+    const last = r.pts[r.pts.length-1];
+    const done = last.done >= last.total;
+    const col = done ? "#4fb08a" : "#E3B140";
+    const g = svg.append("g");
+
+    g.append("text").attr("x", M.l-10).attr("y", top+RH/2+1).attr("text-anchor","end")
+     .attr("fill","#d8d4cc").attr("font-size", narrow?11:12)
+     .text(narrow && r.n.length>20 ? r.n.slice(0,19)+"\u2026" : r.n)
+     .append("title").text(r.n);
+    g.append("line").attr("x1",M.l).attr("x2",W-M.r).attr("y1",y(0)).attr("y2",y(0))
+     .attr("stroke","#1a1611");
+
+    // the measured span, then the unmeasured tail as a dotted rule
+    g.append("path").datum(r.pts).attr("fill","none").attr("stroke",col)
+     .attr("stroke-width",1.8)
+     .attr("d", d3.line().x(d=>x(d.t)).y(d=>y(d.pct)).curve(d3.curveStepAfter));
+    const staleDays = (now - last.t)/864e5;
+    if(staleDays > 1.5){
+      g.append("line").attr("x1",x(last.t)).attr("x2",x(now))
+       .attr("y1",y(last.pct)).attr("y2",y(last.pct))
+       .attr("stroke",col).attr("stroke-width",1).attr("opacity",.35)
+       .attr("stroke-dasharray","2,4");
+    }
+
+    r.pts.forEach((p,j) => {
+      const grew = j>0 && p.total > r.pts[j-1].total;
+      g.append("circle").attr("cx",x(p.t)).attr("cy",y(p.pct)).attr("r", grew?3.4:2.2)
+       .attr("fill", grew ? "#000" : col).attr("stroke", col).attr("stroke-width", grew?1.6:0)
+       .append("title").text(`${r.n} — ${p.done}/${p.total}` +
+         (grew ? ` · scope widened from ${r.pts[j-1].total}` : "") + ` · ${p.ts.slice(0,10)}`);
+    });
+
+    const when = staleDays < 1 ? "today"
+               : staleDays < 2 ? "yesterday"
+               : `${Math.round(staleDays)}d ago`;
+    g.append("text").attr("x", W-M.r+14).attr("y", top+RH/2-3)
+     .attr("fill",col).attr("font-size",12).text(`${last.done}/${last.total}`);
+    g.append("text").attr("x", W-M.r+14).attr("y", top+RH/2+11)
+     .attr("fill","#57524a").attr("font-size",10)
+     .text(done ? "done · " + when : "measured " + when);
   });
+
+  const stale = rows.filter(r => (now - r.pts[r.pts.length-1].t)/864e5 > 1.5).length;
   document.getElementById("chart-basis").textContent =
-    `${series.points} stamped snapshots across ${names.length} goals · steps, not curves — the points are the record`;
+    `${series.points} stamped snapshots · one row per goal, steps not curves — the points are the record · ` +
+    `hollow dot = scope widened · dotted tail = unmeasured since` +
+    (stale ? ` (${stale} of ${rows.length} goals)` : "");
 }
 
 function initCore(){
@@ -203,6 +262,7 @@ function initCore(){
     requestAnimationFrame(loop);
   })();
   addEventListener("resize", () => {
+    if(LAST_SERIES) drawChart(LAST_SERIES);
     const nw = cv.clientWidth||1016; renderer.setSize(nw,h,false); uni.uAspect.value = nw/h;
   });
 }
@@ -227,7 +287,7 @@ async function load(){
     fetch("/api/state",{headers:H}).then(r=>r.json())]);
   SECTIONS = t.sections || [];
   renderSections(); applyState(s);
-  if(t.series) drawChart(t.series);
+  if(t.series){ LAST_SERIES = t.series; drawChart(t.series); }
 }
 
 document.addEventListener("click", e => {
