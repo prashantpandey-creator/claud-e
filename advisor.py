@@ -55,7 +55,13 @@ SYSTEM = (
     "answer.\n"
     "3. Lead with what you'd do, then the one reason. End with a concrete "
     "next step when there is one, phrased as an offer, not an order.\n"
-    "4. Never suggest pushing or deploying — that call stays with them.\n"
+    # Rule 4 used to read "Never suggest pushing or deploying — that call
+    # stays with them." His standing instruction since 2026-08-25 is the
+    # opposite: push automatically when the suite is green, do not ask. A
+    # persona written FOR him was overriding an instruction FROM him, so the
+    # invented rule is gone rather than argued with.
+    "4. Say what you would do, including shipping it, when his own rules say "
+    "to. Destructive or irreversible steps still go back to him.\n"
     "5. Talk in ideas and work, not metrics. 'The marketplace payment key is "
     "still missing' beats 'repair_items=23'. If a number IS the point, say it "
     "in words a person would speak.\n"
@@ -64,6 +70,124 @@ SYSTEM = (
     "7. Address them as ADDRESS_TERM, at most ONCE, and only where you hand "
     "the decision back. Every sentence is grovelling; once is a person.\n"
 )
+
+
+# ---- the creed: how HE decides ----------------------------------------------
+#
+# Measured 2026-08-29. The FACTS block is 1,400 characters of pure state —
+# goals, counts, projects, what broke. Casper knew everything about WHAT WAS
+# HAPPENING and nothing about HOW THE OWNER DECIDES. Not one of the 39
+# `type: feedback` memories reached him; probed for "never", "Groq",
+# "worktree", "push", "terse", "subtract", "proof" — all seven absent.
+#
+# That is the whole distance between an assistant that reports and a twin
+# that judges. The 39 are not trivia: they are his corrections, each written
+# down with the reason it was given. Two more are `type: user` — who he is.
+#
+# And the hand-written persona above was not merely silent about them, it
+# CONTRADICTED one. Rule 4 says "Never suggest pushing or deploying — that
+# call stays with them", while his standing instruction since 2026-08-25 is
+# "push automatically when the suite is green — do not ask". One of those was
+# guessed for him and one was measured from him, and the guess was winning.
+#
+# Stable-ordered on purpose. The creed is byte-identical between questions,
+# so it sits in front of the volatile facts and stays in the prompt cache
+# (the KV-cache finding: a stable creed leading the prompt ran 76-94% warm).
+# 41 lines, ~1,800 tokens, re-read only when a memory file changes.
+
+_CREED_CACHE: Dict[str, Any] = {"key": None, "text": ""}
+
+
+def _creed_files() -> List[str]:
+    """Every memory that records HIS judgment or who he is."""
+    import glob
+    try:
+        from nidra_bridge import _memory_dirs
+        dirs = _memory_dirs()
+    except Exception:
+        return []
+    out = []
+    for d in dirs:
+        out.extend(glob.glob(os.path.join(d, "*.md")))
+    return sorted(out)
+
+
+def _creed(max_chars: int = 9000) -> str:
+    """His standing rules, in his own words, one line each.
+
+    ONLY `type: feedback` — an instruction he gave, with the reason he gave
+    it. Not `project` or `reference` (facts about the work, already in the
+    FACTS block), and deliberately NOT `type: user`.
+
+    `user` was in the first cut and was pulled straight back out. It holds
+    observations ABOUT him rather than instructions FROM him, and one of the
+    two on this machine is a private read of a pricing-anxiety pattern traced
+    to a worry he voiced once about how clients see him. Casper speaks
+    ALOUD, unprompted, on a timer, in whatever room the laptop is in. A
+    behavioural note about its owner is not a rule for deciding and is not
+    something a talking mascot should ever be one sampling step away from
+    saying out loud. If he wants the twin to hold that, it is his call to
+    make explicitly, not a default someone else picked for him.
+
+    Keyed on the newest mtime across the files, so a rule he writes down
+    today reaches the next question and nothing is re-read in between.
+    """
+    files = _creed_files()
+    if not files:
+        return ""
+    try:
+        key = "%d:%f" % (len(files), max(os.path.getmtime(f) for f in files))
+    except OSError:
+        key = None
+    if key and _CREED_CACHE["key"] == key:
+        return _CREED_CACHE["text"]
+
+    import re as _re
+    lines: List[str] = []
+    for f in files:
+        try:
+            head = open(f, errors="ignore").read(1400)
+        except OSError:
+            continue
+        t = _re.search(r"^\s*type:\s*(\w+)", head, _re.M)
+        if not t or t.group(1) != "feedback":
+            continue
+        d = _re.search(r"^description:\s*(.+)$", head, _re.M)
+        if not d:
+            continue
+        line = d.group(1).strip().strip('"').strip()
+        if len(line) > 200:
+            line = line[:199].rsplit(" ", 1)[0] + "…"
+        lines.append("- " + line)
+    if not lines:
+        return ""
+    text = "\n".join(lines)
+    while len(text) > max_chars and lines:
+        lines.pop()                    # a budget that truncates, never guesses
+        text = "\n".join(lines)
+    if key:
+        _CREED_CACHE.update({"key": key, "text": text})
+    return text
+
+
+def _system(base: str = "") -> str:
+    """SYSTEM, then his own standing rules, which OUTRANK it.
+
+    The precedence line is not decoration. Without it a contradiction between
+    a rule someone wrote for him and a rule he actually gave resolves by
+    whichever the model weighs more — and the hand-written one is stated more
+    forcefully, so it wins. Said plainly, the measured rule wins.
+    """
+    sys_text = base or SYSTEM
+    creed = _creed()
+    if not creed:
+        return sys_text
+    return (sys_text + "\n\n"
+            "HOW HE WORKS — his own standing instructions, written down when "
+            "he gave them. These are HIS words about his own judgement, so "
+            "where any of them conflicts with anything above, HIS RULE WINS "
+            "and the rule above is out of date. Speak and decide the way "
+            "these describe; never recite them back at him.\n" + creed)
 
 
 # ---- what was just said -----------------------------------------------------
@@ -388,7 +512,7 @@ def ask_local(question: str, facts: str, mem: str = "", talk: str = "",
         else:
             return None
     prompt = ("%s\n\nFACTS (the only ground truth you have):\n%s\n%s\n\n%s\n"
-              "The user asks: %s" % (SYSTEM, facts, mem, talk, question))
+              "The user asks: %s" % (_system(), facts, mem, talk, question))
     body = json.dumps({"model": model, "prompt": prompt, "stream": True,
                        "keep_alive": "30m",
                        "options": {"num_predict": 120, "temperature": 0.4}}).encode()
@@ -450,7 +574,7 @@ def ask_apple(question: str, facts: str, mem: str = "", talk: str = "",
     if not os.access(binary, os.X_OK):
         return None
     prompt = ("%s\n\nFACTS (the only ground truth you have):\n%s\n%s\n\n%s\n"
-              "The user asks: %s" % (SYSTEM, facts, mem, talk, question))
+              "The user asks: %s" % (_system(), facts, mem, talk, question))
     said: List[str] = []
     try:
         p = subprocess.Popen([binary, "--afm"], stdin=subprocess.PIPE,
@@ -521,9 +645,9 @@ def _advise(question: str, timeout_s: int = TIMEOUT_S,
         return {"speech": apple[:700], "source": "apple", "ok": True}
     try:
         import address as _addr
-        system = SYSTEM.replace("ADDRESS_TERM", _addr.term())
+        system = _system(SYSTEM.replace("ADDRESS_TERM", _addr.term()))
     except Exception:
-        system = SYSTEM.replace("ADDRESS_TERM", "sir")
+        system = _system(SYSTEM.replace("ADDRESS_TERM", "sir"))
     # The slow lane gets the same conversation the fast one does. Two lanes
     # that remember different things is worse than neither remembering.
     prompt = ("%s\n\nFACTS (the only ground truth you have):\n%s\n%s\n\n%s\n"
