@@ -107,7 +107,7 @@ def test_edge_install_preserves_a_tuned_heartbeat_interval():
 def test_edge_installer_refuses_launchctl_under_a_fake_home():
     """A test that runs install.sh must not hijack the REAL heartbeat.
 
-    Measured 2026-08-23: launchd's registration for com.meditate.grade pointed
+    Measured 2026-08-23: launchd's registration for com.meditate.rounds pointed
     at /private/var/folders/.../T/tmp.E9vntUA5b6/Library/LaunchAgents/ — a
     temp dir that no longer exists. A suite ran install.sh with HOME set to a
     tmpdir, install.sh loaded the plist from there, and that replaced the live
@@ -213,7 +213,7 @@ def test_edge_plist_is_valid_xml():
     inside <string>; launchd tolerated it, every parser choked, and the
     heartbeat silently stopped running for 13.7h."""
     import plistlib
-    p = os.path.expanduser("~/Library/LaunchAgents/com.meditate.grade.plist")
+    p = os.path.expanduser("~/Library/LaunchAgents/com.meditate.rounds.plist")
     if not os.path.exists(p):
         return
     with open(p, "rb") as f:
@@ -231,7 +231,7 @@ def test_edge_heartbeat_runs_all_silent_stages():
     # older copy of the chain — which is exactly how it ended up with 6 steps
     # while the installer generated 7.
     import plistlib
-    plist = os.path.expanduser("~/Library/LaunchAgents/com.meditate.grade.plist")
+    plist = os.path.expanduser("~/Library/LaunchAgents/com.meditate.rounds.plist")
     if os.path.exists(plist):
         cmd = plistlib.load(open(plist, "rb"))["ProgramArguments"][-1]
         assert "heartbeat.sh" in cmd, \

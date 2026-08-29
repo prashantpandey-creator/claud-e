@@ -45,8 +45,24 @@ STEPS=(
   "dashboard.py"
   "go.py --auto"
   "census.py ping"
+  # LAST BUT ONE, and --quick on purpose. It judges the state this pass just
+  # left behind, and writes a verdict to doctor.jsonl that the tree reads —
+  # without that it is one more thing printed into a log nothing reads, which
+  # is how 45 identical osascript failures went unseen. --quick skips the
+  # 52-file suite: 11s instead of ~200s, and an hourly suite run would spawn
+  # 52 python processes 24 times a day against the owner's own sessions.
+  "doctor.py --quick"
   "voice.py --notify --quiet"
 )
+
+# Steps whose nonzero exit is a FINDING, not a breakage.
+#
+# doctor returns 1 when the install is unhealthy — correct for a person
+# running it, wrong for this chain, which is asking "did the step run". Left
+# alone it logged `FAILED doctor.py --quick exit=1` every hour for two open
+# issues, and an hourly false FAILED is exactly what buries a real one. The
+# finding still lands: doctor writes it to doctor.jsonl and the tree reads it.
+TOLERANT="doctor.py"
 
 run_all() {
     local started failed=0 rc t0 t1
@@ -58,7 +74,9 @@ run_all() {
         $PY "$SKILL_DIR"/$step 2>&1
         rc=$?
         t1=$(date +%s)
-        if [ "$rc" -ne 0 ]; then
+        if [ "$rc" -ne 0 ] && [[ " $TOLERANT " == *" ${step%% *} "* ]]; then
+            echo "── ${step}  found something (exit=${rc}) — see doctor.jsonl"
+        elif [ "$rc" -ne 0 ]; then
             failed=$((failed + 1))
             # A nonzero exit is the whole reason for this file. Loud, on its
             # own line, greppable: `grep FAILED heartbeat.log`.

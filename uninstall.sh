@@ -19,7 +19,7 @@ SETTINGS="$HOME/.claude/settings.json"
 HOOK_DST="$HOME/.claude/hooks/meditate-hook.sh"
 MEDITATION_DIR="$HOME/.claude/meditation"
 BIN="$HOME/.local/bin/meditate"
-PLIST="$HOME/Library/LaunchAgents/com.meditate.grade.plist"
+PLIST="$HOME/Library/LaunchAgents/com.meditate.rounds.plist"
 
 PURGE=0
 DRY=0
@@ -41,7 +41,7 @@ echo
 
 # ---- 1. the background pass -------------------------------------------------
 if [ -f "$PLIST" ]; then
-    say "stop and remove the hourly self-check (com.meditate.grade)"
+    say "stop and remove the hourly self-check (com.meditate.rounds)"
     run launchctl unload "$PLIST" 2>/dev/null || true
     run rm -f "$PLIST"
 else

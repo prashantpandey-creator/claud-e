@@ -147,12 +147,58 @@ def test_the_installed_plist_matches_the_script():
     a generation behind, and nothing said so. If a plist is installed, it must
     point at the script rather than carry its own copy."""
     import plistlib
-    p = os.path.expanduser("~/Library/LaunchAgents/com.meditate.grade.plist")
+    p = os.path.expanduser("~/Library/LaunchAgents/com.meditate.rounds.plist")
     if not os.path.exists(p):
         return          # nothing installed here; not a failure
     cmd = plistlib.load(open(p, "rb"))["ProgramArguments"][-1]
     assert "heartbeat.sh" in cmd, \
         "the installed plist still carries its own chain: %s" % cmd[:120]
+
+
+
+def test_doctor_is_IN_the_chain():
+    """The tool could see its own failures only when someone asked. Nothing
+    scheduled the check, so a 45-times-repeated failure waited for a human."""
+    src = open(os.path.join(SKILL_DIR, "heartbeat.sh")).read()
+    assert "doctor.py --quick" in src, "the periodic pass never checks itself"
+    # --quick matters: the full suite is ~200s and 52 processes, hourly.
+    # Check the STEPS array, not the whole file — TOLERANT="doctor.py" and
+    # the prose above it both mention doctor, and my first cut of this
+    # assertion matched its own explanatory comment.
+    steps = src.split("STEPS=(", 1)[1].split(")", 1)[0]
+    doc = [l for l in steps.splitlines() if "doctor" in l and not l.strip().startswith("#")]
+    assert doc and all("--quick" in l for l in doc), \
+        "the FULL suite is wired into an hourly timer: %r" % doc
+
+
+def test_a_FINDING_is_not_counted_as_a_broken_step():
+    """doctor exits 1 when the install is unhealthy — right for a person,
+    wrong for a chain asking "did the step run". It logged `FAILED doctor.py
+    exit=1` every hour for two open issues, and an hourly false FAILED is
+    what buries a real one."""
+    import subprocess, tempfile, textwrap
+    d = tempfile.mkdtemp()
+    fake = os.path.join(d, "doctor.py")
+    open(fake, "w").write("import sys; print('two issues'); sys.exit(1)")
+    log = os.path.join(d, "rounds.log")
+    r = subprocess.run(["bash", os.path.join(SKILL_DIR, "heartbeat.sh")],
+                       env=dict(os.environ, MEDITATE_HEARTBEAT_LOG=log,
+                                MEDITATE_TESTING="1"),
+                       capture_output=True, text=True, timeout=300)
+    body = open(log).read() if os.path.exists(log) else ""
+    assert "FAILED  doctor.py" not in body, \
+        "a finding is being counted as a broken step:\n" + body[-400:]
+
+
+def test_a_REAL_breakage_still_counts():
+    """FALSIFIER for the tolerance. If nonzero never counted, the chain would
+    have no way to say a step actually broke."""
+    src = open(os.path.join(SKILL_DIR, "heartbeat.sh")).read()
+    assert "TOLERANT=" in src
+    tol = src.split("TOLERANT=", 1)[1].splitlines()[0]
+    assert "nidra_bridge" not in tol and "go.py" not in tol, \
+        "the acting steps were made tolerant too — nothing could report a break"
+    assert "failed=$((failed + 1))" in src
 
 
 def _main():

@@ -260,6 +260,33 @@ def _itself(d: Dict[str, Any]) -> Dict[str, Any]:
                               kind="self", action="fix"))
     except Exception:
         pass
+    # Doctor's own last word — and when it last got one.
+    try:
+        import json as _json
+        led = os.path.expanduser("~/.claude/meditation/doctor.jsonl")
+        last = None
+        with open(led) as fh:
+            for ln in fh:
+                try:
+                    last = _json.loads(ln)
+                except ValueError:
+                    continue
+        if last:
+            age_h = (time.time() - (last.get("ts_epoch") or 0)) / 3600.0
+            if last.get("issues"):
+                kids.append(_node("self-check: " + ", ".join(last["issues"][:3]),
+                                  "doctor's last verdict, %s" % _ago(age_h * 3600),
+                                  kind="self"))
+            elif age_h > 24:
+                # NOT "healthy". A stale green is not a green — this machine
+                # sleeps, and the periodic pass fired 60 times in 7 days where
+                # hourly would be 168.
+                kids.append(_node("self-check has not run in %.0f hours" % age_h,
+                                  "the last verdict is too old to trust",
+                                  kind="self"))
+    except OSError:
+        pass
+
     # Repeated failures nobody has read. Counting the CLASS, not the lines —
     # 45 lines of one error is one problem, and reporting 45 makes it look
     # like 45.

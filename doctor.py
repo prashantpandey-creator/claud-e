@@ -190,7 +190,7 @@ def _check_heartbeat() -> Dict[str, Any]:
     alive, and the interval is read from the plist rather than assumed (this
     docstring said 6h while the plist said 1h).
     """
-    plist = os.path.expanduser("~/Library/LaunchAgents/com.meditate.grade.plist")
+    plist = os.path.expanduser("~/Library/LaunchAgents/com.meditate.rounds.plist")
     exists = os.path.isfile(plist)
     loaded = False
     interval = None
@@ -198,7 +198,7 @@ def _check_heartbeat() -> Dict[str, Any]:
         try:
             r = subprocess.run(["launchctl", "list"], capture_output=True,
                                text=True, timeout=10)
-            loaded = "com.meditate.grade" in r.stdout
+            loaded = "com.meditate.rounds" in r.stdout
         except Exception:
             pass
         try:
@@ -402,6 +402,32 @@ def _check_assessment() -> Dict[str, Any]:
 
 
 
+VERDICT_LEDGER = os.path.expanduser("~/.claude/meditation/doctor.jsonl")
+
+
+def _record_verdict(data: Dict[str, Any], quick: bool) -> None:
+    """One line per run, so the tool can be asked how it has been doing.
+
+    Without this, doctor is a thing you run and read and forget — which is
+    exactly what heartbeat.log was when it accumulated 45 identical failures
+    nobody saw. A check whose result is not durable cannot close a loop.
+    """
+    if os.environ.get("MEDITATE_TESTING"):
+        return                    # tests must not write to the real ledger
+    try:
+        with open(VERDICT_LEDGER, "a") as f:
+            f.write(json.dumps({
+                "ts": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()),
+                "ts_epoch": time.time(),
+                "healthy": bool(data.get("healthy")),
+                "issues": data.get("issues") or [],
+                "quick": bool(quick),
+                "fleet": data.get("fleet") or {},
+            }) + "\n")
+    except OSError:
+        pass
+
+
 def _check_fleet() -> Dict[str, Any]:
     """Did the agents this tool launched actually DO anything?
 
@@ -473,6 +499,16 @@ def run(run_tests: bool = True) -> Dict[str, Any]:
     actually run every suite each time turned one test file into a
     multi-minute job (and, with auto-discovery, a recursion)."""
     prereqs = _check_prereqs()
+    # QUICK skips the suite. Everything else in here reads state and costs
+    # 10.1s; the suite costs ~200s and spawns 52 python processes. On an
+    # hourly timer that is 24 suite runs a day competing with the owner's own
+    # sessions — the shape that took a production box down once already. The
+    # suite belongs in a hand-run doctor and in CI, not in the rounds.
+    # run_tests=False skips the suite. It costs ~200s and spawns 52 python
+    # processes; everything else in here reads state and costs 10.1s. On an
+    # hourly timer the suite would be 24 full runs a day competing with the
+    # owner's own sessions — the shape that took a box down once already. The
+    # suite belongs in a hand-run doctor and in CI, not in the periodic pass.
     tests = _check_tests() if run_tests else {
         "all_pass": True, "files": [], "skipped": "run_tests=False"}
     hook = _check_hook()
@@ -546,11 +582,13 @@ def run(run_tests: bool = True) -> Dict[str, Any]:
         "output": output,
         "nidra": nidra,
     }
+    _record_verdict(data, not run_tests)
     return _envelope(True, data, {"skill_dir": SKILL_DIR}, [])
 
 
 def main(argv: List[str]) -> int:
-    env = run()
+    quick = "--quick" in argv
+    env = run(run_tests=not quick)
     d = env["data"]
 
     if "--json" in argv:
@@ -565,11 +603,14 @@ def main(argv: List[str]) -> int:
         mark = "ok" if p["ok"] else "MISSING"
         print(f"  [{mark:>7}]  {p['name']:15} {p['detail']}")
 
+    if d["tests"].get("skipped"):
+        print("\nTests: skipped (--quick)")
     slow = d["tests"].get("timed_out") or []
     verdict = "all green" if d["tests"]["all_pass"] else "FAILURES"
     if d["tests"]["all_pass"] and slow:
         verdict = "all green (%d gave no verdict in time — machine busy)" % len(slow)
-    print(f"\nTests: {verdict}")
+    if not d["tests"].get("skipped"):
+        print(f"\nTests: {verdict}")
     for t in d["tests"]["files"]:
         mark = "ok" if t["ok"] else ("SLOW" if t.get("timeout") else "FAIL")
         print(f"  [{mark:>7}]  {t['file']:25} {t['detail']}")
@@ -587,7 +628,7 @@ def main(argv: List[str]) -> int:
 
     hb = d.get("heartbeat", {})
     print(f"\nHeartbeat:")
-    print(f"  [{'ok' if hb.get('loaded') else 'MISSING':>7}]  launchd com.meditate.grade "
+    print(f"  [{'ok' if hb.get('loaded') else 'MISSING':>7}]  launchd com.meditate.rounds "
           f"(last beat: {hb.get('last_beat') or 'never'})")
 
     svcs = d.get("services", [])

@@ -244,7 +244,7 @@ fi
 # ---- 5b. Heartbeat — grade runs every 6h without being asked
 echo
 echo "  Installing heartbeat (grade + archive empties + dashboard, every 6h)..."
-PLIST="$HOME/Library/LaunchAgents/com.meditate.grade.plist"
+PLIST="$HOME/Library/LaunchAgents/com.meditate.rounds.plist"
 # A brand-new macOS user has no LaunchAgents directory, so writing the plist
 # raised FileNotFoundError and install.sh died at exit 1 — after wiring the
 # hook but before running a single test. Caught by installing into a clean
@@ -289,7 +289,7 @@ except (OSError, ValueError, plistlib.InvalidFileException):
 # Neither key WAKES the machine; that would need pmset, which is the owner's
 # call and not something an installer should be scheduling.
 floor = [{"Hour": h, "Minute": 7} for h in (7, 19)]
-plistlib.dump({"Label": "com.meditate.grade",
+plistlib.dump({"Label": "com.meditate.rounds",
                "ProgramArguments": ["/bin/bash", "-lc", cmd],
                "StartInterval": interval,
                "StartCalendarInterval": floor,
@@ -301,7 +301,7 @@ PYPLIST
 # Only register with launchd from a REAL home. A suite that runs this script
 # with HOME pointed at a tmpdir used to load the plist from there — and that
 # registration REPLACES the live one, system-wide. Measured 2026-08-23:
-# launchd was holding com.meditate.grade at a since-deleted
+# launchd was holding com.meditate.rounds at a since-deleted
 # /private/var/folders/.../T/tmp.XXXX/Library/LaunchAgents/ path, so every
 # heartbeat exited 1 and wrote nothing to the log, silently, until someone
 # looked. The tool's own tests had killed the thing the tool exists to run.

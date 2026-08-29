@@ -78,7 +78,7 @@ def test_the_heartbeat_survives_the_machine_SLEEPING():
     the tunable cadence, the calendar entries are a floor.
     """
     import plistlib, os
-    p = os.path.expanduser("~/Library/LaunchAgents/com.meditate.grade.plist")
+    p = os.path.expanduser("~/Library/LaunchAgents/com.meditate.rounds.plist")
     if not os.path.exists(p):
         return                      # not installed here; nothing to assert
     d = plistlib.load(open(p, "rb"))

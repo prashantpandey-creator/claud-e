@@ -33,7 +33,7 @@ from typing import Any, Dict, List, Optional
 
 MEMORY_ROOT = paths.memory_root()
 PROJECTS_DIR = os.path.expanduser("~/.claude/projects")
-PLIST = os.path.expanduser("~/Library/LaunchAgents/com.meditate.grade.plist")
+PLIST = os.path.expanduser("~/Library/LaunchAgents/com.meditate.rounds.plist")
 
 TARGET_CHANGES = 5      # edits worth waking for — below this a pass finds nothing
 MIN_H, MAX_H = 1, 24    # never thrash; never let a week of rot go unchecked

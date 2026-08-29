@@ -161,7 +161,7 @@ def test_install_and_uninstall_are_a_matched_pair():
         r = subprocess.run(["bash", "-n", p], capture_output=True, text=True)
         assert r.returncode == 0, "%s: %s" % (script, r.stderr)
     un = open(os.path.join(SKILL, "uninstall.sh")).read()
-    for thing in ("settings.json", "meditate-hook", "com.meditate.grade",
+    for thing in ("settings.json", "meditate-hook", "com.meditate.rounds",
                   ".local/bin/meditate"):
         assert thing in un, "uninstall leaves %s behind" % thing
     assert "--dry-run" in un, "removal must be inspectable before it runs"
