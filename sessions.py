@@ -133,7 +133,71 @@ def _project_of(file_path, cwd=None):
     return None
 
 
+# Parsed transcripts, keyed by (path, mtime, size, cap, snippet).
+#
+# WHY: one compute_metrics() call parsed 800,884 JSON lines out of 506
+# transcript files, TWICE — metrics.py asks for cap=20 and projects.rollup()
+# asks for cap=500 inside the same call, and neither knew about the other.
+# That is 15.5s per call, ~8s of it pure json.loads, for files that mostly
+# have not changed since the last question was asked.
+#
+# Keyed on file IDENTITY, not on a clock. A TTL would have to choose between
+# going stale on a live session and expiring while nothing changed; mtime and
+# size cannot do either. The session being written to right now re-parses
+# every time, which is correct — it is the one that actually changed.
+_PARSE_CACHE = {}
+_PARSE_CACHE_MAX = 2000
+
+
+def _clone(rec):
+    """A record nobody can reach back into.
+
+    dict(rec) is not enough, and neither is one level: `user_messages` is a
+    list of DICTS. The first version of this copied only the outer containers
+    and test_the_caller_cannot_reach_back_into_the_cache failed on the spot —
+    a caller editing one message would have edited the cached copy, silently,
+    for every later reader.
+
+    copy.deepcopy is correct too. Measured on 800 real records: 0.005s here
+    against 0.029s for deepcopy — 5.8x, and both are noise next to the 8s of
+    json.loads this exists to avoid. The structure is known so the copy is
+    written out, and the test, not a "keep this in sync" comment, is what
+    holds it to the structure.
+    """
+    out = dict(rec)
+    for k, v in out.items():
+        if isinstance(v, list):
+            out[k] = [dict(x) if isinstance(x, dict) else x for x in v]
+        elif isinstance(v, dict):
+            out[k] = dict(v)
+        elif isinstance(v, set):
+            out[k] = set(v)
+    return out
+
+
 def extract_file(path, cap=DEFAULT_CAP, snippet=SNIPPET):
+    try:
+        st = os.stat(path)
+        key = (path, st.st_mtime_ns, st.st_size, cap, snippet)
+    except OSError:
+        key = None
+    if key is not None:
+        hit = _PARSE_CACHE.get(key)
+        if hit is not None:
+            # a copy, not the record: callers stamp _project_dir and
+            # _project_slug onto what they get back, so handing out the
+            # cached object would let one project's annotations show up on
+            # another's
+            return _clone(hit)
+    out = _extract_file_uncached(path, cap=cap, snippet=snippet)
+    if key is not None:
+        if len(_PARSE_CACHE) >= _PARSE_CACHE_MAX:
+            _PARSE_CACHE.clear()      # a bounded cache, not an eviction policy
+        _PARSE_CACHE[key] = _clone(out)
+    return out
+
+
+def _extract_file_uncached(path, cap=DEFAULT_CAP, snippet=SNIPPET):
     title = None
     ai_title = None
     cwd = None

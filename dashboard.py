@@ -119,6 +119,22 @@ def render(d: Dict[str, Any]) -> str:
                      '<span style="color:%s;font-size:11px;margin-left:8px">%s</span></code>'
                      % (G, html.escape(cmd), DIM, html.escape(label)))
     chips_html = "".join(chips)
+
+    # The tree. Everything going, one click per branch, native <details> so the
+    # page still has zero javascript and the open/closed state survives a
+    # reload. It goes ABOVE the goal table because the table only ever knew
+    # about the four products that have a goal file; the tree is the only place
+    # the other 74 appear at all.
+    try:
+        import tree as _tree
+        tree_html = ('<div style="letter-spacing:.3em;font-size:11px;color:#6b6557;'
+                     'margin-top:34px">EVERYTHING GOING</div>'
+                     '<div style="margin-top:10px">%s</div>' % _tree.to_html(_tree.build()))
+    except Exception as exc:
+        # Named, not swallowed. A blank space where the tree should be reads as
+        # "nothing going", which is the one thing it must never say by accident.
+        tree_html = ('<div style="color:#6b6557;font-size:12px;margin-top:34px">'
+                     'tree unavailable: %s</div>' % html.escape(str(exc)[:120]))
     return ("""<!doctype html><meta charset="utf-8">
 <title>meditate — the organism</title>
 <body style="background:%s;color:%s;font:14px/1.5 -apple-system,Helvetica,sans-serif;
@@ -127,13 +143,14 @@ margin:0;padding:48px 56px;max-width:960px">
 <div style="font-size:22px;margin:6px 0 2px;color:%s">the organism, at a glance</div>
 <div style="font-size:12px;color:%s">generated %s · every number from the graded store, not recall</div>%s
 <div style="display:flex;flex-wrap:wrap;gap:26px;margin:30px 0 8px">%s</div>
+__TREE__
 <div style="letter-spacing:.3em;font-size:11px;color:%s;margin-top:30px">GOALS</div>
 %s
 <div style="letter-spacing:.3em;font-size:11px;color:#6b6557;margin-top:30px">ACT</div>
 <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px">__CHIPS__</div>
 <div style="color:%s;font-size:12px;margin-top:22px">checkboxes tick only when work verifies · push only on the owner's go</div>
 </body>""" % (BG, FG, "#6b6557", G, DIM, e(d["generated"]), repair, stats,
-              "#6b6557", "".join(rows), DIM)).replace("__CHIPS__", chips_html)
+              "#6b6557", "".join(rows), DIM)).replace("__CHIPS__", chips_html).replace("__TREE__", tree_html)
 
 
 def main(argv: Optional[List[str]] = None) -> int:

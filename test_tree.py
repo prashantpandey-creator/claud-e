@@ -1,0 +1,145 @@
+"""Tests for tree — everything going, as one tree.
+
+WHY: the tool knew all of this and showed none of it together. Goals were a
+table, dormant repos a list, live sessions a roster, the repair queue a file.
+Six flat surfaces meant "where is my work" was a question you answered by
+reading six things and holding them in your head.
+
+The two rules that cost something to keep, and so are the ones tested here:
+every node carries a MEANING (not just a count), and nothing is SYNTHESISED —
+every line is a field that already exists or a quote from disk.
+
+Run: python3 ~/.claude/skills/meditate/test_tree.py
+"""
+from __future__ import annotations
+
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import tree  # noqa: E402
+
+
+_FAKE = {
+    "goals": [{"name": "g1", "title": "Ship the thing", "done": 1, "total": 3,
+               "next": "the next bit", "scope_delta": 2}],
+    "live_sessions": [{"sid": "abc123", "label": "working", "last_file": "/x/y/foo.py",
+                       "age_s": 120},
+                      {"sid": "def456", "label": "idle one", "last_file": "", "age_s": 9000}],
+    "dormant": [{"project": "old-thing", "idle": "8 weeks ago",
+                 "last_commit": "did a thing", "what": None, "commits": 12}],
+    "repair": [{"id": "m1", "statement": "something that broke",
+                "fails": ["path:/gone/file.md"]}],
+    "insights": {"headline": "three things need you"},
+}
+
+
+def test_every_branch_carries_a_MEANING_not_just_a_count():
+    """A count is a readout. "(8)" tells you nothing about whether to care."""
+    t = tree.build(_FAKE)
+    for b in t["children"]:
+        assert b["meaning"], "%s is a bare count with no meaning" % b["label"]
+
+
+def test_a_leaf_says_WHY_it_is_there():
+    t = tree.build(_FAKE)
+    for b in t["children"]:
+        for leaf in b["children"]:
+            assert leaf["meaning"], \
+                "%s / %s has no meaning line" % (b["label"], leaf["label"])
+
+
+def test_broken_comes_FIRST():
+    """Leverage order, same as the briefing: knowledge that failed its own
+    check corrupts everything read downstream of it."""
+    t = tree.build(_FAKE)
+    assert t["children"][0]["kind"] == "repair", \
+        [b["kind"] for b in t["children"]]
+
+
+def test_an_idle_session_is_called_idle_not_live():
+    """10 of 16 'live' sessions had touched no file on 2026-08-26. Calling
+    them all live is what made the roster untrustworthy."""
+    t = tree.build(_FAKE)
+    live = [b for b in t["children"] if b["kind"] == "live"][0]
+    idle = [k for k in live["children"] if k["label"] == "idle one"][0]
+    assert "idle" in idle["meaning"]
+
+
+def test_a_goal_that_GREW_says_so():
+    """A percentage can fall because scope widened. Hiding that turns growing
+    ambition into what looks like going backwards."""
+    t = tree.build(_FAKE)
+    goal = [b for b in t["children"] if b["kind"] == "moving"][0]["children"][0]
+    assert "scope grew" in goal["meaning"], goal["meaning"]
+
+
+def test_a_dormant_leaf_QUOTES_the_repo():
+    t = tree.build(_FAKE)
+    left = [b for b in t["children"] if b["kind"] == "dormant"][0]
+    assert "did a thing" in left["children"][0]["meaning"], \
+        "the last commit is not quoted — the node would be an opinion"
+
+
+def test_the_blind_spot_branch_survives_being_EMPTY():
+    """NOT MEASURED is the branch that says what the tree cannot tell you.
+    Every other branch disappears when empty; this one must not, or the tool
+    silently implies it covers everything."""
+    t = tree.build({"goals": [], "live_sessions": [], "dormant": [], "repair": []})
+    kinds = [b["kind"] for b in t["children"]]
+    assert "unassessed" in kinds, kinds
+
+
+def test_actions_on_leaves_are_verbs_the_runner_knows():
+    """A node you cannot act on is a readout. Same rule as the mascot: the
+    action must NAME a verb, because Casper's fall-through is a fleet launch."""
+    import brain
+    t = tree.build(_FAKE)
+    for b in t["children"]:
+        for leaf in b["children"] + [b]:
+            act = (leaf.get("action") or "").split(" ")[0]
+            if act:
+                assert act in brain.ACTIONS, \
+                    "%r on %r is not a verb the runner knows" % (act, leaf["label"])
+
+
+def test_text_render_collapses_and_expands():
+    t = tree.build(_FAKE)
+    closed = "\n".join(tree.to_text(t, expand=False))
+    opened = "\n".join(tree.to_text(t, expand=True))
+    assert len(opened) > len(closed)
+    assert "old-thing" in opened and "old-thing" not in closed
+
+
+def test_html_uses_native_details_and_no_javascript():
+    """One click per branch with zero JS — the browser ships this. A second
+    JS accordion would be another thing to keep in sync, and would lose
+    find-in-page and open-state-through-reload."""
+    h = tree.to_html(tree.build(_FAKE))
+    assert "<details" in h and "<summary" in h
+    assert "<script" not in h.lower() and "onclick" not in h.lower()
+
+
+def test_the_live_machine_builds_a_tree():
+    t = tree.build()
+    assert t["children"], "no branches at all on a machine with live work"
+    print("       live: %s" % ", ".join("%s(%d)" % (b["label"], b["count"])
+                                        for b in t["children"]))
+
+
+def _main():
+    fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
+    failed = 0
+    for fn in fns:
+        try:
+            fn(); print("  ok   %s" % fn.__name__)
+        except AssertionError as e:
+            failed += 1; print("  FAIL %s: %s" % (fn.__name__, e))
+        except Exception as e:
+            failed += 1; print("  ERR  %s: %s: %s" % (fn.__name__, type(e).__name__, e))
+    print("\n%d/%d passed" % (len(fns) - failed, len(fns)))
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(_main())
