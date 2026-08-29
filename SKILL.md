@@ -54,6 +54,11 @@ rename, or delete a transcript or any project file.
 - `<session id or title>` → split just that one session.
 - `archive` → only the archive-finished step (Phase B4).
 - `repo` → the optional repo lens (scan_projects + still + commit-green).
+- `twin` → CLAUD-E, the digital twin. Do NOT read the script and summarize —
+  the boot sequence is the point and it only plays on a real TTY. Open a
+  Terminal window running `~/.claude/skills/meditate/meditate twin` (osascript),
+  say it is booting on screen, and stop. Same for `tree` when the user asks to
+  SEE it: the page at http://127.0.0.1:7711 has it under EVERYTHING GOING.
 
 ## Phase 0 — Self-heal ("the code fixes itself")
 

@@ -289,10 +289,22 @@ except (OSError, ValueError, plistlib.InvalidFileException):
 # Neither key WAKES the machine; that would need pmset, which is the owner's
 # call and not something an installer should be scheduling.
 floor = [{"Hour": h, "Minute": 7} for h in (7, 19)]
+# PATH is baked in, with claude's REAL directory discovered at install time.
+# `bash -lc` reads bash profiles, and a zsh user's PATH lives in zsh's — so
+# on this machine claude (~/.local/bin) was invisible to launchd and every
+# HOURLY self-check cried "prerequisites: claude not found" while every
+# terminal run was clean. A false alarm that fires 24 times a day is how the
+# one real alarm gets ignored; this is the third costume that defect has worn
+# (doctor exit=1 as FAILED, 45 osascript errors, now this).
+import shutil as _sh
+claude_dir = os.path.dirname(_sh.which("claude") or "")
+path = ":".join(x for x in (claude_dir, "/opt/homebrew/bin", "/usr/local/bin",
+                            "/usr/bin", "/bin") if x)
 plistlib.dump({"Label": "com.meditate.rounds",
                "ProgramArguments": ["/bin/bash", "-lc", cmd],
                "StartInterval": interval,
                "StartCalendarInterval": floor,
+               "EnvironmentVariables": {"PATH": path},
                "RunAtLoad": False},
               open(plist, "wb"))
 print("  [ok]  heartbeat interval: %ds%s" % (
