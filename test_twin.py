@@ -165,6 +165,35 @@ def test_on_the_REAL_record_the_claims_still_fire():
         assert "start wide" in sc, "the flavour line vanished from the record that earns it"
 
 
+
+def test_the_boot_sequence_is_the_SAME_derivation_not_theatre():
+    """The visual cue must never lie: boot() returns exactly the sections
+    build() would, each line landing only when its derivation finished, with
+    the section's own basis on it. A spinner over a sleep would be astrology
+    with an animation."""
+    frames = []
+    secs = twin.boot(write=frames.append)
+    plain = twin.build()
+    assert [x["title"] for x in secs] == [x["title"] for x in plain]
+    out = "".join(frames)
+    assert "CLAUD-E ONLINE" in out
+    for x in secs:
+        assert x["basis"][:30] in out, "a section landed without its basis: %s" % x["title"]
+
+
+def test_piped_output_carries_NO_escape_codes():
+    """Scripts, tests and pipes get plain text. An ANSI code in a pipe is how
+    a pretty tool breaks every consumer downstream of it."""
+    import subprocess
+    r = subprocess.run([sys.executable,
+                        os.path.join(os.path.dirname(os.path.abspath(__file__)), "twin.py")],
+                       env=dict(os.environ, MEDITATE_TESTING="1"),
+                       capture_output=True, text=True, timeout=180)
+    assert r.returncode == 0
+    assert "\x1b" not in r.stdout, "ANSI escaped into piped output"
+    assert "CLAUD-E" in r.stdout
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

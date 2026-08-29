@@ -1,4 +1,8 @@
-"""twin — the one entity that knows how you work, and the switch that arms it.
+"""twin — CLAUD-E: the one entity that knows how you work, and its switch.
+
+Named the way WALL-E is named — a machine with a hyphen and a job. The FORM
+stays abstract (standing rule: forms, never borrowed likenesses); only the
+naming pattern is borrowed.
 
 The owner's ask, verbatim intent: "something which can parse and figure out
 how I think, what flavour I bring, what my goals are and how they evolve,
@@ -263,6 +267,87 @@ def switch_state() -> Dict[str, Any]:
             "basis": "launchctl + gate + ledgers, live"}
 
 
+
+# ---------------------------------------------------------------------------
+# the boot sequence — a visual cue that never lies
+# ---------------------------------------------------------------------------
+#
+# `meditate twin` spends ~12 real seconds deriving before it can say a word
+# (the project field alone is ~10s of git). It used to spend them in silence
+# and then dump text. The boot sequence spends them visibly instead — and the
+# law of this module extends to its theatre: every line lands when its
+# section ACTUALLY finishes, labelled with its section's own basis string and
+# its measured duration. No fake spinner over a sleep, no progress bar with
+# an invented total. Sci-fi is the styling; the content is the real work.
+#
+# TTY only. Piped, --json, and MEDITATE_TESTING get plain output, so scripts
+# and tests never see an escape code.
+
+_GOLD = "\033[38;5;179m"
+_DIM = "\033[2m"
+_BOLD = "\033[1m"
+_RESET = "\033[0m"
+_SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+_WORDMARK = """\
+   ██████╗ ██╗      █████╗  ██╗   ██╗ ██████╗        ███████╗
+  ██╔════╝ ██║     ██╔══██╗ ██║   ██║ ██╔══██╗       ██╔════╝
+  ██║      ██║     ███████║ ██║   ██║ ██║  ██║ █████╗█████╗
+  ██║      ██║     ██╔══██║ ██║   ██║ ██║  ██║ ╚════╝██╔══╝
+  ╚██████╗ ███████╗██║  ██║ ╚██████╔╝ ██████╔╝       ███████╗
+   ╚═════╝ ╚══════╝╚═╝  ╚═╝  ╚═════╝  ╚═════╝        ╚══════╝"""
+
+# An ORIGINAL face — the naming pattern is WALL-E's, the face is ours.
+_FACE_BOOTING = """\
+             ┌───────────────┐
+             │   ──     ──   │   deriving…
+             └───┬───────┬───┘"""
+_FACE_ONLINE = """\
+             ┌───────────────┐
+             │   ◉       ◉   │   awake
+             └───┬───────┬───┘"""
+
+_BOOT_LABELS = [
+    ("memory lattice", "your rules, recovered", who_you_are),
+    ("decision record", "how you actually decide", how_you_decide),
+    ("project field", "everything you have built", your_scale),
+    ("goal trajectories", "where each goal moved", how_goals_evolve),
+    ("gap analysis", "what the record holds against you", do_better),
+    ("switch integrity", "every autonomous link, checked", switch_state),
+]
+
+
+def boot(write=None) -> List[Dict[str, Any]]:
+    """Derive every section, showing each one land as it truly does."""
+    import threading
+    w = write or (lambda t: (sys.stdout.write(t), sys.stdout.flush()))
+    w(_GOLD + _WORDMARK + _RESET + "\n")
+    w(_DIM + _FACE_BOOTING + _RESET + "\n")
+    w(_DIM + "\n  every line lands when its derivation truly finishes\n\n" + _RESET)
+    sections: List[Dict[str, Any]] = []
+    for name, sub, fn in _BOOT_LABELS:
+        box: Dict[str, Any] = {}
+        th = threading.Thread(target=lambda f=fn: box.update(s=f()))
+        t0 = time.time()
+        th.start()
+        i = 0
+        while th.is_alive():
+            w("\r  " + _GOLD + _SPIN[i % len(_SPIN)] + _RESET +
+              " %-18s " % name + _DIM + sub + _RESET)
+            i += 1
+            time.sleep(0.08)
+        th.join()
+        dt = time.time() - t0
+        s = box.get("s") or {"title": name, "lines": [], "basis": "failed"}
+        sections.append(s)
+        w("\r  " + _GOLD + "▸" + _RESET + " %-18s " % name +
+          "%-42s" % s["basis"][:42] + _DIM + " %5.1fs" % dt + _RESET + "\n")
+    w(_GOLD + "\n" + _FACE_ONLINE + _RESET + "\n")
+    w(_GOLD + _BOLD + "◤ CLAUD-E ONLINE" + _RESET +
+      _DIM + " — derived from the record, nothing invented\n" + _RESET)
+    return sections
+
+
 def build() -> List[Dict[str, Any]]:
     return [who_you_are(), how_you_decide(), your_scale(),
             how_goals_evolve(), do_better(), switch_state()]
@@ -270,7 +355,8 @@ def build() -> List[Dict[str, Any]]:
 
 def render(sections: Optional[List[Dict[str, Any]]] = None) -> str:
     secs = sections if sections is not None else build()
-    out = ["YOUR TWIN — derived from the record, nothing invented", "=" * 60]
+    out = ["CLAUD-E — your digital twin, derived from the record, nothing invented",
+           "=" * 60]
     for s in secs:
         out.append("")
         out.append(s["title"])
@@ -289,8 +375,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(prog="meditate twin",
                                  description="the one entity that knows how you work")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--no-boot", action="store_true",
+                    help="plain output even on a terminal")
     a = ap.parse_args(argv)
-    secs = build()
+    animate = (not a.json and not a.no_boot
+               and sys.stdout.isatty()
+               and not os.environ.get("MEDITATE_TESTING"))
+    secs = boot() if animate else build()
     if a.json:
         print(json.dumps({"tool_name": "meditate_twin", "success": True,
                           "data": {"sections": secs}, "metadata": {},
