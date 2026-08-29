@@ -806,6 +806,92 @@ def report_data() -> Dict[str, Any]:
             "generated": time.strftime("%A %-d %B, %H:%M")}
 
 
+_TWIN_CACHE: Dict[str, Any] = {"at": 0.0, "data": None}
+
+
+def _twin_cached(ttl_s: float = 60.0) -> Dict[str, Any]:
+    """CLAUD-E's sections, warm. Cold cost is ~12s (the project field's git
+    walk); in-process the underlying caches hold it near half a second, and a
+    minute of staleness cannot change an answer whose windows are 30 days."""
+    if time.time() - _TWIN_CACHE["at"] < ttl_s and _TWIN_CACHE["data"]:
+        return _TWIN_CACHE["data"]
+    try:
+        import twin as _tw
+        d = {"sections": _tw.build()}
+    except Exception as e:
+        d = {"sections": [], "error": str(e)[:200]}
+    _TWIN_CACHE.update({"at": time.time(), "data": d})
+    return d
+
+
+# The twin's own page — managing THROUGH CLAUD-E, not beside him. The main
+# Pulse page is the organism's console; this one is the person-shaped view:
+# who you are, how you decide, what moved, what you could do better — with
+# the manage verbs inline, wired to the same /api/act the mascot uses. One
+# server, one act path; the page is a view, never a second brain.
+TWIN_PAGE = """<!doctype html><meta charset="utf-8">
+<title>CLAUD-E — your digital twin</title>
+<body style="background:#0d0c0a;color:#d8d4cc;font:14px/1.6 -apple-system,Helvetica,sans-serif;margin:0;padding:40px 48px;max-width:900px">
+<div style="font-family:ui-monospace,monospace;color:#E3B140;white-space:pre;font-size:11px;line-height:1.25" id="mark"></div>
+<div style="font-family:ui-monospace,monospace;white-space:pre;color:#8a8578;font-size:13px;margin-top:6px" id="face"></div>
+<div id="body" style="margin-top:26px;color:#8a8578">deriving from the record…</div>
+<div style="margin-top:34px;color:#6b6557;font-size:12px">
+  every line is your own sentence, a counted number, or a live switch — nothing invented ·
+  <a href="/" style="color:#E3B140">pulse</a> · <a href="/report" style="color:#E3B140">agenda</a></div>
+<script>
+const GOLD="#E3B140", DIM="#8a8578", FG="#d8d4cc";
+document.getElementById("mark").textContent =
+"   \\u2588\\u2588\\u2588\\u2588\\u2588\\u2588\\u2557 \\u2588\\u2588\\u2557      \\u2588\\u2588\\u2588\\u2588\\u2588\\u2557  \\u2588\\u2588\\u2557   \\u2588\\u2588\\u2557 \\u2588\\u2588\\u2588\\u2588\\u2588\\u2588\\u2557        \\u2588\\u2588\\u2588\\u2588\\u2588\\u2588\\u2588\\u2557\\n" +
+"  \\u2588\\u2588\\u2554\\u2550\\u2550\\u2550\\u2550\\u255d \\u2588\\u2588\\u2551     \\u2588\\u2588\\u2554\\u2550\\u2550\\u2588\\u2588\\u2557 \\u2588\\u2588\\u2551   \\u2588\\u2588\\u2551 \\u2588\\u2588\\u2554\\u2550\\u2550\\u2588\\u2588\\u2557       \\u2588\\u2588\\u2554\\u2550\\u2550\\u2550\\u2550\\u255d\\n" +
+"  \\u2588\\u2588\\u2551      \\u2588\\u2588\\u2551     \\u2588\\u2588\\u2588\\u2588\\u2588\\u2588\\u2588\\u2551 \\u2588\\u2588\\u2551   \\u2588\\u2588\\u2551 \\u2588\\u2588\\u2551  \\u2588\\u2588\\u2551 \\u2588\\u2588\\u2588\\u2588\\u2588\\u2557\\u2588\\u2588\\u2588\\u2588\\u2588\\u2557\\n" +
+"  \\u2588\\u2588\\u2551      \\u2588\\u2588\\u2551     \\u2588\\u2588\\u2554\\u2550\\u2550\\u2588\\u2588\\u2551 \\u2588\\u2588\\u2551   \\u2588\\u2588\\u2551 \\u2588\\u2588\\u2551  \\u2588\\u2588\\u2551 \\u255a\\u2550\\u2550\\u2550\\u2550\\u255d\\u2588\\u2588\\u2554\\u2550\\u2550\\u255d\\n" +
+"  \\u255a\\u2588\\u2588\\u2588\\u2588\\u2588\\u2588\\u2557 \\u2588\\u2588\\u2588\\u2588\\u2588\\u2588\\u2588\\u2557\\u2588\\u2588\\u2551  \\u2588\\u2588\\u2551 \\u255a\\u2588\\u2588\\u2588\\u2588\\u2588\\u2588\\u2554\\u255d \\u2588\\u2588\\u2588\\u2588\\u2588\\u2588\\u2554\\u255d       \\u2588\\u2588\\u2588\\u2588\\u2588\\u2588\\u2588\\u2557\\n" +
+"   \\u255a\\u2550\\u2550\\u2550\\u2550\\u2550\\u255d \\u255a\\u2550\\u2550\\u2550\\u2550\\u2550\\u2550\\u255d\\u255a\\u2550\\u255d  \\u255a\\u2550\\u255d  \\u255a\\u2550\\u2550\\u2550\\u2550\\u2550\\u255d  \\u255a\\u2550\\u2550\\u2550\\u2550\\u2550\\u255d        \\u255a\\u2550\\u2550\\u2550\\u2550\\u2550\\u2550\\u255d";
+function esc(x){const d=document.createElement("i");d.textContent=x==null?"":String(x);return d.innerHTML}
+async function act(action, arg){
+  const r = await fetch("/api/act",{method:"POST",
+    headers:{"Content-Type":"application/json","X-Meditate":"1"},
+    body: JSON.stringify({action, arg: arg||"", value:""})});
+  const d = await r.json();
+  const n = document.getElementById("say");
+  if(n) n.textContent = (d.output||"").split("\\n")[0];
+}
+function btn(label, action, arg){
+  return `<button onclick="act('${action}','${esc(arg||"")}')" style="background:none;border:1px solid #3a352c;border-radius:6px;color:${GOLD};padding:3px 10px;font-size:12px;cursor:pointer;margin-left:8px">${label}</button>`;
+}
+async function load(){
+  const [t, s] = await Promise.all([
+    fetch("/api/twin",{headers:{"X-Meditate":"1"}}).then(r=>r.json()),
+    fetch("/api/state",{headers:{"X-Meditate":"1"}}).then(r=>r.json())]);
+  const gate = ((s.timing||{}).state)||"";
+  const awake = !!s.fleet_running || gate==="pause" || gate==="settled";
+  document.getElementById("face").textContent =
+    "             \\u250c\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2510\\n" +
+    (awake ? "             \\u2502   \\u25c9       \\u25c9   \\u2502   awake \\u2014 acting, or free to"
+           : "             \\u2502   \\u2500\\u2500     \\u2500\\u2500   \\u2502   watching \\u2014 holding while you work") + "\\n" +
+    "             \\u2514\\u2500\\u2500\\u2500\\u252c\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u252c\\u2500\\u2500\\u2500\\u2518";
+  let h = '<div id="say" style="color:'+GOLD+';min-height:18px;font-size:13px"></div>';
+  for (const sec of (t.sections||[])){
+    h += `<div style="margin-top:22px"><div style="letter-spacing:.18em;font-size:11px;color:#6b6557">${esc(sec.title)}</div>`;
+    for (const line of sec.lines){
+      let extra = "";
+      if (sec.title.startsWith("WHAT YOU COULD DO BETTER")){
+        if (line.startsWith("broken")) extra = btn("repair it","fix","");
+        if (line.startsWith("started and left")) extra = btn("what did I leave?","say","what did I leave unfinished");
+      }
+      h += `<div style="margin-top:6px;color:${FG};font-size:13px">${esc(line)}${extra}</div>`;
+    }
+    h += `<div style="color:#57524a;font-size:11px;margin-top:4px">basis: ${esc(sec.basis)}</div></div>`;
+  }
+  h += `<div style="margin-top:26px">${btn("start the fleet","go","")}${btn("re-check everything","grade","")}</div>`;
+  document.getElementById("body").innerHTML = h;
+}
+load(); setInterval(load, 60000);
+</script>
+"""
+
+
+
 PAGE = """<!doctype html><meta charset="utf-8">
 <title>Pulse — your Claude, live</title>
 <style>
@@ -1357,6 +1443,12 @@ class _Handler(BaseHTTPRequestHandler):
                     d = {"error": "no such goal: %s" % name}
                 body = json.dumps(d).encode()
                 ctype = "application/json"
+            elif self.path == "/api/twin":
+                body = json.dumps(_twin_cached()).encode()
+                ctype = "application/json"
+            elif self.path == "/twin":
+                body = TWIN_PAGE.encode()
+                ctype = "text/html; charset=utf-8"
             elif self.path == "/api/report":
                 body = json.dumps(report_data()).encode()
                 ctype = "application/json"
