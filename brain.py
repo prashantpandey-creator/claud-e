@@ -818,6 +818,10 @@ def _twin_cached(ttl_s: float = 60.0) -> Dict[str, Any]:
     try:
         import twin as _tw
         d = {"sections": _tw.build()}
+        try:
+            d["series"] = _tw.goal_series()
+        except Exception:
+            d["series"] = None      # a missing chart must not cost the page
     except Exception as e:
         d = {"sections": [], "error": str(e)[:200]}
     _TWIN_CACHE.update({"at": time.time(), "data": d})
@@ -1447,7 +1451,15 @@ class _Handler(BaseHTTPRequestHandler):
                 body = json.dumps(_twin_cached()).encode()
                 ctype = "application/json"
             elif self.path == "/twin":
-                body = TWIN_PAGE.encode()
+                # From disk, so the console is the twin's own file rather
+                # than a string living inside the server — the same
+                # separation the layer ratchet protects. The inline page
+                # stays as the fallback for a machine without it.
+                try:
+                    with open(os.path.join(SKILL_DIR, "twin_console.html")) as _f:
+                        body = _f.read().encode()
+                except OSError:
+                    body = TWIN_PAGE.encode()
                 ctype = "text/html; charset=utf-8"
             elif self.path == "/api/report":
                 body = json.dumps(report_data()).encode()

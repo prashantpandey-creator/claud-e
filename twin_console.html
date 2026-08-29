@@ -1,0 +1,275 @@
+<!doctype html><meta charset="utf-8">
+<title>CLAUD-E — your digital twin</title>
+<style>
+:root{--gold:#E3B140;--amber:#e8b63f;--bg:#000;--fg:#d8d4cc;--dim:#8a8578;--faint:#57524a;--line:#241f18}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--fg);font:14px/1.6 -apple-system,BlinkMacSystemFont,Helvetica,sans-serif;margin:0;padding:0}
+a{color:var(--gold);text-decoration:none}
+.wrap{max-width:1080px;margin:0 auto;padding:28px 32px 80px}
+.mark{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--gold);white-space:pre;font-size:10px;line-height:1.2}
+.row{display:flex;align-items:center;gap:14px}
+.pill{border:1px solid var(--line);border-radius:999px;padding:3px 11px;font-size:12px;color:var(--dim)}
+.pill b{color:var(--gold);font-weight:500}
+#core{width:100%;height:230px;display:block}
+.cmd{width:100%;background:#0a0906;border:1px solid var(--line);border-radius:10px;color:var(--fg);
+     padding:11px 14px;font:13px/1.4 ui-monospace,Menlo,monospace;outline:none}
+.cmd:focus{border-color:var(--gold)}
+.hint{color:var(--faint);font-size:11px;margin-top:6px}
+.sec{border-top:1px solid var(--line);padding:18px 0 4px}
+.sec h3{letter-spacing:.18em;font-size:11px;color:var(--dim);font-weight:400;margin:0 0 10px;cursor:pointer;
+        display:flex;justify-content:space-between;align-items:center}
+.sec h3:hover{color:var(--gold)}
+.li{font-size:13px;padding:5px 0;display:flex;gap:10px;align-items:flex-start}
+.li .txt{flex:1;min-width:0}
+.basis{color:var(--faint);font-size:11px;margin-top:8px}
+button{background:none;border:1px solid var(--line);border-radius:6px;color:var(--gold);
+       padding:3px 10px;font-size:12px;cursor:pointer;white-space:nowrap;font-family:inherit}
+button:hover{border-color:var(--gold);background:rgba(227,177,64,.07)}
+button:active{transform:scale(.97)}
+#say{color:var(--gold);font-size:13px;min-height:20px;margin:10px 0}
+.feed{font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--faint);max-height:92px;overflow:hidden}
+.collapsed .body{display:none}
+.axis text{fill:#57524a;font-size:10px}
+.axis path,.axis line{stroke:#241f18}
+</style>
+<script type="x-shader/x-vertex" id="vs">
+varying vec2 vUv;
+void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }
+</script>
+<script type="x-shader/x-fragment" id="fs">
+precision highp float;
+varying vec2 vUv;
+uniform float uTime, uAwake, uLoad, uAspect;
+float hash(vec2 p){ return fract(sin(dot(p, vec2(41.3,289.1))) * 43758.5453); }
+void main(){
+  // aspect corrected HERE, not by scaling the mesh: scaling the quad
+  // under an orthographic camera stretched the iris into an ellipse
+  // that overflowed the canvas.
+  vec2 p = vUv * 2.0 - 1.0;
+  p.x *= uAspect;
+  float r = length(p);
+  float a = atan(p.y, p.x);
+  float iris = mix(0.16, 0.24, uAwake);
+  float core = smoothstep(iris, iris - 0.09, r);
+  float breathe = 0.5 + 0.5 * sin(uTime * mix(0.7, 2.4, uAwake));
+  float ring = smoothstep(0.016, 0.0, abs(r - (0.34 + 0.012 * breathe)));
+  float spokes = smoothstep(0.86, 1.0, abs(sin(a * 6.0 + uTime * 0.35)))
+               * smoothstep(0.012, 0.0, abs(r - 0.42)) * uLoad;
+  float grain = (hash(floor(vUv * 220.0) + floor(uTime * 8.0)) - 0.5) * 0.022;
+  vec3 gold = vec3(0.890, 0.694, 0.251);
+  float lum = core * (0.30 + 0.55 * uAwake + 0.18 * breathe) + ring * 0.85 + spokes * 0.9;
+  float halo = smoothstep(1.0, iris, r) * 0.12 * uAwake;
+  vec3 col = gold * (lum + halo) + grain;
+  gl_FragColor = vec4(col, min(1.0, lum + halo + 0.02));
+}
+</script>
+<div class="wrap">
+  <div class="mark" id="mark"></div>
+  <div class="row" style="margin-top:10px">
+    <span class="pill" id="p-face">…</span>
+    <span class="pill" id="p-moving">…</span>
+    <span class="pill" id="p-gate">…</span>
+    <span style="flex:1"></span>
+    <a href="/">pulse</a><a href="/report">agenda</a>
+  </div>
+
+  <canvas id="core"></canvas>
+
+  <input class="cmd" id="cmd" autocomplete="off" spellcheck="false"
+         placeholder="ask CLAUD-E, or type a verb — fix · go · grade · revive &lt;project&gt; · what did I leave">
+  <div class="hint">enter to run · <b>/</b> focus · <b>g</b> fleet · <b>f</b> repair · <b>r</b> re-check · click any ring segment</div>
+  <div id="say"></div>
+
+  <div id="sections"></div>
+
+  <div class="sec"><h3>GOAL TRAJECTORIES <span style="color:var(--faint)">every stamped snapshot</span></h3>
+    <div class="body"><svg id="chart" width="1016" height="230"></svg>
+    <div class="basis" id="chart-basis"></div></div></div>
+
+  <div class="sec"><h3>LIVE</h3><div class="body feed" id="feed"></div></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+<script>
+const H = {"X-Meditate":"1"};
+const MARK = [
+"   ██████╗ ██╗      █████╗  ██╗   ██╗ ██████╗        ███████╗",
+"  ██╔════╝ ██║     ██╔══██╗ ██║   ██║ ██╔══██╗       ██╔════╝",
+"  ██║      ██║     ███████║ ██║   ██║ ██║  ██║ █████╗█████╗",
+"  ██║      ██║     ██╔══██║ ██║   ██║ ██║  ██║ ╚════╝██╔══╝",
+"  ╚██████╗ ███████╗██║  ██║ ╚██████╔╝ ██████╔╝       ███████╗",
+"   ╚═════╝ ╚══════╝╚═╝  ╚═╝  ╚═════╝  ╚═════╝        ╚══════╝"].join("\n");
+document.getElementById("mark").textContent = MARK;
+const esc = s => { const d=document.createElement("i"); d.textContent = s==null?"":String(s); return d.innerHTML; };
+let SECTIONS = [], STATE = {}, uni = null;
+
+async function act(action, arg){
+  const say = document.getElementById("say");
+  say.textContent = "…";
+  try{
+    const r = await fetch("/api/act", {method:"POST", headers:{...H,"Content-Type":"application/json"},
+      body: JSON.stringify({action, arg: arg||"", value:""})});
+    const d = await r.json();
+    say.textContent = (d.output || d.speech || "done").split("\n")[0];
+  }catch(e){ say.textContent = "couldn't reach the console"; }
+  load();
+}
+
+function rowActions(secTitle, line){
+  const b = [];
+  if(secTitle.startsWith("WHAT YOU COULD DO BETTER")){
+    if(line.startsWith("broken")) b.push(["repair it","fix",""]);
+    if(line.startsWith("started and left")) b.push(["what did I leave?","say","what did I leave unfinished"]);
+    if(line.startsWith("not measured")) b.push(["which ones?","say","what am I working on"]);
+    if(line.startsWith("the tool itself")) b.push(["re-check","grade",""]);
+  }
+  if(secTitle.startsWith("YOUR GOALS")){
+    const n = line.split(":")[0].trim();
+    if(n) b.push(["dispatch","go",n]);
+  }
+  return b.map(([l,a,g]) =>
+    `<button data-act="${esc(a)}" data-arg="${esc(g)}">${esc(l)}</button>`).join("");
+}
+
+function renderSections(){
+  document.getElementById("sections").innerHTML = SECTIONS.map((s,i) => `
+    <div class="sec" id="sec${i}">
+      <h3 data-toggle="${i}">${esc(s.title)}<span style="color:var(--faint)">${s.lines.length}</span></h3>
+      <div class="body">
+        ${s.lines.map(l => `<div class="li"><span class="txt">${esc(l)}</span>${rowActions(s.title,l)}</div>`).join("")}
+        <div class="basis">basis: ${esc(s.basis)}</div>
+      </div>
+    </div>`).join("");
+}
+
+function drawChart(series){
+  const svg = d3.select("#chart"); svg.selectAll("*").remove();
+  const names = Object.keys(series.goals||{});
+  if(!names.length) return;
+  const W = 1016, Hh = 230, M = {t:12,r:150,b:22,l:30};
+  const pts = [];
+  names.forEach(n => (series.goals[n]||[]).forEach(p => {
+    const t = new Date(p.ts + (p.ts.endsWith("Z")?"":"Z"));
+    // ts carried through: the tooltip reads p.ts and the first cut dropped
+    // it here, so every point threw undefined.slice and the whole chart
+    // vanished while the data behind it was perfect.
+    if(!isNaN(t)) pts.push({n, t, ts:p.ts, pct: p.total ? 100*p.done/p.total : 0,
+                            done:p.done, total:p.total});
+  }));
+  if(!pts.length) return;
+  const x = d3.scaleTime().domain(d3.extent(pts, d=>d.t)).range([M.l, W-M.r]);
+  const y = d3.scaleLinear().domain([0,100]).range([Hh-M.b, M.t]);
+  const color = d3.scaleOrdinal(names, ["#E3B140","#c98f2e","#9c7bd8","#4fb08a","#d3653f","#7fa9d8"]);
+  svg.append("g").attr("class","axis").attr("transform",`translate(0,${Hh-M.b})`)
+     .call(d3.axisBottom(x).ticks(5).tickFormat(d3.timeFormat("%b %-d")));
+  svg.append("g").attr("class","axis").attr("transform",`translate(${M.l},0)`)
+     .call(d3.axisLeft(y).ticks(3).tickFormat(d=>d+"%"));
+  const line = d3.line().x(d=>x(d.t)).y(d=>y(d.pct)).curve(d3.curveStepAfter);
+  names.forEach(n => {
+    const g = pts.filter(p=>p.n===n).sort((a,b)=>a.t-b.t);
+    if(!g.length) return;
+    svg.append("path").datum(g).attr("fill","none").attr("stroke",color(n))
+       .attr("stroke-width",1.6).attr("opacity",.9).attr("d",line);
+    g.forEach(p => svg.append("circle").attr("cx",x(p.t)).attr("cy",y(p.pct)).attr("r",2.4)
+       .attr("fill",color(n)).append("title").text(`${n} — ${p.done}/${p.total} on ${p.ts.slice(0,10)}`));
+    const last = g[g.length-1];
+    svg.append("text").attr("x", W-M.r+8).attr("y", y(last.pct)+3).attr("fill",color(n))
+       .attr("font-size",11).text(`${n} ${last.done}/${last.total}`);
+  });
+  document.getElementById("chart-basis").textContent =
+    `${series.points} stamped snapshots across ${names.length} goals · steps, not curves — the points are the record`;
+}
+
+function initCore(){
+  const cv = document.getElementById("core");
+  const w = cv.clientWidth || 1016, h = 230;
+  const renderer = new THREE.WebGLRenderer({canvas:cv, alpha:true, antialias:true});
+  renderer.setPixelRatio(Math.min(2, devicePixelRatio||1)); renderer.setSize(w,h,false);
+  const scene = new THREE.Scene();
+  const cam = new THREE.OrthographicCamera(-1,1,1,-1,0,1);
+  uni = {uTime:{value:0}, uAwake:{value:0.2}, uLoad:{value:0.0},
+         uAspect:{value:w/h}};
+  const mat = new THREE.ShaderMaterial({
+    uniforms: uni, transparent: true,
+    vertexShader: document.getElementById("vs").textContent,
+    fragmentShader: document.getElementById("fs").textContent });
+  const quad = new THREE.Mesh(new THREE.PlaneGeometry(2,2), mat);
+  scene.add(quad);
+  const t0 = performance.now();
+  (function loop(){
+    uni.uTime.value = (performance.now()-t0)/1000;
+    renderer.render(scene,cam);
+    requestAnimationFrame(loop);
+  })();
+  addEventListener("resize", () => {
+    const nw = cv.clientWidth||1016; renderer.setSize(nw,h,false); uni.uAspect.value = nw/h;
+  });
+}
+
+function applyState(s){
+  STATE = s;
+  const rows = s.live_sessions || [];
+  const moving = rows.filter(r=>r.state==="working").length;
+  const gate = (s.timing||{}).state || "";
+  const awake = !!s.fleet_running || moving>0;
+  if(uni){ uni.uAwake.value = awake?1:0.18; uni.uLoad.value = Math.min(1, moving/6); }
+  document.getElementById("p-face").innerHTML = awake
+    ? "<b>◉ ◉</b> awake" : "── ── watching";
+  document.getElementById("p-moving").innerHTML =
+    `<b>${moving}</b> moving of ${rows.length} open`;
+  document.getElementById("p-gate").textContent = gate ? `gate: ${gate}` : "gate: —";
+}
+
+async function load(){
+  const [t, s] = await Promise.all([
+    fetch("/api/twin",{headers:H}).then(r=>r.json()),
+    fetch("/api/state",{headers:H}).then(r=>r.json())]);
+  SECTIONS = t.sections || [];
+  renderSections(); applyState(s);
+  if(t.series) drawChart(t.series);
+}
+
+document.addEventListener("click", e => {
+  const b = e.target.closest("button[data-act]");
+  if(b){ act(b.dataset.act, b.dataset.arg); return; }
+  const h = e.target.closest("h3[data-toggle]");
+  if(h) h.parentElement.classList.toggle("collapsed");
+});
+
+const cmd = document.getElementById("cmd");
+cmd.addEventListener("keydown", e => {
+  if(e.key !== "Enter") return;
+  const v = cmd.value.trim(); if(!v) return;
+  const w = v.split(/\s+/)[0].toLowerCase();
+  const verbs = ["go","fix","grade","revive","clear","tell"];
+  if(verbs.includes(w)) act(w, v.slice(w.length).trim());
+  else act("say", v);
+  cmd.value = "";
+});
+addEventListener("keydown", e => {
+  if(document.activeElement === cmd){ if(e.key==="Escape") cmd.blur(); return; }
+  if(e.key === "/"){ e.preventDefault(); cmd.focus(); }
+  if(e.key === "g") act("go","");
+  if(e.key === "f") act("fix","");
+  if(e.key === "r") act("grade","");
+});
+
+function feed(){
+  try{
+    const es = new EventSource("/api/stream");
+    const box = document.getElementById("feed");
+    es.onmessage = ev => {
+      let d; try{ d = JSON.parse(ev.data); }catch(_){ return; }
+      applyState(Object.assign({}, STATE, d));
+      const rows = (d.live_sessions||[]).filter(r=>r.state==="working").slice(0,4);
+      box.innerHTML = rows.length
+        ? rows.map(r=>`▸ ${esc(r.label||r.sid)} — ${esc(r.last_file||"moving")}`).join("<br>")
+        : "nothing moving right now";
+    };
+    es.onerror = () => { es.close(); setTimeout(feed, 5000); };
+  }catch(e){}
+}
+
+initCore(); load(); feed(); setInterval(load, 60000);
+</script>

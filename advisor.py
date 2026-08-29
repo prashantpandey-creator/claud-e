@@ -113,61 +113,22 @@ def _creed_files() -> List[str]:
 
 
 def _creed(max_chars: int = 9000) -> str:
-    """His standing rules, in his own words, one line each.
+    """His standing rules, in his own words — from creed.py, the ONE source.
 
-    ONLY `type: feedback` — an instruction he gave, with the reason he gave
-    it. Not `project` or `reference` (facts about the work, already in the
-    FACTS block), and deliberately NOT `type: user`.
-
-    `user` was in the first cut and was pulled straight back out. It holds
-    observations ABOUT him rather than instructions FROM him, and one of the
-    two on this machine is a private read of a pricing-anxiety pattern traced
-    to a worry he voiced once about how clients see him. Casper speaks
-    ALOUD, unprompted, on a timer, in whatever room the laptop is in. A
-    behavioural note about its owner is not a rule for deciding and is not
-    something a talking mascot should ever be one sampling step away from
-    saying out loud. If he wants the twin to hold that, it is his call to
-    make explicitly, not a default someone else picked for him.
-
-    Keyed on the newest mtime across the files, so a rule he writes down
-    today reaches the next question and nothing is re-read in between.
+    This function used to derive them itself. Two derivations of "how he
+    works" is one drift away from the twin and the mascot disagreeing about
+    him, and the hand-written rules.md had already drifted that way: 7 rules
+    against the store's 41. Delegating also buys Casper something the local
+    version never had — RECENCY ORDER, so a correction from this week leads a
+    rule from July instead of the model picking whichever reads louder.
     """
-    files = _creed_files()
-    if not files:
-        return ""
     try:
-        key = "%d:%f" % (len(files), max(os.path.getmtime(f) for f in files))
-    except OSError:
-        key = None
-    if key and _CREED_CACHE["key"] == key:
-        return _CREED_CACHE["text"]
-
-    import re as _re
-    lines: List[str] = []
-    for f in files:
-        try:
-            head = open(f, errors="ignore").read(1400)
-        except OSError:
-            continue
-        t = _re.search(r"^\s*type:\s*(\w+)", head, _re.M)
-        if not t or t.group(1) != "feedback":
-            continue
-        d = _re.search(r"^description:\s*(.+)$", head, _re.M)
-        if not d:
-            continue
-        line = d.group(1).strip().strip('"').strip()
-        if len(line) > 200:
-            line = line[:199].rsplit(" ", 1)[0] + "…"
-        lines.append("- " + line)
-    if not lines:
+        import creed as _c
+        rows = _c.rules()
+    except Exception:
         return ""
-    text = "\n".join(lines)
-    while len(text) > max_chars and lines:
-        lines.pop()                    # a budget that truncates, never guesses
-        text = "\n".join(lines)
-    if key:
-        _CREED_CACHE.update({"key": key, "text": text})
-    return text
+    picked = _c.standing(None, max_chars, rows)
+    return "\n".join("- " + r["text"] for r in picked)
 
 
 def _system(base: str = "") -> str:

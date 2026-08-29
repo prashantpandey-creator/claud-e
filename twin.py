@@ -194,6 +194,32 @@ def how_goals_evolve() -> Dict[str, Any]:
             "basis": "%d stamped snapshots" % len(rows)}
 
 
+def goal_series() -> Dict[str, Any]:
+    """Every stamped snapshot per goal, as a plottable series.
+
+    The text twin says "+8 done since first measured"; a line shows WHEN the
+    eight landed and where the scope stepped up under them. Same rows, same
+    filter (goals that exist now), no smoothing and no interpolation — the
+    points are the snapshots, and a gap in the record stays a gap.
+    """
+    rows = _goal_history()
+    try:
+        import goals as _gl
+        real = {g.get("name") for g in _gl.scan()}
+        rows = [r for r in rows if r.get("name") in real]
+    except Exception:
+        pass
+    out: Dict[str, List[Dict[str, Any]]] = {}
+    for r in rows:
+        n = r.get("name")
+        if not n:
+            continue
+        out.setdefault(n, []).append({"ts": r.get("ts", ""),
+                                      "done": r.get("done", 0),
+                                      "total": r.get("total", 0)})
+    return {"goals": out, "points": sum(len(v) for v in out.values())}
+
+
 def do_better() -> Dict[str, Any]:
     """The gaps, quoted from the branches that already admit them. This
     section must never soften: it is the one he asked for by name."""

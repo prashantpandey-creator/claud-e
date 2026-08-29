@@ -117,8 +117,10 @@ case "$EV" in
     # ones that hold for anybody; anything specific to your work goes in your
     # own file.
     RULES_FILE="${MEDITATE_RULES_FILE:-$HOME/.claude/meditation/rules.md}"
+    HAS_OWN_RULES=no
     if [ -r "$RULES_FILE" ]; then
         RULES=$(cat "$RULES_FILE")
+        HAS_OWN_RULES=yes
     else
         RULES="OPERATING RULES (must-fire every turn):
 1. Voice — few real lines, not narration; decide by leverage and drive, never hand ranked menus; end with one conclusion or the single next step (go/no).
@@ -128,6 +130,44 @@ case "$EV" in
 5. Verify the world — external facts are research questions (curl/read/benchmark), don't guess; take the owner's facts about their own domain as given.
 6. Ship discipline — commit to a LOCAL branch and STOP; push only on explicit go. Before any push: the repo's own tests green, and the claim proven live rather than traced.
 Add your own in $RULES_FILE — that file replaces this list entirely."
+    fi
+
+    # --- his OWN standing rules, derived (never hand-copied) -------------
+    #
+    # rules.md above is HIS file and is never written by this tool. But it is
+    # hand-maintained, so it drifts: measured 2026-08-29 it held 7 rules while
+    # the memory store held 41, and the 34 it missed were the action-governing
+    # ones — worktree discipline, commit-local-first, clean the disk before a
+    # training run, one test call before any bulk LLM spend. Those reached the
+    # mascot, which talks, and never the dispatched agents, which act.
+    #
+    # Appended, not merged: a rule he types by hand cannot be deleted by a
+    # derivation, and a rule he records in a memory cannot be missed by a
+    # stale hand-copy. Newest first, so a later correction supersedes an
+    # earlier one instead of the model picking whichever reads louder.
+    # Gated on HAVING a rules file. The SHIPPED DEFAULTS must carry nothing
+    # that belongs to one person — test_hook has protected that since the
+    # seven hardcoded rules (two of them the author's own boxes and a named
+    # provider ban) went out to every stranger who installed. A derived block
+    # appended to the defaults broke it, correctly: on a shared memory root
+    # one person's corrections would reach another person's agents. Someone
+    # with their own rules.md is deriving from their own store, so the block
+    # is theirs; someone on the defaults gets the defaults, clean.
+    DERIVED=""
+    [ "$HAS_OWN_RULES" = yes ] && DERIVED=$(python3 - 2>/dev/null <<'PYCREED'
+import os, sys
+sys.path.insert(0, os.path.expanduser("~/.claude/skills/meditate"))
+try:
+    import creed
+    print(creed.render("action", budget=2600))
+except Exception:
+    pass
+PYCREED
+)
+    if [ -n "$DERIVED" ]; then
+        RULES="$RULES
+
+$DERIVED"
     fi
 
     # --- Nidra census (sub-second, fail-open) ---
