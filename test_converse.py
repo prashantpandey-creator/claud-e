@@ -212,5 +212,51 @@ def _main():
     return 1 if failed else 0
 
 
+# ---------------------------------------------------------------------------
+# branch routing — measured 2026-08-29
+#
+# 70.6% of every interaction with this tool is `say` (1,517 of 2,148 recorded
+# actions) and 27.1% is `fix`. Every dashboard button combined is under 2%.
+# Speech IS the interface — and it answered three different questions with one
+# identical sentence: "what am I working on", "what did I leave unfinished"
+# and "what is going on" all returned the repair-queue headline. That is also
+# why `fix` was 27% of presses: it was the only action ever offered.
+# ---------------------------------------------------------------------------
+
+def test_different_questions_get_DIFFERENT_answers():
+    import converse
+    qs = ["what did I leave unfinished", "what am I working on",
+          "what is broken", "who is running right now"]
+    said = [converse.turn(q, allow_actions=False).get("speech") or "" for q in qs]
+    assert len(set(said)) == len(said), \
+        "two of these got the identical sentence:\n" + "\n".join(said)
+
+
+def test_a_question_names_its_branch():
+    import converse
+    for q, want in (("what did I leave unfinished", "status:dormant"),
+                    ("what is broken", "status:repair"),
+                    ("what am I working on", "status:moving")):
+        got = converse.turn(q, allow_actions=False).get("intent")
+        assert got == want, "%r -> %r, wanted %r" % (q, got, want)
+
+
+def test_a_question_naming_NO_branch_still_gets_the_brief():
+    """FALSIFIER. Over-routing would break the general catch-up, which is the
+    right answer when the question is general."""
+    import converse
+    assert converse.turn("what is going on", allow_actions=False).get("intent") == "status"
+
+
+def test_nothing_spoken_carries_a_file_path():
+    """This is read ALOUD. The repair branch said "no longer true: path." —
+    _as_idea stripped the path and left the bare word behind."""
+    import converse
+    for q in ("what is broken", "what did I leave unfinished", "what am I working on"):
+        s = converse.turn(q, allow_actions=False).get("speech") or ""
+        assert "/Users/" not in s and "path:" not in s, "%r said: %r" % (q, s)
+        assert not s.endswith("path."), "left the stub behind: %r" % s
+
+
 if __name__ == "__main__":
     sys.exit(_main())

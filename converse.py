@@ -124,6 +124,16 @@ def turn(utterance: str, allow_actions: bool = False,
     # --- explicit status question wins before anything else ---------------
     # ("what is bothering me" once matched the catch-all bucket 'other' and
     # answered 'no goal tracked yet' — routing order was the bug.)
+    # A question that NAMES a branch gets that branch, not the same brief.
+    for kind, rx in _BRANCH:
+        if rx.search(text):
+            said = _speak_branch(kind)
+            if said:
+                out["intent"] = "status:" + kind
+                out["speech"] = said
+                return out
+            break
+
     if _STATUS.search(text):
         out["intent"] = "status"
         # The full catch-up, same composed sentences the console's hero shows —
@@ -193,6 +203,56 @@ def turn(utterance: str, allow_actions: bool = False,
     out["intent"] = "status"
     out["speech"] = b["headline"] + ((" " + b["action"] + ".") if b.get("action") else "")
     return out
+
+
+
+# Which BRANCH of the tree a question is about.
+#
+# Measured 2026-08-29: 70.6% of every interaction with this tool is `say` —
+# talking to Casper — and 27.1% is `fix`. Everything else together is under
+# 2%. So speech IS the interface, and it was answering three different
+# questions with one identical sentence: "what am I working on", "what did I
+# leave unfinished" and "what is going on" all returned the repair-queue
+# headline. That is also why `fix` is 27% of presses: it was the only action
+# ever offered.
+#
+# The tree already computes five branches, each with its own meaning line.
+# This routes the question to the branch that answers it. No new data — the
+# coarse intent is being split, not a layer added.
+_BRANCH = [
+    ("dormant", re.compile(r"\b(left|unfinished|abandon\w*|dropped|stalled|"
+                           r"forgot\w*|old project|dormant|sitting)\b", re.I)),
+    ("repair", re.compile(r"\b(broke\w*|stale|wrong|no longer true|failed|"
+                          r"repair|rot\w*)\b", re.I)),
+    ("moving", re.compile(r"\b(working on|work on|goal|milestone|progress|"
+                          r"moving|shipping|close to)\b", re.I)),
+    ("live", re.compile(r"\b(session|agent|running|who is|whos|open right now|"
+                        r"fleet)\b", re.I)),
+    ("unassessed", re.compile(r"\b(not measured|no goal|unmeasured|blind|"
+                              r"untracked)\b", re.I)),
+]
+
+
+def _speak_branch(kind: str) -> str:
+    """One branch of the tree, said aloud — its meaning, then the top of it."""
+    import tree as _tree
+    t = _tree.build()
+    b = next((x for x in t["children"] if x["kind"] == kind), None)
+    if b is None or not b["children"]:
+        return ""
+    # Through _as_idea, which already strips what a file line carries and a
+    # mouth cannot say: paths, URLs, SHOUTED tokens, bracketed asides. Without
+    # it the repair branch read out "path colon slash Users slash badenath
+    # slash dot claude slash plans slash elegant-forging-clover dot md".
+    from voice import _as_idea
+    lead = "%s: %s." % (b["label"].lower().capitalize(), b["meaning"])
+    # Two, not five. A list read aloud is a wall in the ear the same way it is
+    # on a page — the tree is there for the rest.
+    for k in b["children"][:2]:
+        what = _as_idea(k["label"])[:90]
+        why = _as_idea(k["meaning"] or "")[:110].rstrip(".")
+        lead += " %s%s." % (what, (" — " + why) if why else "")
+    return lead
 
 
 def _default_runner(action: str) -> Dict[str, Any]:

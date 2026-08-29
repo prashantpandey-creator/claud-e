@@ -153,8 +153,14 @@ def _left(d: Dict[str, Any]) -> Dict[str, Any]:
     """Started and left. Every line here is a quote from the repo itself."""
     kids = []
     for c in d.get("dormant") or []:
+        # through _spoken_commit: a subject reads `fix(security): gate trust
+        # verify behind admin role` in git and is unspeakable as-is.
+        try:
+            from distill_speech import _spoken_commit as _sc
+        except Exception:
+            _sc = lambda x: x
         bits = ["untouched %s" % (c.get("idle") or "a while"),
-                "stopped at: %s" % (c.get("last_commit") or "?")]
+                "stopped at: %s" % (_sc(c.get("last_commit") or "") or "?")]
         if c.get("what"):
             bits.append("it calls itself: %s" % c["what"])
         kids.append(_node(c.get("project") or "?", " · ".join(bits),
@@ -169,8 +175,19 @@ def _broken(d: Dict[str, Any]) -> Dict[str, Any]:
     kids = []
     for r in d.get("repair") or []:
         fails = r.get("fails") or []
-        why = ("no longer true: " + "; ".join(str(f)[:90] for f in fails[:2])) \
-            if fails else "failed its own check"
+        # A failing claim reads as `path:/Users/.../thing.md`. Said aloud that
+        # became "no longer true: path." — _as_idea strips the path and leaves
+        # the bare word behind. Name what actually broke instead; voice.py
+        # already says it this way for the same data.
+        bits = []
+        for f in fails[:2]:
+            f = str(f)
+            if f.startswith("path:"):
+                bits.append("the %s it points to is gone"
+                            % os.path.basename(f[5:].rstrip("/")))
+            else:
+                bits.append(f[:90])
+        why = ("no longer true — " + "; ".join(bits)) if bits else "failed its own check"
         kids.append(_node((r.get("statement") or "?")[:110], why, kind="repair"))
     return _node("BROKEN", "knowledge that failed its own check", kids,
                  kind="repair", action="fix" if kids else "")
