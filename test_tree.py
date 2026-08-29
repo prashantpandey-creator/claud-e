@@ -190,6 +190,47 @@ def test_the_headline_counts_MOVING_not_open():
     assert "1 moving of 2 open" in h, h
 
 
+
+def test_the_tool_reports_its_OWN_failures():
+    """The loop it runs for your memories did not run on itself.
+
+    Measured 2026-08-29: heartbeat.log held 45 identical `osascript error`
+    lines — one class of failure, every one after a 75-second timeout — in a
+    log nothing reads, while the dispatch ledger recorded 59 successes. A
+    tool that reports on your work and never on itself is asking to be
+    trusted on the one subject it has never checked.
+    """
+    t = tree.build()
+    me = [b for b in t["children"] if b["kind"] == "self"]
+    assert me, "no branch for the tool's own state"
+    for k in me[0]["children"]:
+        assert k["meaning"], "%s reports a failure with no explanation" % k["label"]
+
+
+def test_repeated_failures_are_counted_by_CLASS_not_by_line():
+    """45 lines of one error is one problem. Reporting 45 makes it look like
+    45 problems and buries the single cause."""
+    t = tree.build()
+    me = [b for b in t["children"] if b["kind"] == "self"][0]
+    labels = [k["label"] for k in me["children"]]
+    # one entry per class, carrying its own multiplier
+    assert len(labels) == len(set(labels)), labels
+
+
+def test_the_self_branch_survives_being_CLEAN():
+    """It must still appear when nothing is wrong, saying so — a branch that
+    vanishes when healthy is indistinguishable from one that broke."""
+    import doctor
+    real = doctor._check_fleet
+    doctor._check_fleet = lambda: {"checked": True, "dispatched": 0}
+    try:
+        b = tree._itself({})
+        assert b["kind"] == "self"
+        assert "nothing" in b["meaning"].lower() or b["children"]
+    finally:
+        doctor._check_fleet = real
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

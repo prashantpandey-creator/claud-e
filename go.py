@@ -182,7 +182,8 @@ def _headless(cwd: str, prompt: str, name: str, model: str = "") -> bool:
 
 
 def dispatch_one(cwd: str, prompt: str, name: str, model: str = "",
-                 gui=None, headless=None) -> bool:
+                 gui=None, headless=None,
+                 prefer_headless: Optional[bool] = None) -> bool:
     """Open a watchable window if we can; otherwise run it headless.
 
     Measured live: the heartbeat's first real run selected the right work,
@@ -201,20 +202,63 @@ def dispatch_one(cwd: str, prompt: str, name: str, model: str = "",
         from launch import launch_claude as gui       # type: ignore
     if headless is None:
         headless = _headless
+    # HOW it launched, recorded on the function so the ledger can write it.
+    # Measured 2026-08-29: 52 of 58 dispatch rows had an empty window_id and
+    # nothing distinguished "the window opened but its id did not parse" from
+    # "no window at all" from "fell through to headless". A ledger that cannot
+    # tell those apart cannot say whether the fleet works — and it was
+    # reporting 59 dispatches while five headless logs held 39 bytes each,
+    # header only, no agent output.
+    dispatch_one.how = ""
+    # Do not try the window when the display is almost certainly off.
+    #
+    # auto_should_run only fires past AUTO_AWAY_AFTER_S — 20 minutes with no
+    # key or mouse — so EVERY unattended dispatch happens in exactly the state
+    # this function's docstring says osascript cannot work in. The result was
+    # 45 identical "osascript error" lines in heartbeat.log, each one after a
+    # 75-second timeout, and the headless path that does work reached only
+    # after burning that. Measured 2026-08-29: headless answers a PONG probe
+    # in 45s from cold. Skipping the doomed call is subtraction, not a new
+    # layer — and if the idle signal cannot be read we still try the window,
+    # because not-checkable is not "away".
+    if prefer_headless is None:
+        try:
+            import attention
+            idle = attention.signals().get("idle_s")
+            prefer_headless = idle is not None and idle >= AUTO_AWAY_AFTER_S
+        except Exception:
+            prefer_headless = False
+    if prefer_headless:
+        try:
+            if headless(cwd, prompt, name, model):
+                dispatch_one.how = "headless (display likely off)"
+                return True
+        except Exception as e:
+            dispatch_one.how = "headless-error: " + str(e)[:60]
     try:
         if gui(cwd, prompt, name, model):
+            dispatch_one.how = "gui"
             return True
-    except Exception:
-        pass                       # osascript times out by raising, not returning
+        dispatch_one.how = "gui-refused"
+    except Exception as e:
+        # osascript times out by RAISING, not returning — 45 of these sat in
+        # heartbeat.log, same failure every time, seen by nobody.
+        dispatch_one.how = "gui-error: " + str(e)[:60]
     try:
-        return bool(headless(cwd, prompt, name, model))
-    except Exception:
+        ok = bool(headless(cwd, prompt, name, model))
+        dispatch_one.how = ("headless" if ok else "headless-refused") \
+            + ("" if not dispatch_one.how.startswith("gui-") else " after " + dispatch_one.how)
+        return ok
+    except Exception as e:
+        dispatch_one.how = "failed: " + str(e)[:60]
         return False
 
 
 # Away = no key or mouse for this long. Below it you catch someone reading,
 # and an agent editing files under a reader's hands is exactly the collision
 # the sangama layer spends its life preventing.
+dispatch_one.how = ""        # set by the call above; read by the ledger writer
+
 AUTO_AWAY_AFTER_S = 20 * 60
 AUTO_MAX_AGENTS = 3          # ~35k boot tokens each before any work happens
 
@@ -637,6 +681,10 @@ def run(n: Optional[int] = None, repair_only: bool = False,
                                         # right window for a goal launched here.
                                         "window_id": getattr(launcher,
                                                              "last_window_id", ""),
+                                        # gui | headless | gui-error: … —
+                                        # without this an empty window_id was
+                                        # unreadable three different ways.
+                                        "how": getattr(dispatch_one, "how", ""),
                                         }) + "\n")
             except OSError:
                 pass
@@ -681,6 +729,10 @@ def run(n: Optional[int] = None, repair_only: bool = False,
                                                             time.gmtime()),
                                         "window_id": getattr(launcher,
                                                              "last_window_id", ""),
+                                        # gui | headless | gui-error: … —
+                                        # without this an empty window_id was
+                                        # unreadable three different ways.
+                                        "how": getattr(dispatch_one, "how", ""),
                                         }) + "\n")
             except OSError:
                 pass

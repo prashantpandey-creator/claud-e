@@ -401,6 +401,52 @@ def _check_assessment() -> Dict[str, Any]:
         return {"checked": False, "error": str(e)[:120]}
 
 
+
+def _check_fleet() -> Dict[str, Any]:
+    """Did the agents this tool launched actually DO anything?
+
+    This is the check that was missing, and its absence is why the same
+    failure ran 45 times unseen. Measured 2026-08-29: heartbeat.log held 45
+    identical "osascript error" lines — one class of failure, every one after
+    a 75-second timeout — while dispatch.jsonl recorded 59 successful
+    dispatches and 5 headless agent logs held 39 bytes each, header only.
+    The tool reported a working fleet and had no way to know otherwise.
+
+    A dispatch is only real if something came out of it: a window id, or a
+    headless log with agent output in it past the two-line header.
+    """
+    try:
+        import json as _json
+        ledger = os.path.expanduser("~/.claude/meditation/dispatch.jsonl")
+        rows = []
+        with open(ledger) as f:
+            for ln in f:
+                try:
+                    rows.append(_json.loads(ln))
+                except ValueError:
+                    continue
+        rows = [r for r in rows if "window_id" in r]      # older rows predate the field
+        logs = os.path.expanduser("~/.claude/meditation/agents")
+        produced = 0
+        empty = 0
+        for fn in (os.listdir(logs) if os.path.isdir(logs) else []):
+            try:
+                n = os.path.getsize(os.path.join(logs, fn))
+            except OSError:
+                continue
+            # the header alone is ~35-45 bytes; anything past it is real output
+            (produced, empty) = (produced + 1, empty) if n > 60 else (produced, empty + 1)
+        windowed = sum(1 for r in rows if (r.get("window_id") or "").strip())
+        # `how` was added the same day; rows without it cannot be classified,
+        # and unclassified is reported as unknown rather than as failure.
+        unknown = sum(1 for r in rows if not r.get("how"))
+        return {"checked": True, "dispatched": len(rows), "with_window": windowed,
+                "headless_logs": produced + empty, "headless_with_output": produced,
+                "headless_empty": empty, "unclassified": unknown}
+    except Exception as e:
+        return {"checked": False, "error": str(e)[:120]}
+
+
 def _check_warranty() -> Dict[str, Any]:
     """How much of MEMORY.md an agent could actually re-check.
 
@@ -439,6 +485,7 @@ def run(run_tests: bool = True) -> Dict[str, Any]:
     coverage = _check_memory_coverage()
     assessment = _check_assessment()
     warranty = _check_warranty()
+    fleet = _check_fleet()
 
     issues = []
     if not all(p["ok"] for p in prereqs):
@@ -495,6 +542,7 @@ def run(run_tests: bool = True) -> Dict[str, Any]:
         "coverage": coverage,
         "assessment": assessment,
         "warranty": warranty,
+        "fleet": fleet,
         "output": output,
         "nidra": nidra,
     }
@@ -584,6 +632,15 @@ def main(argv: List[str]) -> int:
         print(f"  {w['lines']} lines · {w['world']} re-checkable ({w['world_pct']}%) · "
               f"{w['unwarrantied']} unwarrantied · {w['ungraded']} ungraded · "
               f"{w['broken']} broken")
+
+    fl = d.get("fleet", {})
+    if fl.get("checked") and fl.get("dispatched"):
+        print(f"\nFleet:")
+        print(f"  {fl['dispatched']} dispatched · {fl['with_window']} opened a window · "
+              f"{fl['headless_with_output']} of {fl['headless_logs']} headless logs "
+              f"have agent output")
+        if fl["headless_empty"]:
+            print(f"  [{'EMPTY':>7}]  {fl['headless_empty']} headless agent(s) produced nothing")
 
     c = d.get("coverage", {})
     if c.get("auto_linkable"):

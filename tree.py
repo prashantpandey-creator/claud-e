@@ -228,6 +228,63 @@ def _unmeasured(d: Dict[str, Any]) -> Dict[str, Any]:
     return _node("NOT MEASURED", head, kids, kind="unassessed")
 
 
+def _itself(d: Dict[str, Any]) -> Dict[str, Any]:
+    """The tool's own failures, in the same tree as everything else.
+
+    The loop it runs for your memories — check, notice the break, queue the
+    repair — it did not run on itself. Measured 2026-08-29: heartbeat.log held
+    45 identical `osascript error` lines, one class of failure, every one
+    after a 75-second timeout, seen by nobody in a log nothing reads. The
+    cause was already written in dispatch_one's own docstring: the auto gate
+    only fires when you are 20+ minutes away, away means the display is off,
+    and osascript cannot drive Terminal without an awake display. So every
+    unattended dispatch ran in exactly the state documented to fail.
+
+    A tool that reports on your work and not on itself is asking to be trusted
+    on the one subject it has never checked.
+    """
+    kids = []
+    try:
+        import doctor as _doc
+        f = _doc._check_fleet()
+        if f.get("checked") and f.get("dispatched"):
+            kids.append(_node(
+                "fleet",
+                "%d dispatched · %d opened a window · %d of %d headless agents "
+                "produced output" % (f["dispatched"], f["with_window"],
+                                     f["headless_with_output"], f["headless_logs"]),
+                kind="self"))
+        if f.get("headless_empty"):
+            kids.append(_node("%d agents produced nothing" % f["headless_empty"],
+                              "started, wrote a header, and returned no work",
+                              kind="self", action="fix"))
+    except Exception:
+        pass
+    # Repeated failures nobody has read. Counting the CLASS, not the lines —
+    # 45 lines of one error is one problem, and reporting 45 makes it look
+    # like 45.
+    try:
+        log = os.path.expanduser("~/.claude/meditation/heartbeat.log")
+        classes: Dict[str, int] = {}
+        with open(log, errors="replace") as fh:
+            for ln in fh:
+                for mark in ("osascript error", "Traceback", "Error:"):
+                    if mark in ln:
+                        classes[mark] = classes.get(mark, 0) + 1
+                        break
+        for mark, n in sorted(classes.items(), key=lambda kv: -kv[1]):
+            kids.append(_node("%s × %d" % (mark, n),
+                              "same failure, repeated, in a log nothing reads",
+                              kind="self"))
+    except OSError:
+        pass
+    if not kids:
+        return _node("THE TOOL ITSELF", "nothing of its own is failing", [],
+                     kind="self")
+    return _node("THE TOOL ITSELF", "what it got wrong, on its own work",
+                 kids, kind="self")
+
+
 def build(d: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """The whole tree. Branch order is leverage order, same as the briefing:
     broken knowledge first (it corrupts everything downstream), then what is
@@ -235,8 +292,10 @@ def build(d: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     if d is None:
         import brain
         d = brain.state()
-    branches = [_broken(d), _moving(d), _live(d), _left(d), _unmeasured(d)]
-    branches = [b for b in branches if b["children"] or b["kind"] == "unassessed"]
+    branches = [_broken(d), _moving(d), _live(d), _left(d), _unmeasured(d),
+                _itself(d)]
+    branches = [b for b in branches
+                if b["children"] or b["kind"] in ("unassessed", "self")]
     headline = ((d.get("insights") or {}).get("headline")
                 or (d.get("briefing") or {}).get("headline") or "")
     return _node("YOUR WORK", headline.strip(), branches, kind="root")
