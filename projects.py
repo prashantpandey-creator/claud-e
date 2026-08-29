@@ -1010,12 +1010,26 @@ def assessment_gaps(rows: Optional[List[Dict[str, Any]]] = None) -> Dict[str, An
 
     unassessed.sort(key=lambda g: -g["sessions"])
     not_products.sort(key=lambda g: -g["sessions"])
+    # Which of those a PERSON could actually fix, and which a rule already
+    # handles. Measured 2026-08-29: all 8 flagged names were already handled
+    # — `skills` is a declared container, `other` is normalize()'s own
+    # sentinel, and six were worktree hashes caught by shape — yet doctor
+    # went red on "project_names_unaliased" and printed those very names as
+    # things to write alias lines for. Zero of them were actionable. A health
+    # check that asks for work nobody should do is a health check nobody
+    # reads, which is the same rule the test-timeout branch follows.
+    cn = _container_names()
+    needs_alias = [g for g in not_products
+                   if g["project"] != "other"
+                   and g["project"].lower() not in cn
+                   and not _WORKTREE_NAME.match(g["project"])]
     return {
         "tracked": len(rows),
         "real_projects": sum(1 for p in rows if _is_product(p.get("project") or "")),
         "assessed": assessed,
         "unassessed": unassessed,
         "not_projects": not_products,
+        "needs_alias": needs_alias,
         "dormant": dormant,
     }
 

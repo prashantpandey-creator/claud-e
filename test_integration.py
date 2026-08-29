@@ -72,20 +72,20 @@ def test_edge_heartbeat_captures_every_stage():
     for a silently dead heartbeat, began firing on a heartbeat that was
     running fine (verified: hourly journal beats at 00:30/01:30/02:30 local
     while the log sat 6.2h stale). An alarm that cries wolf is worse than none.
+
+    The chain moved OUT of the plist on 2026-08-29 — it lived in three copies
+    (launchd 7 steps, cron 5, the installed plist 6) and they had drifted.
+    heartbeat.sh owns it now, so this checks the same property in its new
+    home: one redirect around the whole pass, every stage inside it.
     """
-    import plistlib
-    plist = os.path.expanduser("~/Library/LaunchAgents/com.meditate.grade.plist")
-    if not os.path.exists(plist):
-        return
-    with open(plist, "rb") as f:
-        cmd = plistlib.load(f)["ProgramArguments"][-1]
-    head = cmd.split(">>")[0]
-    assert "{" in head and "}" in cmd.split(">>")[0] + "}", \
-        "redirect is not wrapped around the whole chain: %s" % cmd
-    # every stage must sit INSIDE the braces
-    inner = cmd[cmd.find("{") + 1:cmd.rfind("}")]
+    hb = os.path.join(SKILL, "heartbeat.sh")
+    assert os.path.exists(hb), "heartbeat.sh is gone — the chain has no owner"
+    src = open(hb).read()
+    assert 'run_all >> "$LOG"' in src, \
+        "the redirect no longer wraps the whole pass — a silent stage will eat it"
+    steps = src[src.index("STEPS=("):src.index(")", src.index("STEPS=("))]
     for stage in ("nidra_bridge.py", "archive.py", "dashboard.py", "voice.py"):
-        assert stage in inner, "%s is outside the redirected block" % stage
+        assert stage in steps, "%s is not in the pass" % stage
 
 
 def test_edge_install_preserves_a_tuned_heartbeat_interval():
@@ -224,10 +224,18 @@ def test_edge_plist_is_valid_xml():
 def test_edge_heartbeat_runs_all_silent_stages():
     """Install = consent: grade + archive-empties + dashboard all ride the
     heartbeat; a plist missing a stage silently re-manualizes the product."""
-    plist = os.path.expanduser("~/Library/LaunchAgents/com.meditate.grade.plist")
-    body = open(plist).read()
+    body = open(os.path.join(SKILL, "heartbeat.sh")).read()
     for stage in ("nidra_bridge.py", "archive.py", "dashboard.py"):
         assert stage in body, f"heartbeat missing silent stage: {stage}"
+    # and the plist must actually point AT it, or the machine is running an
+    # older copy of the chain — which is exactly how it ended up with 6 steps
+    # while the installer generated 7.
+    import plistlib
+    plist = os.path.expanduser("~/Library/LaunchAgents/com.meditate.grade.plist")
+    if os.path.exists(plist):
+        cmd = plistlib.load(open(plist, "rb"))["ProgramArguments"][-1]
+        assert "heartbeat.sh" in cmd, \
+            "the installed plist carries its own chain: %s" % cmd[:100]
 
 
 def test_edge_hook_installed_matches_repo():

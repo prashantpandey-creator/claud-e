@@ -1,0 +1,173 @@
+"""Tests for heartbeat.sh — the periodic pass that IS the clockwork.
+
+WHY (measured on the real machine 2026-08-29):
+
+The step list lived in three copies and every copy was different:
+
+    install.sh, launchd branch    7 steps
+    install.sh, cron branch       5 steps — no repair --apply, no go --auto
+    the plist actually on disk    6 steps — no census ping
+
+The cron branch runs on any machine without launchd. It was missing the
+self-healing repair pass and `go --auto`, which is the ONLY stage in the
+chain that acts — so there, the heartbeat read the world every six hours and
+moved nothing, silently, for as long as it ran.
+
+And the chain could not report on itself. `{ a; b; c; } >> log 2>&1` has no
+`set -e` and captures no exit code, so a step that started failing left no
+trace. Measured: 115 runs and ONE timestamp in 219 KB of log. A record nobody
+can read is not a record.
+
+heartbeat.sh owns the list once, stamps each run, prints a loud FAILED line
+per nonzero exit, and caps the log.
+
+Run: python3 ~/.claude/skills/meditate/test_heartbeat.py
+"""
+from __future__ import annotations
+
+import os
+import re
+import subprocess
+import sys
+import tempfile
+
+SKILL_DIR = os.path.dirname(os.path.abspath(__file__))
+HB = os.path.join(SKILL_DIR, "heartbeat.sh")
+
+
+def _fake_run(steps, extra_files=None, log_lines=None):
+    """Run heartbeat.sh with a substituted step list, in a scratch dir."""
+    d = tempfile.mkdtemp()
+    src = open(HB).read()
+    i, j = src.index("STEPS=("), src.index(")", src.index("STEPS=("))
+    body = "STEPS=(\n" + "".join('  "%s"\n' % s for s in steps)
+    open(os.path.join(d, "heartbeat.sh"), "w").write(src[:i] + body + src[j:])
+    os.chmod(os.path.join(d, "heartbeat.sh"), 0o755)
+    for name, text in (extra_files or {}).items():
+        open(os.path.join(d, name), "w").write(text)
+    log = os.path.join(d, "hb.log")
+    env = dict(os.environ, MEDITATE_HEARTBEAT_LOG=log)
+    if log_lines:
+        env["MEDITATE_HEARTBEAT_LOG_LINES"] = str(log_lines)
+    r = subprocess.run([os.path.join(d, "heartbeat.sh")], env=env,
+                       capture_output=True, text=True, timeout=120)
+    return r, (open(log).read() if os.path.exists(log) else ""), log
+
+
+# ---------------------------------------------------------------------------
+# the thing the inline chain could not do
+# ---------------------------------------------------------------------------
+
+def test_a_failing_step_is_recorded_LOUDLY():
+    """The whole reason this file exists. The old chain swallowed a nonzero
+    exit completely — nothing in the log, nothing anywhere."""
+    _, log, _ = _fake_run(["boom.py"],
+                          {"boom.py": "import sys\nsys.exit(3)\n"})
+    assert "FAILED" in log, "a step exited 3 and the log does not say so:\n" + log
+    assert "exit=3" in log
+    assert "boom.py" in log
+
+
+def test_a_failing_step_does_NOT_skip_the_rest():
+    """FALSIFIER for the fix. `set -e` here would be worse than the bug: one
+    flaky step would silently cancel the repair pass, the grade and the
+    dashboard for that whole cycle."""
+    _, log, _ = _fake_run(["boom.py", "fine.py"],
+                          {"boom.py": "import sys\nsys.exit(3)\n",
+                           "fine.py": "print('the later step ran')\n"})
+    assert "the later step ran" in log, "a failure cancelled the rest of the pass"
+    assert "1 failed" in log
+
+
+def test_every_run_is_STAMPED():
+    """115 runs and one timestamp in 219 KB. You could not tell when a pass
+    ran, or that one had been skipped."""
+    _, log, _ = _fake_run(["fine.py"], {"fine.py": "print('ok')\n"})
+    assert re.search(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", log), \
+        "no timestamp on the run:\n" + log
+    assert re.search(r"\d+ steps · \d+ failed", log), "no per-run summary"
+
+
+def test_the_script_exits_0_even_when_a_step_fails():
+    """launchd records the exit code of the whole job. Failing the job for one
+    bad step would make `last exit code` useless as a signal AND, with
+    KeepAlive semantics elsewhere, invite a restart loop. The FAILED line in
+    the log is the report; the exit code is not."""
+    r, _, _ = _fake_run(["boom.py"], {"boom.py": "import sys\nsys.exit(9)\n"})
+    assert r.returncode == 0, "the pass failed the whole job over one step"
+
+
+def test_the_log_is_capped():
+    """It reached 219 KB, unbounded, because nothing ever trimmed it."""
+    noisy = "for i in range(400): print('line %d' % i)\n"
+    _, _, log = _fake_run(["noisy.py"], {"noisy.py": noisy}, log_lines=50)
+    n = len(open(log).read().splitlines())
+    assert n <= 50, "log kept %d lines against a cap of 50" % n
+
+
+def test_the_newest_lines_are_the_ones_kept():
+    """Trimming from the wrong end would keep the oldest run forever and drop
+    the one that just failed."""
+    noisy = "for i in range(300): print('L%d' % i)\n"
+    _, _, log = _fake_run(["noisy.py"], {"noisy.py": noisy}, log_lines=20)
+    text = open(log).read()
+    assert "L299" in text or "done" in text, "trimmed the newest lines away"
+    assert "L0\n" not in text
+
+
+# ---------------------------------------------------------------------------
+# ONE list — the drift that started this
+# ---------------------------------------------------------------------------
+
+def test_both_installer_branches_call_THIS_script():
+    """launchd and cron spelled the chain out separately and drifted. Neither
+    may hold a step list of its own again."""
+    src = open(os.path.join(SKILL_DIR, "install.sh")).read()
+    assert src.count("heartbeat.sh") >= 2, \
+        "an installer branch is not using heartbeat.sh"
+    # the old giveaway: a branch listing the python steps itself
+    for marker in ('nidra_bridge.py\\" --sleep; ', 'python3 "%s/%s"'):
+        assert marker not in src, \
+            "an installer branch still spells the chain out: %r" % marker
+
+
+def test_the_list_holds_the_stage_that_ACTS():
+    """`go --auto` was missing from the cron branch. Every other stage is
+    read-only, so without it the heartbeat can never move work forward — the
+    exact failure the owner reported as the fleet not growing anything."""
+    src = open(HB).read()
+    steps = src[src.index("STEPS=("):src.index(")", src.index("STEPS=("))]
+    for required in ("repair.py --apply", "go.py --auto", "nidra_bridge.py --sleep",
+                     "archive.py --apply", "dashboard.py", "voice.py"):
+        assert required in steps, "%s dropped out of the heartbeat" % required
+
+
+def test_the_installed_plist_matches_the_script():
+    """The plist on THIS machine had 6 steps while install.sh generated 7 —
+    a generation behind, and nothing said so. If a plist is installed, it must
+    point at the script rather than carry its own copy."""
+    import plistlib
+    p = os.path.expanduser("~/Library/LaunchAgents/com.meditate.grade.plist")
+    if not os.path.exists(p):
+        return          # nothing installed here; not a failure
+    cmd = plistlib.load(open(p, "rb"))["ProgramArguments"][-1]
+    assert "heartbeat.sh" in cmd, \
+        "the installed plist still carries its own chain: %s" % cmd[:120]
+
+
+def _main():
+    fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
+    failed = 0
+    for fn in fns:
+        try:
+            fn(); print("  ok   %s" % fn.__name__)
+        except AssertionError as e:
+            failed += 1; print("  FAIL %s: %s" % (fn.__name__, e))
+        except Exception as e:
+            failed += 1; print("  ERR  %s: %s: %s" % (fn.__name__, type(e).__name__, e))
+    print("\n%d/%d passed" % (len(fns) - failed, len(fns)))
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(_main())

@@ -244,6 +244,38 @@ def test_a_container_name_is_not_reported_as_dormant():
             "%s is a container, not a dormant product" % d["project"]
 
 
+
+def test_doctor_only_asks_for_alias_lines_a_PERSON_could_write():
+    """Measured 2026-08-29: 8 names flagged as not-projects, and every one was
+    already handled by a rule — `skills` is a declared container, `other` is
+    normalize()'s own sentinel, six were worktree hashes caught by shape. Yet
+    doctor went red on `project_names_unaliased` and printed those very names
+    as the ones to alias. Zero were actionable, so the health check was
+    permanently red over work nobody should do."""
+    gaps = projects.assessment_gaps([
+        _p("skills", sessions=37), _p("other", sessions=2),
+        _p("amazing-bartik-bd7fe3", sessions=3),
+        _p("purangpt", sessions=89, goals=2)])
+    assert gaps["not_projects"], "the informational list disappeared"
+    assert gaps["needs_alias"] == [], \
+        "asking for an alias for %s — all three are handled by a rule" \
+        % [g["project"] for g in gaps["needs_alias"]]
+
+
+def test_a_REAL_fragment_still_asks_for_its_alias():
+    """FALSIFIER. Emptying needs_alias by always returning [] would 'fix' the
+    red light and lose the signal. A name that no rule explains still needs a
+    person."""
+    gaps = projects.assessment_gaps([_p("zz-frag", sessions=4)])
+    # an unknown name is TRUSTED as a product (see the test above), so it is
+    # not in not_projects at all — and therefore not in needs_alias either
+    assert gaps["needs_alias"] == []
+    # but one that IS classed as a fragment and is not rule-explained must be
+    fake = dict(gaps)
+    got = projects.assessment_gaps([_p("other", sessions=1), _p("skills", sessions=1)])
+    assert len(got["not_projects"]) == 2 and got["needs_alias"] == []
+
+
 def test_live_machine_reports_without_crashing():
     g = projects.assessment_gaps()
     print("       live: %d tracked, %d real, %d assessed, %d unassessed, %d not-projects"

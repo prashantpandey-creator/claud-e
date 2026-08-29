@@ -385,7 +385,12 @@ def _check_assessment() -> Dict[str, Any]:
                 "unassessed": len(g["unassessed"]),
                 "not_projects": len(g["not_projects"]),
                 "top_unassessed": [x["project"] for x in g["unassessed"][:5]],
-                "needs_alias": [x["project"] for x in g["not_projects"][:5]],
+                # Only the ones a person could actually fix. This used to be
+                # not_projects[:5], which printed `skills`, `other` and
+                # worktree hashes as things to write alias lines for — all
+                # already handled by a rule, none actionable.
+                "needs_alias": [x["project"] for x in g.get("needs_alias", [])[:5]],
+                "handled_by_rule": len(g["not_projects"]) - len(g.get("needs_alias", [])),
                 # Started and left — real history, nothing in 30 days. Added
                 # 2026-08-26 with the widened scan; before it, a repo the tool
                 # never looked at and a repo with no activity both read as 0.
@@ -454,11 +459,16 @@ def run(run_tests: bool = True) -> Dict[str, Any]:
         issues.append("service_label_mismatch")
     if index.get("stale"):
         issues.append("memory_index_stale")
-    if assessment.get("not_projects"):
-        # Path fragments sitting in the project table as if they were products.
-        # Mechanical: one alias line each. NOT an issue for unassessed products
-        # — which product deserves a goal is the owner's call, and doctor going
-        # red on a judgement it cannot make is how a health check gets ignored.
+    if assessment.get("needs_alias"):
+        # Path fragments sitting in the project table as if they were products,
+        # AND not already handled by a rule. Mechanical: one alias line each.
+        # It used to fire on `not_projects`, which includes the containers,
+        # the `other` sentinel and every worktree hash — measured 2026-08-29,
+        # 8 flagged and 0 of them actionable, so doctor was permanently red
+        # over work nobody should do. NOT an issue for unassessed products
+        # either — which product deserves a goal is the owner's call, and
+        # doctor going red on a judgement it cannot make is how a health check
+        # gets ignored.
         issues.append("project_names_unaliased")
     if coverage.get("auto_linkable"):
         # Only the MECHANICAL gap is an issue. A cwd with no covering project
