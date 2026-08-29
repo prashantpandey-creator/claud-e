@@ -127,6 +127,69 @@ def test_the_live_machine_builds_a_tree():
                                         for b in t["children"]))
 
 
+
+# ---------------------------------------------------------------------------
+# the audit — every one of these was a lie the tree told on 2026-08-29
+# ---------------------------------------------------------------------------
+
+def test_a_branch_NEVER_under_reports_its_own_size():
+    """NOT MEASURED showed 8 children and reported its count as 8 while the
+    truth was 29 unassessed products. A silent truncation, inside the one
+    branch whose entire job is to admit the blind spot."""
+    import projects as pj
+    t = tree.build()
+    u = [b for b in t["children"] if b["kind"] == "unassessed"][0]
+    truth = len(pj.assessment_gaps().get("unassessed", []))
+    if truth > 8:
+        assert "more" in " ".join(k["label"] for k in u["children"]), \
+            "%d unassessed, branch shows %d and never says so" % (truth, len(u["children"]))
+        assert str(truth) in u["meaning"], \
+            "the true count %d appears nowhere: %r" % (truth, u["meaning"])
+
+
+def test_an_open_window_is_not_called_WORK_happening():
+    """The branch was "LIVE RIGHT NOW (34)". coordination's own working/idle
+    split said 7 moving, 27 idle — a 5x overstatement, and it ignored a
+    `_state` field that already existed because brain.state() dropped it on
+    the way out."""
+    fake = {"live_sessions": [
+        {"sid": "a", "label": "busy", "state": "working", "last_file": "/x/a.py", "age_s": 30},
+        {"sid": "b", "label": "sat there", "state": "idle", "last_file": "", "age_s": 1200},
+        {"sid": "c", "label": "also sat", "state": "idle", "last_file": "", "age_s": 1500}]}
+    t = tree.build(fake)
+    live = [b for b in t["children"] if b["kind"] == "live"][0]
+    assert "1 moving" in live["meaning"] and "2 idle" in live["meaning"], live["meaning"]
+    assert live["children"][0]["label"] == "busy", \
+        "the ones actually moving are not at the top"
+    assert live["children"][1]["meaning"].startswith("idle")
+
+
+def test_brain_state_CARRIES_the_working_flag():
+    """The field existed in coordination and died in the payload, so every
+    consumer re-guessed liveness from last_file and got it wrong."""
+    import brain
+    rows = brain.state().get("live_sessions") or []
+    if rows:
+        assert any("state" in r for r in rows), \
+            "brain.state() drops the working/idle flag again"
+
+
+def test_the_headline_counts_MOVING_not_open():
+    """The first line anyone reads said "33 Claude sessions live" while 7 were
+    moving. Loudest place the tool overstated itself."""
+    from insights import insights
+    d = {"live_sessions": [{"sid": "a", "cwd": "/x", "state": "working"},
+                           {"sid": "b", "cwd": "/x", "state": "idle"}],
+         "goals": [], "repair": [], "fleet": []}
+    h = insights(d)["headline"]
+    # and with the flag ABSENT it must claim nothing about activity
+    d2 = {"live_sessions": [{"sid": "a", "cwd": "/x"}, {"sid": "b", "cwd": "/x"}],
+          "goals": [], "repair": [], "fleet": []}
+    h2 = insights(d2)["headline"]
+    assert "moving" not in h2, "guessed activity from a flag that was not there: %r" % h2
+    assert "1 moving of 2 open" in h, h
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

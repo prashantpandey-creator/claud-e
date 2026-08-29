@@ -57,9 +57,27 @@ def insights(state: Dict[str, Any]) -> Dict[str, Any]:
     if live:
         top = projects[0]
         others = sum(c["live"] for c in projects[1:])
-        headline = "%d Claude session%s live — %d on %s%s" % (
-            len(live), "s" if len(live) != 1 else "", top["live"], top["project"],
-            (", %d elsewhere" % others) if others else "")
+        # MOVING, not "live". A window being open is not work happening:
+        # measured 2026-08-29, 33 sessions were reported live while
+        # coordination's own working/idle split said 7 moving and 26 idle.
+        # The headline is the first line anyone reads, so it was the loudest
+        # place the tool overstated itself by nearly 5x.
+        known = [s for s in live if s.get("state")]
+        moving = sum(1 for s in known if s.get("state") == "working")
+        where = "%d on %s%s" % (top["live"], top["project"],
+                                (", %d elsewhere" % others) if others else "")
+        if not known:
+            # NOT CHECKABLE is not "idle". Without the working/idle flag the
+            # tool cannot tell work from an open window, and guessing either
+            # way is the defect this whole fix is about. Report the count and
+            # where, claim nothing about activity.
+            headline = "%d session%s open — %s" % (
+                len(live), "s" if len(live) != 1 else "", where)
+        elif moving:
+            headline = "%d moving of %d open — %s" % (moving, len(live), where)
+        else:
+            headline = "%d session%s open, none moving — %s" % (
+                len(live), "s" if len(live) != 1 else "", where)
     elif goals:
         headline = "quiet — no sessions live; %d goal%s waiting" % (
             len(goals), "s" if len(goals) != 1 else "")

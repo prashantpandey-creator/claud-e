@@ -320,6 +320,13 @@ def _state_uncached() -> Dict[str, Any]:
         "live_sessions": [{"sid": s.get("sid", "")[:12], "cwd": s.get("cwd", ""),
                            "age_s": s.get("_age_s"),
                            "pid": s.get("pid"),
+                           # coordination.live_sessions already decides
+                           # working (touched inside 180s) vs idle, and this
+                           # payload dropped it — so every consumer had to
+                           # re-guess liveness from last_file and got it
+                           # wrong. Measured 2026-08-29: 34 reported "live",
+                           # actually 7 working / 27 idle.
+                           "state": s.get("_state", ""),
                            # precision ladder: owner's name > goal milestone >
                            # the session's own chapter/ask > project dir
                            "label": _names().get(s.get("sid", "")[:12])

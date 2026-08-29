@@ -121,17 +121,32 @@ def _live(d: Dict[str, Any]) -> Dict[str, Any]:
     10 of 16 read that way on 2026-08-26, and calling them all "live" was the
     thing that made the roster untrustworthy.
     """
+    rows = d.get("live_sessions") or []
+    # working = touched something inside 180s. Sorting by it puts the ones
+    # actually moving at the top; before this the branch was in age order and
+    # a person read the first five as "what is happening", when four of them
+    # had done nothing for twenty minutes.
+    rows = sorted(rows, key=lambda s: (s.get("state") != "working",
+                                       s.get("age_s") or 0))
     kids = []
-    for s in d.get("live_sessions") or []:
+    for s in rows:
         f = (s.get("last_file") or "").strip()
-        meaning = ("in %s" % os.path.basename(f)) if f else "open but idle — nothing touched"
+        working = s.get("state") == "working"
+        if working:
+            meaning = ("in %s" % os.path.basename(f)) if f else "moving"
+        else:
+            meaning = "idle" + ((" · last in %s" % os.path.basename(f)) if f else "")
         age = _ago(s.get("age_s"))
         if age:
             meaning += " · " + age
         kids.append(_node(s.get("label") or s.get("sid") or "?", meaning,
-                          kind="session", action="tell " + (s.get("sid") or "")))
-    return _node("LIVE RIGHT NOW", "sessions open on this machine", kids,
-                 kind="live")
+                          kind="session:" + ("working" if working else "idle"),
+                          action="tell " + (s.get("sid") or "")))
+    n_work = sum(1 for s in rows if s.get("state") == "working")
+    return _node("OPEN SESSIONS",
+                 "%d moving, %d idle" % (n_work, len(rows) - n_work)
+                 if rows else "nothing open",
+                 kids, kind="live")
 
 
 def _left(d: Dict[str, Any]) -> Dict[str, Any]:
@@ -174,13 +189,23 @@ def _unmeasured(d: Dict[str, Any]) -> Dict[str, Any]:
     try:
         import projects as pj
         gaps = pj.assessment_gaps()
-        for u in gaps.get("unassessed", [])[:8]:
+        un = gaps.get("unassessed", [])
+        for u in un[:8]:
             kids.append(_node(u["project"],
                               "%d sessions of your attention, no goal — "
                               "nothing here can say if it is going well"
                               % u["sessions"], kind="unassessed"))
-        head = ("%d products, %d with a goal" %
-                (gaps.get("real_projects", 0), gaps.get("assessed", 0)))
+        if len(un) > 8:
+            # SAY THE CAP. This branch showed 8 and reported its count as 8
+            # while the truth was 29 — a silent truncation inside the one
+            # branch whose whole job is to admit the blind spot. A node that
+            # under-reports its own size is the same defect as a checker that
+            # cannot say "I do not know".
+            kids.append(_node("… and %d more" % (len(un) - 8),
+                              "showing the 8 you work in most",
+                              kind="unassessed"))
+        head = ("%d products, %d with a goal, %d worked in with none" %
+                (gaps.get("real_projects", 0), gaps.get("assessed", 0), len(un)))
     except Exception:
         head = "could not read the project table"
     return _node("NOT MEASURED", head, kids, kind="unassessed")
