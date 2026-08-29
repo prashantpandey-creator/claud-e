@@ -128,16 +128,27 @@ def test_the_repair_line_NAMES_the_thing():
 # the budget — the regression I made while adding the dormant line
 # ---------------------------------------------------------------------------
 
-def test_the_front_page_renders_in_under_a_second():
+def test_the_front_page_renders_in_under_two_seconds_COLD():
     """Measured: 0.0s before, 10.0s after wiring revival_cards() in directly,
-    0.04s after moving it behind the server. This is the screen `meditate`
-    with no arguments prints; anything a person waits for on it has to earn
-    the wait, and dormancy is the least urgent thing on the page."""
-    status.status_text()                    # warm whatever caches exist
+    0.5s after moving it behind the server.
+
+    A FRESH PROCESS, and that is the whole point. The first version of this
+    called status_text() twice in-process and asserted on the second — which
+    passed at 0.3s WITH the 10-second regression still in place, because
+    revival_cards' own caches were warm by then. `meditate` is a one-shot
+    CLI: every real invocation is cold, so a warm measurement of it is not a
+    weaker test, it is the wrong number.
+    """
+    import subprocess
+    here = os.path.dirname(os.path.abspath(__file__))
+    code = "import sys; sys.path.insert(0, %r); import status; status.status_text()" % here
     t = time.time()
-    status.status_text()
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True,
+                       text=True, timeout=90)
     took = time.time() - t
-    assert took < 1.0, "the front page took %.1fs — something expensive got wired in" % took
+    assert r.returncode == 0, r.stderr[-300:]
+    # ~0.35s of that is the interpreter and the imports, measured separately
+    assert took < 2.0, "a cold front page took %.1fs — something expensive got wired in" % took
 
 
 def test_dormancy_NEVER_computes_locally_on_this_page():
