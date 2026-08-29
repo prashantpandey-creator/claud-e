@@ -238,8 +238,22 @@ def _speak_branch(kind: str) -> str:
     import tree as _tree
     t = _tree.build()
     b = next((x for x in t["children"] if x["kind"] == kind), None)
+    # ABSENT and EMPTY are the same fact. build() drops a branch with no
+    # children, so "nothing is broken" arrives here as a missing branch, not
+    # an empty one — and treating those differently is what let the question
+    # fall through to a summary about something else.
     if b is None or not b["children"]:
-        return ""
+        # An EMPTY branch is an answer, not a miss. Returning "" here let the
+        # question fall through to the general brief, so "what is broken" got
+        # a goals-and-sessions summary the moment the repair queue cleared —
+        # the same defect this tool keeps finding in itself, an absent answer
+        # rendered as a different present one.
+        return {"repair": "Nothing is broken — everything I know still checks out.",
+                "dormant": "Nothing left half-done that I can see.",
+                "moving": "No goal has an open milestone right now.",
+                "live": "Nothing open on this machine.",
+                "unassessed": "Every project you work in has a yardstick on it.",
+                }.get(kind, "")
     # Through _as_idea, which already strips what a file line carries and a
     # mouth cannot say: paths, URLs, SHOUTED tokens, bracketed asides. Without
     # it the repair branch read out "path colon slash Users slash badenath

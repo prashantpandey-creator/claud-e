@@ -51,7 +51,7 @@ STEPS=(
   # is how 45 identical osascript failures went unseen. --quick skips the
   # 52-file suite: 11s instead of ~200s, and an hourly suite run would spawn
   # 52 python processes 24 times a day against the owner's own sessions.
-  "doctor.py --quick"
+  "doctor.py --quick --mend"
   "voice.py --notify --quiet"
 )
 

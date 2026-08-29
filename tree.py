@@ -273,7 +273,23 @@ def _itself(d: Dict[str, Any]) -> Dict[str, Any]:
                     continue
         if last:
             age_h = (time.time() - (last.get("ts_epoch") or 0)) / 3600.0
-            if last.get("issues"):
+            by = last.get("by_who") or {}
+            if by:
+                # Split by WHO must act. A flat list of findings reads as one
+                # undifferentiated pile of nagging; the only useful question
+                # is which of these is yours.
+                for who, lead in (("you", "needs you"),
+                                  ("agent", "needs an agent"),
+                                  ("auto", "the pass will fix these itself")):
+                    items = by.get(who) or []
+                    if not items:
+                        continue
+                    kids.append(_node(
+                        "%s: %s" % (lead, ", ".join(i["issue"] for i in items[:3])),
+                        "; ".join(i["why"] for i in items[:2]),
+                        kind="self",
+                        action="go" if who == "agent" else ""))
+            elif last.get("issues"):
                 kids.append(_node("self-check: " + ", ".join(last["issues"][:3]),
                                   "doctor's last verdict, %s" % _ago(age_h * 3600),
                                   kind="self"))

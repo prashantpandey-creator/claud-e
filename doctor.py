@@ -402,6 +402,91 @@ def _check_assessment() -> Dict[str, Any]:
 
 
 
+# WHO can fix each thing doctor finds — and it is three answers, not two.
+#
+# The tool could see its own failures and did nothing about any of them: two
+# issues sat open for four days while every hourly pass printed them again.
+# But "fix everything automatically" is the wrong correction. Some of these
+# need a judgment only the owner has, and a tool that guesses at those is
+# worse than one that nags.
+#
+#   auto   mechanical and reversible; the pass may just do it
+#   agent  real work — dispatch someone, do not fake it in a shell command
+#   you    needs a decision or a credential nothing here can supply
+#
+# The rule that keeps this honest: an issue with no entry defaults to YOU.
+# An unclassified problem is not an auto-fixable one.
+FIXERS: Dict[str, Dict[str, str]] = {
+    # --- the tool's own plumbing: reversible, ours, safe to just do ---------
+    "heartbeat_not_loaded": {"who": "auto", "how": "launchctl bootstrap",
+                             "why": "our own timer, unloaded"},
+    "heartbeat_never_ran":  {"who": "auto", "how": "launchctl kickstart",
+                             "why": "our own timer, never fired"},
+    "heartbeat_stale":      {"who": "auto", "how": "launchctl kickstart",
+                             "why": "our own timer, overdue"},
+    "memory_dirs_unlinked": {"who": "auto", "how": "paths.py --link-memory",
+                             "why": "a cwd with a covering project, unlinked"},
+
+    # --- real work: an agent, not a shell one-liner -------------------------
+    "stillness_overdue":     {"who": "agent", "how": "/meditate",
+                              "why": "a stilling pass is judgment, not a script"},
+    "tests":                 {"who": "agent", "how": "read the failure and fix it",
+                              "why": "a red suite is a bug, not a config"},
+    "service_label_mismatch": {"who": "agent", "how": "reconcile the plist",
+                               "why": "which label is right is a judgment"},
+
+    # --- yours: nothing here can decide it ---------------------------------
+    "prerequisites":           {"who": "you", "how": "install it",
+                                "why": "python or claude is missing"},
+    "hook_registration":       {"who": "you", "how": "meditate install",
+                                "why": "a botched settings.json breaks every session"},
+    "memory_index_stale":      {"who": "you", "how": "edit MEMORY.md",
+                                "why": "this tool never writes your memory unasked"},
+    "project_names_unaliased": {"who": "you", "how": "project-aliases.txt",
+                                "why": "which name is right is yours to say"},
+}
+
+
+def classify(issues: List[str]) -> Dict[str, List[Dict[str, str]]]:
+    """Split what was found by who can act on it. Unknown -> you."""
+    out: Dict[str, List[Dict[str, str]]] = {"auto": [], "agent": [], "you": []}
+    for i in issues:
+        f = FIXERS.get(i) or {"who": "you", "how": "unclassified",
+                              "why": "nothing here knows how to fix this"}
+        out[f["who"]].append(dict(f, issue=i))
+    return out
+
+
+def mend(issues: List[str], run=None) -> List[Dict[str, str]]:
+    """Do the mechanical ones. Returns what it did, including refusals.
+
+    Never touches `agent` or `you` — tested, because the whole value of the
+    split is that it holds under pressure to be helpful.
+    """
+    import subprocess
+    done = []
+    for item in classify(issues)["auto"]:
+        cmd = None
+        if item["how"] == "paths.py --link-memory":
+            cmd = [sys.executable, os.path.join(SKILL_DIR, "paths.py"), "--link-memory"]
+        elif item["how"].startswith("launchctl"):
+            verb = "bootstrap" if "bootstrap" in item["how"] else "kickstart"
+            uid = str(os.getuid())
+            plist = os.path.expanduser("~/Library/LaunchAgents/com.meditate.rounds.plist")
+            cmd = (["launchctl", "bootstrap", "gui/" + uid, plist] if verb == "bootstrap"
+                   else ["launchctl", "kickstart", "gui/" + uid + "/com.meditate.rounds"])
+        if not cmd:
+            done.append(dict(item, result="no fixer wired"))
+            continue
+        try:
+            r = (run or subprocess.run)(cmd, capture_output=True, text=True, timeout=60)
+            done.append(dict(item, result="fixed" if r.returncode == 0
+                             else "tried, failed: " + (r.stderr or "")[:80]))
+        except Exception as e:
+            done.append(dict(item, result="tried, failed: " + str(e)[:80]))
+    return done
+
+
 VERDICT_LEDGER = os.path.expanduser("~/.claude/meditation/doctor.jsonl")
 
 
@@ -421,6 +506,7 @@ def _record_verdict(data: Dict[str, Any], quick: bool) -> None:
                 "ts_epoch": time.time(),
                 "healthy": bool(data.get("healthy")),
                 "issues": data.get("issues") or [],
+                "by_who": classify(data.get("issues") or []),
                 "quick": bool(quick),
                 "fleet": data.get("fleet") or {},
             }) + "\n")
@@ -589,6 +675,15 @@ def run(run_tests: bool = True) -> Dict[str, Any]:
 def main(argv: List[str]) -> int:
     quick = "--quick" in argv
     env = run(run_tests=not quick)
+    if "--mend" in argv:
+        # Fix the mechanical ones, then LOOK AGAIN. Reporting what you did
+        # without re-checking is the "started: true over nothing" shape — the
+        # fix is a claim like any other and gets the same re-measurement.
+        did = mend(env["data"].get("issues") or [])
+        for x in did:
+            print("  mend  %-24s %s" % (x["issue"], x["result"]))
+        if did:
+            env = run(run_tests=not quick)
     d = env["data"]
 
     if "--json" in argv:

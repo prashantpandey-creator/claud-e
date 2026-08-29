@@ -198,6 +198,26 @@ def test_cli_envelope():
     assert "speech" in env["data"]
 
 
+
+def test_an_EMPTY_branch_still_answers_the_question_asked():
+    """Caught live 2026-08-29 when the repair queue cleared mid-session: "what
+    is broken" fell through to the general brief and answered with goals and
+    sessions. An empty branch is an answer — "nothing is broken" — not a miss."""
+    import converse, tree
+    real = tree.build
+    tree.build = lambda d=None: {"label": "YOUR WORK", "meaning": "", "count": 1,
+                                 "action": "", "kind": "root",
+                                 "children": [{"label": "BROKEN", "meaning": "",
+                                               "children": [], "count": 0,
+                                               "action": "", "kind": "repair"}]}
+    try:
+        r = converse.turn("what is broken", allow_actions=False)
+        assert r["intent"] == "status:repair", r["intent"]
+        assert "nothing is broken" in (r["speech"] or "").lower(), r["speech"]
+    finally:
+        tree.build = real
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

@@ -87,5 +87,75 @@ def _main():
     return 1 if failed else 0
 
 
+# ---------------------------------------------------------------------------
+# who fixes what — added 2026-08-29
+#
+# The tool could see its own failures and did nothing: two issues sat open for
+# four days while every hourly pass printed them again. But "fix everything
+# automatically" is the wrong correction — some findings need a judgment only
+# the owner has, and a tool that guesses at those is worse than one that nags.
+# ---------------------------------------------------------------------------
+
+def test_an_UNCLASSIFIED_finding_falls_to_you_not_to_auto():
+    """The rule that keeps the split honest. A problem nothing knows how to
+    fix is not an auto-fixable one."""
+    c = doctor.classify(["something_nobody_has_seen_before"])
+    assert [i["issue"] for i in c["you"]] == ["something_nobody_has_seen_before"]
+    assert c["auto"] == [] and c["agent"] == []
+
+
+def test_mend_NEVER_touches_what_is_yours():
+    """FALSIFIER, and the whole value of the split — it has to hold under the
+    pressure to be helpful. memory_index_stale is deliberately never
+    auto-fixed: this tool does not write your memory unasked."""
+    calls = []
+    def spy(cmd, **kw):
+        calls.append(cmd)
+        class R: returncode = 0; stderr = ""; stdout = ""
+        return R()
+    doctor.mend(["memory_index_stale", "project_names_unaliased",
+                 "prerequisites", "stillness_overdue", "tests"], run=spy)
+    assert calls == [], "it ran something for an issue that is not its to fix: %r" % calls
+
+
+def test_mend_DOES_run_the_mechanical_one():
+    """And the other half: if it never fixed anything the split would be
+    decoration."""
+    calls = []
+    def spy(cmd, **kw):
+        calls.append(cmd)
+        class R: returncode = 0; stderr = ""; stdout = ""
+        return R()
+    did = doctor.mend(["memory_dirs_unlinked"], run=spy)
+    assert len(calls) == 1, calls
+    assert "--link-memory" in " ".join(calls[0])
+    assert did[0]["result"] == "fixed"
+
+
+def test_a_failed_mend_says_so_rather_than_claiming_fixed():
+    """`started: true` over nothing, again. A fix is a claim and gets the same
+    treatment as any other."""
+    def fails(cmd, **kw):
+        class R: returncode = 1; stderr = "no such thing"; stdout = ""
+        return R()
+    did = doctor.mend(["memory_dirs_unlinked"], run=fails)
+    assert did[0]["result"].startswith("tried, failed"), did
+
+
+def test_every_issue_doctor_can_raise_is_CLASSIFIED():
+    """An issue added later with no entry silently becomes 'yours' forever and
+    nobody notices. Reading the source is the only way to catch that."""
+    import re
+    src = open(os.path.join(doctor.SKILL_DIR, "doctor.py")).read()
+    raised = set(re.findall(r'issues\.append\("([a-z_]+)"\)', src))
+    missing = raised - set(doctor.FIXERS)
+    assert not missing, "unclassified: %s" % sorted(missing)
+
+
+def test_the_pass_mends_and_looks_again():
+    src = open(os.path.join(doctor.SKILL_DIR, "heartbeat.sh")).read()
+    assert "--mend" in src, "the pass reports its findings and fixes none of them"
+
+
 if __name__ == "__main__":
     sys.exit(_main())
