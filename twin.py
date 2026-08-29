@@ -89,8 +89,14 @@ def how_you_decide() -> Dict[str, Any]:
                      "speech (%.0f%%), %d are repair (%.0f%%); every button "
                      "combined is the rest"
                      % (say, tot, 100.0 * say / tot, fix, 100.0 * fix / tot))
-    lines.append("you approve tersely and decide by leverage — the standing "
-                 "voice rule, and the record matches it")
+    if not lines:
+        # A stranger's first run lands here. The first cut asserted "you
+        # approve tersely and decide by leverage" over ZERO interactions —
+        # the author's own rule spoken about a person it had never met, the
+        # exact synthesised-profile sin this module forbids. Empty record,
+        # empty claim.
+        lines.append("not enough recorded yet to say — this section fills "
+                     "in as you use the tool")
     return {"title": "HOW YOU DECIDE — measured, not guessed",
             "lines": lines,
             "basis": "%d recorded interactions" % tot}
@@ -107,8 +113,12 @@ def your_scale() -> Dict[str, Any]:
                      "%d you work in have none, %d sit dormant"
                      % (g.get("real_projects", 0), g.get("assessed", 0),
                         len(g.get("unassessed", [])), len(g.get("dormant", []))))
-        lines.append("you start wide and finish narrow — that ratio IS the "
-                     "flavour, and the dormant list is its cost")
+        # The flavour sentence only when the numbers actually show it:
+        # asserted for a person with 1 product it is a horoscope.
+        if g.get("real_projects", 0) >= 10 and \
+                g.get("assessed", 0) * 3 < g.get("real_projects", 0):
+            lines.append("you start wide and finish narrow — that ratio IS "
+                         "the flavour, and the dormant list is its cost")
     except Exception as e:
         lines.append("could not read the project table: %s" % str(e)[:60])
         basis = "unavailable"
@@ -167,9 +177,13 @@ def how_goals_evolve() -> Dict[str, Any]:
             # negative is NARROWED; the first cut called every nonzero delta
             # "widened", which put the word on a goal that shrank.
             bits.append("scope %d — you narrowed it" % widened)
+        n_snaps = sum(1 for r in rows if r.get("name") == n)
         if not moved and not widened:
-            bits.append("unmoved across %d snapshots" % sum(
-                1 for r in rows if r.get("name") == n))
+            # One snapshot is a baseline, not stagnation. "Unmoved across 1
+            # snapshots" read as an accusation on a goal created yesterday.
+            bits.append("first snapshot — nothing to compare yet"
+                        if n_snaps <= 1 else
+                        "unmoved across %d snapshots" % n_snaps)
         lines.append(" · ".join(bits))
     return {"title": "YOUR GOALS AND HOW THEY MOVED",
             "lines": lines or ["no goal history recorded yet"],
@@ -222,9 +236,13 @@ def switch_state() -> Dict[str, Any]:
     # is registered — the live YES probe is in the session record, not rerun
     # here (a claude call per status print would be its own outage).
     hook = os.path.expanduser("~/.claude/hooks/meditate-hook.sh")
-    lines.append("rules reach every agent: hook %s (live-probed 2026-08-29: "
-                 "headless agent answered YES)"
-                 % ("installed" if os.access(hook, os.X_OK) else "MISSING"))
+    # No baked-in probe citation. The first cut appended "(live-probed
+    # 2026-08-29: headless agent answered YES)" unconditionally — the
+    # author's own measurement stamped onto every machine, INCLUDING next to
+    # "hook MISSING", where it contradicted itself in one line.
+    lines.append("rules reach every agent: hook %s"
+                 % ("installed" if os.access(hook, os.X_OK)
+                    else "MISSING — run install.sh"))
     # last self-check verdict
     try:
         last = None

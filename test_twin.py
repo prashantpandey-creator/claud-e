@@ -98,6 +98,73 @@ def test_render_is_plain_text_with_every_section():
         assert must in out, "%s missing from the rendered twin" % must
 
 
+
+def test_a_STRANGERS_twin_tells_no_horoscope():
+    """The product falsifier: run the twin as someone who is not the author.
+
+    First run against a synthetic fresh HOME told four lies, every one a
+    hand-written sentence asserting itself over an empty record: "you approve
+    tersely" on 0 interactions, "you start wide and finish narrow" on 1
+    product, a baked "live-probed ... answered YES" printed beside "hook
+    MISSING", and "unmoved" for a goal with one snapshot.
+    """
+    import json, subprocess, tempfile, textwrap
+    fake = tempfile.mkdtemp()
+    proj = os.path.join(fake, ".claude", "projects", "-home-maya-shop")
+    os.makedirs(proj)
+    with open(os.path.join(proj, "aaa.jsonl"), "w") as f:
+        f.write(json.dumps({"type": "user", "cwd": "/home/maya/shop",
+                            "timestamp": "2026-08-20T10:00:00Z",
+                            "message": {"role": "user", "content": "add a cart"}}) + "\n")
+    gdir = os.path.join(fake, "claude-sync", "goals")
+    os.makedirs(gdir)
+    with open(os.path.join(gdir, "shop-live.md"), "w") as f:
+        f.write(textwrap.dedent("""\
+            ---
+            name: shop-live
+            title: Shop live
+            project: shop
+            cwd: /home/maya/shop
+            status: active
+            ---
+            ## Milestones
+            - [x] cart page
+            - [ ] checkout works
+            """))
+    os.makedirs(os.path.join(fake, ".claude", "meditation"))
+    env = dict(os.environ, HOME=fake, MEDITATE_TESTING="1")
+    env.pop("MEDITATE_STORE_DIR", None)
+    r = subprocess.run([sys.executable,
+                        os.path.join(os.path.dirname(os.path.abspath(__file__)), "twin.py")],
+                       env=env, capture_output=True, text=True, timeout=180)
+    out = r.stdout
+    assert r.returncode == 0, r.stderr[-300:]
+    # no leakage of the author's own work into a stranger's profile
+    for his in ("purangpt", "mila", "badenath"):
+        assert his not in out.lower(), "%r leaked into a stranger's twin" % his
+    # no rule asserted over an empty record
+    assert "approve tersely" not in out, "author's voice rule spoken about a stranger"
+    assert "start wide and finish narrow" not in out, "flavour asserted on 1 product"
+    assert "answered YES" not in out, "the author's probe result baked into every machine"
+    assert "unmoved across 1" not in out
+    assert "nothing to compare yet" in out
+    assert "fills in as you use the tool" in out
+
+
+def test_on_the_REAL_record_the_claims_still_fire():
+    """FALSIFIER for the gating: with 2,000+ interactions and 78 products the
+    counted line and the flavour sentence must still appear — honesty about
+    thin data must not mute a thick record."""
+    d = twin.how_you_decide()
+    if "recorded interactions" in d["basis"] and not d["basis"].startswith("0"):
+        assert any(ch.isdigit() for ch in " ".join(d["lines"]))
+    sc = " ".join(twin.your_scale()["lines"])
+    import projects
+    g = projects.assessment_gaps()
+    if g.get("real_projects", 0) >= 10 and g.get("assessed", 0) * 3 < g["real_projects"]:
+        assert "start wide" in sc, "the flavour line vanished from the record that earns it"
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0
