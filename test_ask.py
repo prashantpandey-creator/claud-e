@@ -66,7 +66,18 @@ def test_repair_queue_written_and_cleared():
         p = ak.write_repair_queue(drift, meditation_dir=med)
         assert p and os.path.exists(p)
         body = open(p).read()
-        assert "mem_x" in body and "path:/gone" in body
+        assert "mem_x" in body and "/gone" in body
+        # The queue must name the SHAPE of the failure. dead_claims fires only
+        # when a cited file has vanished — it never checks whether the claim
+        # is contradicted — so "FAILS path:/gone" told a reader the claim had
+        # been disproved when nothing of the sort was measured.
+        assert "CITED, NOW GONE" in body, \
+            "a vanished receipt is being reported as a failed claim"
+        # ...and must not promise a repair that route cannot earn: dropping the
+        # dead path leaves the memory unverified (checked through nidra.grade),
+        # while report.py counts a REPAIR only on a return to machine_checked.
+        assert "stays unverified" in body, \
+            "the queue is still promising a repair for deleting the path"
         # clean world -> queue file removed
         p2 = ak.write_repair_queue({"count": 0, "memories": []}, meditation_dir=med)
         assert p2 is None and not os.path.exists(p)

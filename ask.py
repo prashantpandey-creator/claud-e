@@ -99,18 +99,47 @@ def write_repair_queue(drift: Dict[str, Any],
         except OSError:
             pass
         return None
-    lines = ["# Repair queue — knowledge that failed verification",
+    # The header used to say "evidence no longer matches the world" and
+    # promise that a clean re-check "counts as a REPAIR". Both were checked
+    # 2026-08-29 against the four items actually in the queue and both were
+    # wrong:
+    #
+    #   - dead_claims() fires ONLY when a `path:` locator points at a file
+    #     that is gone. It never checks whether the claim is contradicted. All
+    #     four items were vanished receipts, not disproved claims — and a
+    #     vanished receipt is silent about whether the claim is still true.
+    #   - deleting the dead path from the .md clears the item from this file,
+    #     but leaves the memory `unverified` (measured through nidra.grade on
+    #     all three shapes). `repaired` in report.py only counts a transition
+    #     TO machine_checked, so that route can never earn the repair it was
+    #     promising. The counter was honest; this file was not.
+    lines = ["# Repair queue — memories whose receipts stopped checking out",
              "",
-             "Each item is a memory whose evidence no longer matches the world.",
-             "Fix the source .md (or supersede the memory), then run",
-             "`meditate grade` — a clean re-check clears this file and counts",
-             "as a REPAIR in `meditate report`.",
+             "A memory lands here when the FILE its evidence cited is gone —",
+             "not because the world contradicted it. Those are different, and",
+             "the difference decides what to do: a claim can be perfectly true",
+             "and have lost its receipt.",
+             "",
+             "So: find out whether the statement still holds. If it does, point",
+             "it at evidence that EXISTS and run `meditate grade` — that is the",
+             "only route that earns a REPAIR in `meditate report`, which counts",
+             "only a memory that comes back machine_checked. If it no longer",
+             "holds, correct or supersede it.",
+             "",
+             "Deleting the dead path alone will clear this file and change",
+             "nothing: the memory stays unverified, with one fewer receipt.",
              ""]
     for m in items:
         lines.append("## %s  [%s]" % (m.get("id"), m.get("status")))
         lines.append("- statement: %s" % m.get("statement", "")[:200])
         for f in m.get("failing", []):
-            lines.append("- FAILS %s" % f.get("claim"))
+            claim = str(f.get("claim") or "")
+            # Name the shape. "FAILS path:/x" reads as "the claim failed";
+            # what happened is that /x is not there any more.
+            if claim.startswith("path:"):
+                lines.append("- CITED, NOW GONE: %s" % claim[5:])
+            else:
+                lines.append("- FAILS %s" % claim)
             if f.get("line"):
                 lines.append("  - line: %s" % f["line"][:160])
         if not m.get("failing"):
