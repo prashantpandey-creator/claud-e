@@ -199,3 +199,105 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv[1:]))
+
+
+# ---------------------------------------------------------------------------
+# choosing WHO to dispatch — and refusing to pretend the evidence is there
+# ---------------------------------------------------------------------------
+#
+# Measured 2026-08-30, before any of this was written:
+#   0 of 6 goal files name a model, so k["model"] is always "" and every
+#   dispatch falls through to a hardcoded `--model sonnet`;
+#   `effort` appears 0 times in go.py, launch.py and goals.py, so every agent
+#   this tool has ever dispatched ran at the CLI default.
+#
+# So the fleet was not choosing badly — it was not choosing at all, invisibly.
+#
+# What this does NOT do is rank models by the error share above. That number
+# is confounded by task difficulty, which is recorded nowhere; picking a model
+# with it would be the exact defect the caveat in this module exists to stop.
+# And there is no per-task evidence yet either: of 58 dispatch rows only 6
+# opened a window and 3 of 6 headless logs held any output at all.
+#
+# So `pick` returns a choice, the REASON for it, and whether that reason is
+# EVIDENCE or a stated default — and the dispatcher records model, effort and
+# reason on every row, so the third thing becomes possible: comparing like
+# with like, per task kind, once the record exists. A default that says it is
+# a default can be argued with; a hardcoded one cannot.
+
+# Task kinds the dispatcher actually emits, and what each really is.
+_KINDS = {
+    "repair":  "a memory failed its own check — one file, verifiable, bounded",
+    "goal":    "an open milestone — open-ended, multi-file, needs judgment",
+    "thread":  "a continuation chat — resume a known thread",
+    "revive":  "read a dormant repo and report where it stands, change nothing",
+}
+
+# Stated defaults, each with the reason it is defensible WITHOUT a quality
+# claim. Cost and latency are facts about the models; "better" is not.
+_DEFAULTS = {
+    "repair":  ("sonnet", "high",
+                "bounded and verifiable, so the cheaper, faster model is the "
+                "defensible default — not a quality judgment"),
+    "goal":    ("opus", "max",
+                "open-ended and multi-file: the expensive choice is the "
+                "defensible default when the work cannot be checked cheaply"),
+    "thread":  ("sonnet", "high",
+                "the context is already written down, so the task is to "
+                "continue rather than to decide"),
+    "revive":  ("sonnet", "high",
+                "read-and-report, no code change — the cheapest thing that "
+                "can read a repo honestly"),
+}
+
+
+def evidence_for(kind: str, limit: int = 40) -> Dict[str, Any]:
+    """What the record can say about THIS task kind. Usually: nothing yet.
+
+    Per-kind is the only comparison that is not confounded by difficulty —
+    repair tasks resemble each other. It reads the dispatch ledger, which
+    began carrying model/effort/kind on 2026-08-30; before that date the rows
+    cannot answer, and this says so rather than averaging over silence.
+    """
+    ledger = os.path.expanduser("~/.claude/meditation/dispatch.jsonl")
+    seen: Dict[str, Dict[str, int]] = {}
+    rows = 0
+    try:
+        with open(ledger) as f:
+            for ln in f:
+                try:
+                    r = json.loads(ln)
+                except ValueError:
+                    continue
+                if r.get("kind") != kind or not r.get("model"):
+                    continue
+                rows += 1
+                s = seen.setdefault(r["model"], {"dispatched": 0, "produced": 0})
+                s["dispatched"] += 1
+                if r.get("produced"):
+                    s["produced"] += 1
+    except OSError:
+        pass
+    return {"kind": kind, "rows": rows, "by_model": seen,
+            "enough": rows >= 10}
+
+
+def pick(kind: str, limit: int = 40) -> Dict[str, Any]:
+    """Which model and effort to dispatch, and WHY — evidence or default."""
+    model, effort, reason = _DEFAULTS.get(
+        kind, ("sonnet", "high", "unknown task kind — the safe middle"))
+    ev = evidence_for(kind, limit)
+    if ev["enough"]:
+        # Only once like-for-like rows exist, and only on a rate that means
+        # something: did the agent produce anything at all.
+        ranked = sorted(ev["by_model"].items(),
+                        key=lambda kv: -(kv[1]["produced"] / max(1, kv[1]["dispatched"])))
+        best, s = ranked[0]
+        rate = s["produced"] / max(1, s["dispatched"])
+        if s["dispatched"] >= 5:
+            return {"model": best, "effort": effort, "basis": "evidence",
+                    "why": "on %s tasks %s produced work %d of %d times (%.0f%%)"
+                           % (kind, best, s["produced"], s["dispatched"], 100 * rate)}
+    return {"model": model, "effort": effort, "basis": "default",
+            "why": reason + " — no like-for-like evidence yet (%d recorded %s runs)"
+                   % (ev["rows"], kind)}

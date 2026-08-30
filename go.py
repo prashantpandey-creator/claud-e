@@ -155,7 +155,8 @@ def _repair_kickoff(meditation_dir: str, store_dir: str = STORE_DIR,
 HEADLESS_LOG_DIR = os.path.join(MEDITATION_DIR, "agents")
 
 
-def _headless(cwd: str, prompt: str, name: str, model: str = "") -> bool:
+def _headless(cwd: str, prompt: str, name: str, model: str = "",
+              effort: str = "") -> bool:
     """Run the agent with no GUI at all, output to a log.
 
     `claude -p` needs no window, no Terminal and no awake display — verified
@@ -171,7 +172,9 @@ def _headless(cwd: str, prompt: str, name: str, model: str = "") -> bool:
             fh.write("# %s\n# cwd: %s\n\n" % (name, cwd))
             fh.flush()
             subprocess.Popen(
-                ["claude", "-p", prompt, "--model", model or "sonnet",
+                ["claude", "-p", prompt, "--model", model or "sonnet"]
+                + (["--effort", effort] if effort else [])
+                + [
                  "--dangerously-skip-permissions"],
                 cwd=cwd if os.path.isdir(cwd) else os.path.expanduser("~"),
                 stdout=fh, stderr=subprocess.STDOUT,
@@ -181,9 +184,49 @@ def _headless(cwd: str, prompt: str, name: str, model: str = "") -> bool:
         return False
 
 
+def _call_headless(fn, cwd, prompt, name, model, effort):
+    """Call a headless launcher that may or may not accept `effort`.
+
+    Adding a fifth positional argument broke every existing caller and fake at
+    once — test_status_go's stub takes four, so the call raised TypeError, the
+    except swallowed it, and dispatch reported "fell back to nothing". A new
+    capability must not silently disable the path it was added to.
+    """
+    try:
+        import inspect
+        if "effort" in inspect.signature(fn).parameters:
+            return fn(cwd, prompt, name, model, effort)
+    except (TypeError, ValueError):
+        pass
+    return fn(cwd, prompt, name, model)
+
+
+def choose(kind: str, model: str = "") -> Dict[str, Any]:
+    """Who to send, at what effort, and the REASON — recorded, not implied.
+
+    Measured 2026-08-30: 0 of 6 goal files named a model, so every dispatch
+    fell through to a hardcoded `--model sonnet`, and `effort` appeared 0
+    times in this file. The fleet was not choosing badly, it was not choosing
+    at all — invisibly. An explicit default that states its reason can be
+    argued with; a hardcoded one cannot.
+
+    A model named on the goal always wins: that is the owner deciding.
+    """
+    if model:
+        return {"model": model, "effort": "", "basis": "goal file",
+                "why": "the goal names this model"}
+    try:
+        import models as _md
+        return _md.pick(kind)
+    except Exception:
+        return {"model": "sonnet", "effort": "", "basis": "fallback",
+                "why": "could not read the policy"}
+
+
 def dispatch_one(cwd: str, prompt: str, name: str, model: str = "",
                  gui=None, headless=None,
-                 prefer_headless: Optional[bool] = None) -> bool:
+                 prefer_headless: Optional[bool] = None,
+                 effort: str = "") -> bool:
     """Open a watchable window if we can; otherwise run it headless.
 
     Measured live: the heartbeat's first real run selected the right work,
@@ -230,7 +273,7 @@ def dispatch_one(cwd: str, prompt: str, name: str, model: str = "",
             prefer_headless = False
     if prefer_headless:
         try:
-            if headless(cwd, prompt, name, model):
+            if _call_headless(headless, cwd, prompt, name, model, effort):
                 dispatch_one.how = "headless (display likely off)"
                 return True
         except Exception as e:
@@ -245,7 +288,7 @@ def dispatch_one(cwd: str, prompt: str, name: str, model: str = "",
         # heartbeat.log, same failure every time, seen by nobody.
         dispatch_one.how = "gui-error: " + str(e)[:60]
     try:
-        ok = bool(headless(cwd, prompt, name, model))
+        ok = bool(_call_headless(headless, cwd, prompt, name, model, effort))
         dispatch_one.how = ("headless" if ok else "headless-refused") \
             + ("" if not dispatch_one.how.startswith("gui-") else " after " + dispatch_one.how)
         return ok
@@ -654,8 +697,9 @@ def run(n: Optional[int] = None, repair_only: bool = False,
             taken[here] = g["name"]
             ok = False
             try:
+                pickd = choose("goal", k.get("model", ""))
                 ok = bool(launcher(k["cwd"], k["prompt"], "goal-" + g["name"][:20],
-                                   k.get("model", "")))
+                                   pickd["model"]))
             except Exception as e:
                 result["errors"].append("launch %s failed: %s" % (g["name"], e))
             if not ok:
@@ -685,6 +729,15 @@ def run(n: Optional[int] = None, repair_only: bool = False,
                                         # without this an empty window_id was
                                         # unreadable three different ways.
                                         "how": getattr(dispatch_one, "how", ""),
+                                        # WHO was sent, at what effort, and on
+                                        # what basis. Without these three the
+                                        # ledger can never answer "did this
+                                        # choice work" — which is the only way
+                                        # the default ever becomes evidence.
+                                        "kind": "goal",
+                                        "model": pickd["model"],
+                                        "effort": pickd["effort"],
+                                        "basis": pickd["basis"],
                                         }) + "\n")
             except OSError:
                 pass

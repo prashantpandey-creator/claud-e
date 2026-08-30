@@ -194,6 +194,69 @@ def test_the_twin_carries_the_model_section():
     assert any("NOT a quality score" in l for l in sec["lines"]),         "the caveat did not travel into the twin"
 
 
+
+# ---------------------------------------------------------------------------
+# choosing who to dispatch — measured 2026-08-30 before any of it existed:
+# 0 of 6 goal files named a model, so every dispatch fell through to a
+# hardcoded `--model sonnet`; `effort` appeared 0 times in the whole dispatch
+# path. The fleet was not choosing badly, it was not choosing at all.
+# ---------------------------------------------------------------------------
+
+def test_a_choice_always_states_its_BASIS():
+    """A default that says it is a default can be argued with; a hardcoded one
+    cannot. Every pick carries model, effort and why."""
+    for kind in ("repair", "goal", "revive", "thread", "something-new"):
+        p = models.pick(kind)
+        assert p["model"] and p["effort"], p
+        assert p["basis"] in ("evidence", "default"), p
+        assert len(p["why"]) > 20, p
+
+
+def test_it_does_NOT_rank_models_by_the_confounded_error_share():
+    """The one thing this must never do. Error share is confounded by task
+    difficulty, which is recorded nowhere — picking with it would be the exact
+    defect the caveat in this module exists to prevent. With no per-kind rows,
+    the basis must be `default`, never `evidence`."""
+    p = models.pick("goal")
+    ev = models.evidence_for("goal")
+    if not ev["enough"]:
+        assert p["basis"] == "default", \
+            "ranked models from the global error share: %r" % p
+
+
+def test_evidence_only_wins_with_ENOUGH_like_for_like_rows():
+    """Per-kind is the only comparison that is not confounded — repair tasks
+    resemble each other. But three rows are not a finding."""
+    ev = models.evidence_for("repair")
+    assert ev["enough"] is (ev["rows"] >= 10), ev
+
+
+def test_a_model_named_on_the_GOAL_always_wins():
+    """That is the owner deciding, and no policy outranks him."""
+    import go
+    c = go.choose("goal", "opus-4-8")
+    assert c["model"] == "opus-4-8" and c["basis"] == "goal file", c
+
+
+def test_the_dispatch_LEDGER_records_the_choice():
+    """Without model, effort and basis on the row, the ledger can never answer
+    'did this choice work' — so the default could never become evidence and
+    the policy would stay a guess forever."""
+    src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "go.py")).read()
+    for field in ('"kind": "goal"', '"model": pickd', '"effort": pickd', '"basis": pickd'):
+        assert field in src, "dispatch rows lost %s" % field
+
+
+def test_effort_actually_reaches_the_command():
+    """`effort` appeared 0 times in the dispatch path — every agent ever
+    dispatched ran at the CLI default."""
+    import inspect, go
+    assert "effort" in inspect.signature(go.dispatch_one).parameters
+    assert "effort" in inspect.signature(go._headless).parameters
+    src = inspect.getsource(go._headless)
+    assert '"--effort"' in src, "effort is accepted and then dropped"
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0
