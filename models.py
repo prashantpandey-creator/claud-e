@@ -64,19 +64,31 @@ def scan(limit: Optional[int] = 40) -> Dict[str, Any]:
         return per.setdefault(m, {"model": m, "turns": 0, "tool_calls": 0,
                                   "tool_errors": 0, "out_tokens": 0,
                                   "think_tokens": 0, "effort": {},
+                                  "make": 0, "look": 0, "run": 0, "mcp": 0,
+                                  "interrupted": 0, "bursts": [],
                                   "sessions": set(), "first": "", "last": ""})
 
     for f in _transcripts(limit):
         sid = os.path.basename(f)[:8]
         driver = None
         here: Dict[str, int] = {}
+        # How many turns in a row it ran before the owner spoke again. This is
+        # LEASH LENGTH — a behavioural measure of how far he let each model go
+        # unattended, not an opinion about any of them.
+        streak: Dict[str, int] = {}
         try:
             fh = open(f, errors="replace")
         except OSError:
             continue
         with fh:
             for ln in fh:
-                if '"model"' not in ln and '"tool_result"' not in ln:
+                interrupted = "Request interrupted" in ln
+                # The fast path must not drop PLAIN HUMAN MESSAGES: they carry
+                # neither "model" nor "tool_result", so the first cut skipped
+                # every one and no burst ever closed — leash read None for all
+                # six models while the prototype had measured 5 to 17.
+                if '"model"' not in ln and '"tool_result"' not in ln \
+                        and '"user"' not in ln and not interrupted:
                     continue
                 try:
                     d = json.loads(ln)
@@ -111,11 +123,35 @@ def scan(limit: Optional[int] = 40) -> Dict[str, Any]:
                     for p in (msg.get("content") or []):
                         if isinstance(p, dict) and p.get("type") == "tool_use":
                             s["tool_calls"] += 1
-                elif driver:
-                    for p in (msg.get("content") or []):
-                        if isinstance(p, dict) and p.get("type") == "tool_result" \
-                                and p.get("is_error"):
-                            slot(driver)["tool_errors"] += 1
+                            # WHAT KIND of work, not just how much. A model at
+                            # 19% make is producing code; one at 93% run is
+                            # executing someone else's plan. That difference
+                            # was invisible in a turn count.
+                            n = p.get("name") or ""
+                            if n in ("Edit", "Write", "NotebookEdit"):
+                                s["make"] += 1
+                            elif n in ("Read", "Grep", "Glob"):
+                                s["look"] += 1
+                            elif n == "Bash":
+                                s["run"] += 1
+                            elif n.startswith("mcp__"):
+                                s["mcp"] += 1
+                    streak[m] = streak.get(m, 0) + 1
+                elif d.get("type") == "user":
+                    c = msg.get("content")
+                    if isinstance(c, list):
+                        for p in c:
+                            if isinstance(p, dict) and p.get("type") == "tool_result" \
+                                    and p.get("is_error") and driver:
+                                slot(driver)["tool_errors"] += 1
+                    elif isinstance(c, str) and c.strip():
+                        # a real human message closes every open burst
+                        if interrupted and driver:
+                            slot(driver)["interrupted"] += 1
+                        for mm, n in streak.items():
+                            if n:
+                                slot(mm)["bursts"].append(n)
+                        streak = {}
         if here:
             top = max(here, key=here.get)
             sessions.append({"session": sid, "models": here, "primary": top,
@@ -137,6 +173,14 @@ def scan(limit: Optional[int] = 40) -> Dict[str, Any]:
                      # None, not 0: a turn with no effort recorded is not a
                      # turn that tried nothing.
                      "top_effort": (max(eff, key=eff.get) if eff else None),
+                     "make_share": round(s["make"] / calls, 3) if calls else None,
+                     "look_share": round(s["look"] / calls, 3) if calls else None,
+                     "run_share": round(s["run"] / calls, 3) if calls else None,
+                     # median, not mean: one 200-turn night would drag a mean
+                     # into fiction for every other burst.
+                     "leash": (sorted(s["bursts"])[len(s["bursts"]) // 2]
+                               if s["bursts"] else None),
+                     "bursts": len(s["bursts"]),
                      "effort_mix": " ".join("%s %d%%" % (k, round(100 * eff[k] / seen))
                                             for k in LADDER if eff.get(k)) or "—"})
     rows.sort(key=lambda r: -r["turns"])
@@ -156,6 +200,23 @@ def render(d: Optional[Dict[str, Any]] = None) -> str:
         out.append("  %-24s %6d %7d %8s %8d %8d %5d" %
                    (r["model"][:24], r["turns"], r["tool_calls"], share,
                     r["out_per_turn"], r["think_per_turn"], r["sessions"]))
+    out.append("")
+    out.append("  what kind of work each did, and how far you let it run:")
+    out.append("  %-24s %6s %6s %6s %8s %7s" %
+               ("model", "make", "look", "run", "leash", "stopped"))
+    for r in d["models"]:
+        pct = lambda v: "—" if v is None else "%.0f%%" % (100 * v)
+        out.append("  %-24s %6s %6s %6s %8s %7s" %
+                   (r["model"][:24], pct(r["make_share"]), pct(r["look_share"]),
+                    pct(r["run_share"]),
+                    "—" if r["leash"] is None else "%d turns" % r["leash"],
+                    r["interrupted"] if r["interrupted"] else "none"))
+    out.append("")
+    out.append("  make = Edit/Write · look = Read/Grep · run = Bash.")
+    out.append("  leash = the MEDIAN turns it ran before you spoke again — a")
+    out.append("  behavioural measure of how far you let it go, confounded by")
+    out.append("  what you happened to use each one FOR. 'stopped' counts real")
+    out.append("  interruptions; none recorded is not the same as flawless.")
     out.append("")
     out.append("  effort each was run at:")
     for r in d["models"]:

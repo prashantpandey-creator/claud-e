@@ -239,14 +239,20 @@ def who_did_the_work() -> Dict[str, Any]:
         d = _md.scan(limit=40)
         for r in d["models"][:6]:
             share = "—" if r["error_share"] is None else "%.1f%%" % (100 * r["error_share"])
-            lines.append("%s — %d turns, %s of its tool calls errored, "
-                         "%d thinking tokens a turn, run at %s"
-                         % (r["model"], r["turns"], share,
-                            r["think_per_turn"], r["effort_mix"]))
+            pct = lambda v: "—" if v is None else "%.0f%%" % (100 * v)
+            leash = ("you let it run %d turns before speaking" % r["leash"]) \
+                if r["leash"] else "no unattended stretch recorded"
+            lines.append("%s — %d turns; %s writing, %s reading, %s running "
+                         "commands; %s of its tool calls errored; %d thinking "
+                         "tokens a turn at %s; %s"
+                         % (r["model"], r["turns"], pct(r["make_share"]),
+                            pct(r["look_share"]), pct(r["run_share"]), share,
+                            r["think_per_turn"], r["effort_mix"], leash))
         if lines:
-            lines.append("error share is NOT a quality score — difficulty is "
-                         "recorded nowhere, so this says what happened while "
-                         "each was driving, not which is better")
+            lines.append("error share is NOT a quality score and leash is NOT "
+                         "a rating — difficulty and what you used each one FOR "
+                         "are recorded nowhere. This says what happened while "
+                         "each was driving, never which is better")
         basis = ("%d transcripts, attributed per turn (%d sessions mixed models)"
                  % (d["scanned"], d["mixed_sessions"]))
     except Exception as e:

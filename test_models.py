@@ -257,6 +257,79 @@ def test_effort_actually_reaches_the_command():
     assert '"--effort"' in src, "effort is accepted and then dropped"
 
 
+
+def test_a_plain_human_message_CLOSES_the_burst():
+    """The bug this pins: the fast-path line filter kept only rows containing
+    "model" or "tool_result", and a plain human message carries neither — so
+    no burst ever closed and leash read None for all six models while the
+    prototype had measured 5 to 17."""
+    old = models.PROJECTS
+    rows = [_asst("m-a"), _asst("m-a"), _asst("m-a"),
+            {"type": "user", "message": {"content": "go"}},
+            _asst("m-a"),
+            {"type": "user", "message": {"content": "ok"}}]
+    models.PROJECTS = _fixture(rows)
+    try:
+        r = models.scan()["models"][0]
+    finally:
+        models.PROJECTS = old
+    assert r["bursts"] == 2, r["bursts"]
+    assert r["leash"] in (1, 3), r["leash"]
+
+
+def test_leash_is_a_MEDIAN_not_a_mean():
+    """One 200-turn night would drag a mean into fiction for every other
+    burst."""
+    old = models.PROJECTS
+    rows = []
+    for n in (1, 1, 1, 200):
+        rows += [_asst("m-a")] * n + [{"type": "user", "message": {"content": "go"}}]
+    models.PROJECTS = _fixture(rows)
+    try:
+        r = models.scan()["models"][0]
+    finally:
+        models.PROJECTS = old
+    assert r["leash"] == 1, "a single long night set the leash: %r" % r["leash"]
+
+
+def test_the_KIND_of_work_is_split_by_tool():
+    """A model at 19% make is producing code; one at 93% run is executing
+    someone else's plan. That difference was invisible in a turn count."""
+    old = models.PROJECTS
+    def t(name):
+        return {"type": "assistant", "timestamp": "2026-08-30T10:00:00Z",
+                "message": {"model": "m", "usage": {},
+                            "content": [{"type": "tool_use", "name": name}]}}
+    models.PROJECTS = _fixture([t("Edit"), t("Read"), t("Bash"), t("Bash")])
+    try:
+        r = models.scan()["models"][0]
+    finally:
+        models.PROJECTS = old
+    assert r["make_share"] == 0.25 and r["look_share"] == 0.25
+    assert r["run_share"] == 0.5, r
+
+
+def test_ZERO_interruptions_is_reported_as_none_not_as_perfect():
+    """No interruption recorded is not the same as flawless — the signal is
+    real but rare (18 across 12 transcripts), and a blank must not read as a
+    score."""
+    old = models.PROJECTS
+    models.PROJECTS = _fixture([_asst("m-a")])
+    try:
+        text = models.render()
+    finally:
+        models.PROJECTS = old
+    assert "none recorded is not the same as flawless" in text
+    assert "leash is NOT" in text or "confounded by" in text
+
+
+def test_the_leash_caveat_reaches_the_TWIN():
+    import twin
+    sec = [s for s in twin.build() if s["title"].startswith("WHO DID THE WORK")][0]
+    joined = " ".join(sec["lines"])
+    assert "leash is NOT a rating" in joined, joined[-160:]
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0
