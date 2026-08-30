@@ -144,6 +144,7 @@ function renderSections(){
 }
 
 function drawChart(series){
+  if(typeof d3 === "undefined") return drawChartPlain(series);
   const svg = d3.select("#chart"); svg.selectAll("*").remove();
   const names = Object.keys(series.goals||{});
   if(!names.length) return;
@@ -240,7 +241,94 @@ function drawChart(series){
     (stale ? ` (${stale} of ${rows.length} goals)` : "");
 }
 
+function drawChartPlain(series){
+  // The same small multiples with no d3: two linear scales and an SVG string.
+  // d3 buys axis ticks and a step generator; neither is worth the page going
+  // blank when a CDN is unreachable.
+  const svg = document.getElementById("chart");
+  svg.innerHTML = "";
+  const rows = Object.keys(series.goals||{}).map(n => {
+    const pts = (series.goals[n]||[]).map(p => {
+      const t = Date.parse(p.ts + (p.ts.endsWith("Z")?"":"Z"));
+      return isNaN(t) ? null : {t, ts:p.ts, done:p.done, total:p.total,
+                                pct: p.total ? 100*p.done/p.total : 0};
+    }).filter(Boolean).sort((a,b)=>a.t-b.t);
+    return {n, pts};
+  }).filter(r => r.pts.length);
+  if(!rows.length) return;
+  const W = Math.max(560, svg.parentElement.clientWidth||900), narrow = W < 780;
+  const RH = 34, M = {t:8, r: narrow?152:210, b:20, l: narrow?150:196};
+  const Hh = M.t + rows.length*RH + M.b, now = Date.now();
+  const t0 = Math.min(...rows.flatMap(r=>r.pts.map(p=>p.t)));
+  const X = t => M.l + (W-M.r-M.l) * (t-t0) / Math.max(1, now-t0);
+  let out = "";
+  rows.forEach((r,i) => {
+    const top = M.t + i*RH, Y = pct => (top+RH-9) - (pct/100)*(RH-14);
+    const last = r.pts[r.pts.length-1], done = last.done >= last.total;
+    const col = done ? "#4fb08a" : "#E3B140";
+    let d = "";
+    r.pts.forEach((p,j) => { d += (j ? `H${X(p.t).toFixed(1)}V${Y(p.pct).toFixed(1)}`
+                                     : `M${X(p.t).toFixed(1)},${Y(p.pct).toFixed(1)}`); });
+    const stale = (now-last.t)/864e5;
+    out += `<text x="${M.l-10}" y="${top+RH/2+1}" text-anchor="end" fill="#d8d4cc"
+             font-size="${narrow?11:12}">${esc(narrow&&r.n.length>20?r.n.slice(0,19)+"…":r.n)}</text>`
+        + `<line x1="${M.l}" x2="${W-M.r}" y1="${Y(0)}" y2="${Y(0)}" stroke="#1a1611"/>`
+        + `<path d="${d}" fill="none" stroke="${col}" stroke-width="1.8"/>`
+        + (stale > 1.5 ? `<line x1="${X(last.t)}" x2="${X(now)}" y1="${Y(last.pct)}"
+             y2="${Y(last.pct)}" stroke="${col}" stroke-width="1" opacity=".35"
+             stroke-dasharray="2,4"/>` : "")
+        + r.pts.map((p,j) => {
+            const grew = j>0 && p.total > r.pts[j-1].total;
+            return `<circle cx="${X(p.t)}" cy="${Y(p.pct)}" r="${grew?3.4:2.2}"
+              fill="${grew?"#000":col}" stroke="${col}" stroke-width="${grew?1.6:0}"><title>${
+              esc(r.n+" — "+p.done+"/"+p.total+(grew?" · scope widened":"")+" · "+p.ts.slice(0,10))
+            }</title></circle>`; }).join("")
+        + `<text x="${W-M.r+14}" y="${top+RH/2-3}" fill="${col}" font-size="12">${last.done}/${last.total}</text>`
+        + `<text x="${W-M.r+14}" y="${top+RH/2+11}" fill="#57524a" font-size="10">${
+            done ? "done" : "measured"} ${stale<1?"today":stale<2?"yesterday":Math.round(stale)+"d ago"}</text>`;
+  });
+  svg.setAttribute("width", W); svg.setAttribute("height", Hh);
+  svg.setAttribute("viewBox", `0 0 ${W} ${Hh}`);
+  svg.innerHTML = out;
+  const stale = rows.filter(r => (now - r.pts[r.pts.length-1].t)/864e5 > 1.5).length;
+  document.getElementById("chart-basis").textContent =
+    `${series.points} stamped snapshots · one row per goal · hollow dot = scope widened · ` +
+    `dotted tail = unmeasured since` + (stale ? ` (${stale} of ${rows.length} goals)` : "") +
+    ` · plain renderer (no d3)`;
+}
+
+function initCore2D(){
+  // The same face without WebGL: one iris, one breathing ring, driven by the
+  // same uAwake/uLoad the shader reads. Plainer, never absent.
+  const cv = document.getElementById("core");
+  const ctx = cv.getContext("2d");
+  uni = {uTime:{value:0}, uAwake:{value:0.18}, uLoad:{value:0}, uAspect:{value:1}};
+  const t0 = performance.now();
+  (function loop(){
+    const w = cv.width = (cv.clientWidth||900) * (devicePixelRatio||1);
+    const h = cv.height = 230 * (devicePixelRatio||1);
+    const t = (performance.now()-t0)/1000, aw = uni.uAwake.value;
+    ctx.clearRect(0,0,w,h);
+    const cx = w/2, cy = h/2, R = h*0.42;
+    const br = 0.5 + 0.5*Math.sin(t * (aw>0.5 ? 2.4 : 0.7));
+    const g = ctx.createRadialGradient(cx,cy,0,cx,cy,R*(aw>0.5?0.55:0.4));
+    g.addColorStop(0, `rgba(227,177,64,${0.30+0.55*aw+0.18*br})`);
+    g.addColorStop(1, "rgba(227,177,64,0)");
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(cx,cy,R,0,7); ctx.fill();
+    ctx.strokeStyle = `rgba(227,177,64,${0.5+0.3*br})`; ctx.lineWidth = 1.4*(devicePixelRatio||1);
+    ctx.beginPath(); ctx.arc(cx,cy,R*(0.80+0.03*br),0,7); ctx.stroke();
+    const n = Math.round(uni.uLoad.value*6);
+    for(let i=0;i<n;i++){
+      const a = (i/6)*Math.PI*2 + t*0.35;
+      ctx.beginPath(); ctx.arc(cx+Math.cos(a)*R*0.98, cy+Math.sin(a)*R*0.98, 2.2*(devicePixelRatio||1),0,7);
+      ctx.fillStyle = "#E3B140"; ctx.fill();
+    }
+    requestAnimationFrame(loop);
+  })();
+}
+
 function initCore(){
+  if(typeof THREE === "undefined") return initCore2D();
   const cv = document.getElementById("core");
   const w = cv.clientWidth || 1016, h = 230;
   const renderer = new THREE.WebGLRenderer({canvas:cv, alpha:true, antialias:true});
@@ -279,6 +367,23 @@ function applyState(s){
   document.getElementById("p-moving").innerHTML =
     `<b>${moving}</b> moving of ${rows.length} open`;
   document.getElementById("p-gate").textContent = gate ? `gate: ${gate}` : "gate: —";
+  // STALE CODE, said out loud. The server holds the code it booted with, so
+  // after an edit it can serve confident numbers from a version that no
+  // longer exists — it happened twice in one afternoon while I read the page
+  // and believed it. A twin you cannot trust to be current is not dependable,
+  // and the flag was already in the payload, unused.
+  let warn = document.getElementById("p-stale");
+  if(s.server_stale){
+    if(!warn){
+      warn = document.createElement("span");
+      warn.id = "p-stale"; warn.className = "pill";
+      warn.style.cssText = "border-color:#7a5a1a;color:#E3B140;cursor:pointer";
+      warn.title = "the running server predates the code on disk";
+      warn.textContent = "⚠ running old code — restart";
+      warn.onclick = () => act("restart-hint","");
+      document.getElementById("p-gate").after(warn);
+    }
+  } else if(warn){ warn.remove(); }
 }
 
 async function load(){
@@ -331,5 +436,13 @@ function feed(){
   }catch(e){}
 }
 
-initCore(); load(); feed(); setInterval(load, 60000);
+// DEPENDABILITY: each of these is independent, so one failing never blanks
+// the page. Measured 2026-08-29 — with the CDN unreachable, initCore threw on
+// THREE.WebGLRenderer and, because it ran FIRST in a bare sequence, load() and
+// feed() never ran at all: no face, no sections, no chart. One missing script
+// tag took the whole console. Now each is guarded and each has a
+// library-free fallback, so CLAUD-E works with no internet at all.
+function guarded(name, fn){ try{ fn(); }catch(e){ console.warn(name, e.message); } }
+guarded("core", initCore); guarded("load", load); guarded("feed", feed);
+setInterval(() => guarded("load", load), 60000);
 </script>

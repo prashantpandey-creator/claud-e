@@ -383,8 +383,17 @@ def compute_metrics(journal: Optional[List[Dict]] = None,
     memfile_coverage = memfile_mems / total_md_files if total_md_files else 0
 
     # --- Uptime (days since first event) ---
-    now = datetime.now(timezone.utc)
-    uptime_days = (now - first_ts).total_seconds() / 86400 if first_ts else 0
+    #
+    # NOT `now = datetime.now(...)`. That line overwrote the INJECTED clock
+    # this function takes as a parameter, so every window below was computed
+    # against the wall clock instead — and the whole point of injecting
+    # journal/memories/now is that the numbers can be tested at a fixed
+    # instant. It passed for days by coincidence: the fixture's clock was
+    # near enough to today that the windows still caught the rows. The date
+    # rolled to 2026-08-30 and three trend tests went red at once, which is
+    # the honest signal a time bomb gives when it finally lands.
+    ref = now or datetime.now(timezone.utc)
+    uptime_days = (ref - first_ts).total_seconds() / 86400 if first_ts else 0
 
     # --- Compose ---
     return {

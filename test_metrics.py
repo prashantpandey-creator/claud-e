@@ -122,6 +122,29 @@ class TestMetricsAreTRUE(unittest.TestCase):
         self.assertEqual(d["downgrades"], 0)
         self.assertEqual(d["upgrades"], 1)
 
+
+    def test_the_INJECTED_clock_is_not_overwritten(self):
+        """A time bomb that took days to land.
+
+        compute_metrics takes `now` so the numbers can be tested at a fixed
+        instant — then reassigned it to datetime.now() halfway through, so
+        every window was computed against the wall clock. It passed by
+        coincidence while the fixture's date sat near today; on 2026-08-30 it
+        drifted far enough that three trend tests failed at once.
+
+        This asserts the parameter SURVIVES, by putting the fixture a year in
+        the past where a wall-clock fallback cannot possibly agree.
+        """
+        from metrics import compute_metrics
+        import datetime as dt
+        old = dt.datetime(2025, 3, 3, 12, 0, tzinfo=dt.timezone.utc)
+        j = self._journal(old, [(10, "sleep.completed", "")] * 4
+                             + [(2, "sleep.completed", "")] * 2)
+        t = compute_metrics(journal=j, memories=[], now=old)["trend"]
+        self.assertEqual(t["current"]["sleep.completed"], 2)
+        self.assertEqual(t["previous"]["sleep.completed"], 4,
+                         "the injected clock was ignored again")
+
     def test_trend_can_go_DOWN(self):
         """The property no cumulative counter has, and the reason this exists.
 

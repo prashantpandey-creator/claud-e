@@ -194,6 +194,66 @@ def test_piped_output_carries_NO_escape_codes():
     assert "CLAUD-E" in r.stdout
 
 
+
+# ---------------------------------------------------------------------------
+# DEPENDABILITY — what actually breaks CLAUD-E, measured 2026-08-29
+# ---------------------------------------------------------------------------
+
+def test_the_console_works_with_NO_internet():
+    """The console loaded three.js and d3 from a CDN and used them at the top
+    level. With the CDN unreachable initCore threw on THREE.WebGLRenderer —
+    and because it ran FIRST in a bare sequence, load() and feed() never ran
+    at all: no face, no sections, no chart. One unreachable script tag took
+    the entire twin.
+
+    Proven by rendering the real page with the script tags stripped: face
+    painted, 6 sections, 6 chart rows, 36 points, 9 buttons.
+    """
+    html = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "twin_console.html"), errors="ignore").read()
+    assert "function guarded(" in html, "one failure can blank the page again"
+    assert "guarded(\"core\", initCore); guarded(\"load\", load)" in html, \
+        "the three entry points are no longer independently guarded"
+    assert "initCore2D" in html and "drawChartPlain" in html, \
+        "the library-free fallbacks are gone"
+    assert 'typeof THREE === "undefined") return initCore2D' in html
+    assert 'typeof d3 === "undefined") return drawChartPlain' in html
+
+
+def test_stale_code_is_SAID_not_swallowed():
+    """The server holds the code it booted with, so after an edit it serves
+    confident numbers from a version that no longer exists — it happened
+    twice in one afternoon while the page was read and believed. The flag was
+    already in the payload and unused."""
+    html = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "twin_console.html"), errors="ignore").read()
+    assert "s.server_stale" in html and "running old code" in html
+
+
+def test_a_CRASHED_brain_comes_back_by_itself():
+    """Observed, not traced: SIGKILL to the server, launchd respawned it
+    within 14s on fresh code.
+
+    And KeepAlive stays crash-only ON PURPOSE. Flipping it to always-restart
+    looked like more dependability and is the opposite: brain.py exits 0 when
+    the port is already held ('already running at ...' — measured), so
+    always-restart spins that clean exit into a respawn loop. Crash-only is
+    correct because the ONLY exit-0 path is the port clash.
+    """
+    import plistlib
+    pl = os.path.expanduser("~/Library/LaunchAgents/com.meditate.brain.plist")
+    if not os.path.exists(pl):
+        return
+    d = plistlib.load(open(pl, "rb"))
+    ka = d.get("KeepAlive")
+    assert ka is not True, \
+        "KeepAlive=always turns the port-clash exit into a respawn loop"
+    assert isinstance(ka, dict) and ka.get("SuccessfulExit") is False, \
+        "the brain is no longer restarted on a crash: %r" % (ka,)
+    assert "brain.py" in " ".join(d.get("ProgramArguments") or []), \
+        "com.meditate.brain does not run brain.py"
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0
