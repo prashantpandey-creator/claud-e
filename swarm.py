@@ -50,6 +50,11 @@ PRICING = os.path.expanduser("~/.claude/meditation/pricing.json")
 # for a model that has one measured.
 _LENGTH_CURVE = [(28, 57_000), (386, 196_000), (5836, 376_000)]
 
+# How many turns one dispatched agent gets. Stated, not derived: the curve
+# above says short is cheap, and nothing on this machine has yet measured how
+# long a headless agent actually runs.
+BLOCK_TURNS = 12
+
 
 def prices() -> Dict[str, float]:
     """USD per million output tokens, if the owner has written any down."""
@@ -94,36 +99,52 @@ def _match(rates: Dict[str, Dict[str, int]], alias: str) -> Optional[str]:
 
 
 def open_work() -> List[Dict[str, Any]]:
-    """Every piece of work the fleet could take right now, with its kind."""
+    """Ask the DISPATCHER what it would send. Do not re-discover it.
+
+    The first cut walked status/goals/projects itself and built a parallel
+    list — and it disagreed with reality within the hour: go.py's dry run
+    returned `would: 0` while this planned six agents, because go applies
+    gates this copy never knew about (cooldown after a recent dispatch,
+    someone already working in that repo, the presence gate). A plan that
+    lists work the dispatcher will refuse is fiction with a cost estimate
+    attached.
+
+    One discovery, one set of gates. This module's job is the layer go does
+    NOT have: who to send, at what effort, and what it is projected to cost.
+    """
     out: List[Dict[str, Any]] = []
     try:
-        import status as st
-        d = st.gather()
-        if d.get("repair_open"):
-            out.append({"kind": "repair", "what": "the repair queue",
-                        "why": "knowledge that failed its own check"})
-        for g in (d.get("dispatchable") or []):
-            out.append({"kind": "goal",
-                        "what": g.get("title") or g.get("name") or "a goal",
-                        "why": (g.get("next") or "the open milestone")[:80],
-                        "name": g.get("name", "")})
-    except Exception:
-        pass
-    try:
         import go
-        for t in go.thread_work():
-            out.append({"kind": "thread", "what": t.get("title", "a thread"),
-                        "why": "a live continuation chat"})
-    except Exception:
-        pass
+        res = go.run(0)          # dry run: plan only, launch nothing
+        data = res.get("data", res) if isinstance(res, dict) else {}
+        for line in (data.get("would") or []):
+            kind, _, rest = str(line).partition(":")
+            kind = kind.strip().lower()
+            if kind not in ("repair", "goal", "thread"):
+                kind = "goal"
+            out.append({"kind": kind, "what": rest.strip()[:70] or line,
+                        "why": "queued by the dispatcher"})
+        out.append({"_gates": {"cooling": data.get("cooling", 0)}})
+    except Exception as e:
+        out.append({"kind": "unknown", "what": "could not ask the dispatcher",
+                    "why": str(e)[:60]})
+    gates = {}
+    if out and "_gates" in out[-1]:
+        gates = out.pop()["_gates"]
+    # Dormant repos are NOT in go's queue — reviving one is the owner's call,
+    # never automatic — so they are offered separately and marked as such.
     try:
         import projects as pj
         for c in pj.revival_cards(limit=3):
             out.append({"kind": "revive", "what": c["project"],
-                        "why": "untouched %s" % c.get("idle", "a while"),
-                        "name": c["project"]})
+                        "why": "untouched %s · not queued, needs your go"
+                               % c.get("idle", "a while"), "offer": True})
     except Exception:
         pass
+    if gates.get("cooling"):
+        out.append({"kind": "note", "what": "%d goal(s) cooling" % gates["cooling"],
+                    "why": "recently dispatched — the dispatcher is holding them",
+                    "offer": True})
     return out
 
 
@@ -142,6 +163,8 @@ def plan(max_agents: int = 6) -> Dict[str, Any]:
     total_out = 0
     priced = 0.0
     unmeasured = 0
+    notes = [i for i in items if i.get("kind") == "note"]
+    items = [i for i in items if i.get("kind") != "note"]
     for it in items[:max_agents]:
         try:
             import models as _md
@@ -153,7 +176,14 @@ def plan(max_agents: int = 6) -> Dict[str, Any]:
         r = rates.get(full or "", {})
         # A short agent by construction: the measured curve says per-turn cost
         # climbs with session length, so the plan buys turns in small blocks.
-        turns = min(r.get("leash", 8) or 8, 25)
+        # A CAP, not a prediction. The tempting number was the model's
+        # measured leash — but that is how long the OWNER let it run in an
+        # interactive session, which says nothing about a headless agent
+        # working alone. Borrowing it would dress an unrelated measurement as
+        # a forecast. Dispatched agents have no measured turn counts yet (0
+        # recorded runs), so this is a stated block size, and the projection
+        # below is a CEILING for that block.
+        turns = BLOCK_TURNS
         out_tok = (r.get("out", 0) + r.get("think", 0)) * turns
         if not r:
             unmeasured += 1
@@ -166,7 +196,7 @@ def plan(max_agents: int = 6) -> Dict[str, Any]:
                        "effort": pick["effort"], "basis": pick["basis"],
                        "policy_why": pick["why"], "turns": turns,
                        "out_tokens": out_tok, "usd": cost})
-    return {"agents": agents, "queued": len(items),
+    return {"agents": agents, "queued": len(items), "notes": notes,
             "projected_out_tokens": total_out,
             "projected_usd": round(priced, 2) if px else None,
             "unmeasured_models": unmeasured,
@@ -183,13 +213,16 @@ def render(d: Optional[Dict[str, Any]] = None) -> str:
         out.append("")
         out.append("  %-8s %s" % (a["kind"], a["what"][:60]))
         out.append("           %s" % a["why"][:70])
-        out.append("           send %s at %s effort [%s] · ~%d turns, ~%s out-tokens%s"
+        out.append("           send %s at %s effort [%s] · up to %d turns, <=%s out-tokens%s"
                    % (a["model"], a["effort"] or "default", a["basis"],
                       a["turns"], format(a["out_tokens"], ","),
                       "" if a["usd"] is None else " (~$%.2f)" % a["usd"]))
         if a["measured_as"] is None:
             out.append("           no measured rate for this model — the turn "
                        "count is a floor, not a projection")
+    for n in d.get("notes") or []:
+        out.append("")
+        out.append("  note     %s — %s" % (n["what"], n["why"]))
     out.append("")
     out.append("  %d queued, %d planned · projected ~%s output tokens%s"
                % (d["queued"], len(d["agents"]),

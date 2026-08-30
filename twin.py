@@ -416,6 +416,72 @@ def boot(write=None) -> List[Dict[str, Any]]:
     return sections
 
 
+def arm(dry: bool = True) -> Dict[str, Any]:
+    """Throw the switch it can already see.
+
+    THE RETHINK. Every section of this module reads; none of them acts. So a
+    twin whose rounds timer was unloaded, whose brain was down and whose hook
+    was missing would report all three, in gold, forever — and the owner would
+    still have to go and fix each one by hand. A twin you must hand-operate is
+    a mirror, not a twin.
+
+    Only reversible, local acts: load a launch agent that is already written,
+    start the server, copy the hook from the repo. It never writes rules.md,
+    never touches a repo, never pushes. Anything destructive stays with him.
+    """
+    import subprocess
+    acts: List[Dict[str, Any]] = []
+
+    def note(what, check, cmd=None):
+        """`check()` answers "is it still broken?" — asked BEFORE and AFTER.
+
+        The first cut set did = (returncode == 0), and it lied on its first
+        real test: `cp` preserves the destination's mode, so copying the hook
+        over a non-executable file exited 0, reported ARMED, and left the hook
+        exactly as broken as before. An exit code is not an outcome. `did` now
+        means the condition is FALSE again, re-checked.
+        """
+        needed = bool(check())
+        row = {"what": what, "needed": needed, "did": False, "detail": ""}
+        if needed and not dry and cmd:
+            try:
+                r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+                row["detail"] = (r.stderr or r.stdout).strip()[:120]
+            except Exception as e:
+                row["detail"] = str(e)[:120]
+            row["did"] = not check()
+            if not row["did"] and not row["detail"]:
+                row["detail"] = "command ran and the condition did not clear"
+        acts.append(row)
+        return row
+
+    uid = str(os.getuid())
+    try:
+        loaded = subprocess.run(["launchctl", "list"], capture_output=True,
+                                text=True, timeout=10).stdout
+    except Exception:
+        loaded = ""
+    for label in ("com.meditate.rounds", "com.meditate.brain"):
+        pl = os.path.expanduser("~/Library/LaunchAgents/%s.plist" % label)
+        note("%s loaded" % label,
+             lambda l=label, q=pl: os.path.exists(q) and l not in
+             (subprocess.run(["launchctl", "list"], capture_output=True,
+                             text=True, timeout=10).stdout or ""),
+             ["launchctl", "bootstrap", "gui/" + uid, pl])
+
+    hook = os.path.expanduser("~/.claude/hooks/meditate-hook.sh")
+    src = os.path.join(SKILL_DIR, "hooks", "meditate-hook.sh")
+    # install AND make runnable: cp alone kept the old mode, which is exactly
+    # how this function's first run reported a fix it had not made.
+    note("rules hook installed",
+         lambda: os.path.exists(src) and not os.access(hook, os.X_OK),
+         ["/bin/sh", "-c", "cp %s %s && chmod +x %s" % (src, hook, hook)])
+
+    return {"dry": dry, "acts": acts,
+            "needed": sum(1 for a in acts if a["needed"]),
+            "done": sum(1 for a in acts if a["did"])}
+
+
 def build() -> List[Dict[str, Any]]:
     return [who_you_are(), how_you_decide(), your_scale(),
             how_goals_evolve(), who_did_the_work(), do_better(), switch_state()]
@@ -443,9 +509,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(prog="meditate twin",
                                  description="the one entity that knows how you work")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--arm", action="store_true",
+                    help="turn on whatever is off (reversible, local only)")
     ap.add_argument("--no-boot", action="store_true",
                     help="plain output even on a terminal")
     a = ap.parse_args(argv)
+    if a.arm:
+        r = arm(dry=False)
+        for x in r["acts"]:
+            print("  %-34s %s" % (x["what"],
+                  "already on" if not x["needed"]
+                  else ("ARMED" if x["did"] else "FAILED: " + x["detail"])))
+        print("\n  %d needed, %d armed" % (r["needed"], r["done"]))
+        return 0
     animate = (not a.json and not a.no_boot
                and sys.stdout.isatty()
                and not os.environ.get("MEDITATE_TESTING"))

@@ -254,6 +254,64 @@ def test_a_CRASHED_brain_comes_back_by_itself():
         "com.meditate.brain does not run brain.py"
 
 
+
+def test_arm_reports_the_CONDITION_not_the_exit_code():
+    """The lie this pins, told on its first real run.
+
+    `arm` set did = (returncode == 0). `cp` preserves the destination's mode,
+    so copying the hook over a non-executable file exited 0, printed ARMED,
+    and left the hook exactly as broken as before. An exit code is not an
+    outcome; `did` means the condition is FALSE again, re-checked after
+    acting.
+    """
+    import subprocess, tempfile
+    src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "twin.py")).read()
+    assert "row[\"did\"] = not check()" in src, \
+        "arm is trusting an exit code again"
+    assert "chmod +x" in src, "cp alone leaves the old mode"
+
+
+def test_arm_DRY_by_default_and_changes_nothing():
+    """A twin that arms itself the moment you look at it is not a switch, it
+    is a surprise."""
+    import inspect
+    assert inspect.signature(twin.arm).parameters["dry"].default is True
+    r = twin.arm()
+    assert r["dry"] is True and r["done"] == 0
+
+
+def test_arm_only_touches_REVERSIBLE_local_things():
+    """It may load a launch agent that is already written, start the local
+    server, and install the hook. It must never write rules.md, touch a repo,
+    or push — those stay with him."""
+    import ast, inspect
+    # Scan the CODE, not the prose. The first cut grepped the whole function
+    # and tripped on arm's own docstring saying it never pushes — the same
+    # mistake a test of mine made earlier this week against a comment. Only
+    # string LITERALS that could become a command are checked.
+    tree = ast.parse(inspect.getsource(twin.arm).lstrip())
+    lits = [n.value for n in ast.walk(tree)
+            if isinstance(n, ast.Constant) and isinstance(n.value, str)]
+    # Docstrings, dropped by SHAPE. Comparing against ast.get_docstring fails:
+    # it dedents, while the raw Constant keeps its indentation, so the two
+    # never match and the prose sails straight into the scan. A command has no
+    # newline in it; prose does.
+    lits = [l for l in lits if "\n" not in l]
+    joined = " ".join(lits).lower()
+    for forbidden in ("git ", "push", "rm -", "rules.md", "deploy"):
+        assert forbidden not in joined, \
+            "arm can run something irreversible: %r" % forbidden
+
+
+def test_arm_on_a_healthy_machine_needs_nothing():
+    """FALSIFIER: it must not invent work to do."""
+    r = twin.arm(dry=True)
+    for a in r["acts"]:
+        assert isinstance(a["needed"], bool)
+    assert r["done"] == 0
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0
