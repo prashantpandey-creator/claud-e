@@ -102,6 +102,16 @@ print(ev); print(str(cmd).replace(chr(10), " ")); print(path)
 ' 2>/dev/null) || PARSED=$'\n\n'
 
 EV=$(printf '%s\n' "$PARSED" | sed -n 1p)
+# Without python3 the hook could not read its own EVENT NAME, so it fell to
+# the catch-all branch and emitted `{}` — the session started (fail-open,
+# right) with ZERO rules and no complaint. Measured 2026-08-30 with python3
+# stubbed to exit 127. The rules are this hook's entire payload and they come
+# from a plain file read; they must not depend on an interpreter to be
+# DELIVERED. sed can find one field in one line of JSON.
+if [ -z "$EV" ]; then
+    EV=$(printf '%s' "$IN" | tr -d '\n' \
+         | sed -n 's/.*"hook_event_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+fi
 CMD=$(printf '%s\n' "$PARSED" | sed -n 2p)
 TARGET=$(printf '%s\n' "$PARSED" | sed -n 3p)
 
@@ -270,6 +280,20 @@ print(json.dumps({"hookSpecificOutput": {
     "hookEventName": os.environ["EV_ENV"],
     "additionalContext": os.environ["MSG_ENV"]}}))
 ' 2>/dev/null) || OUT=""
+
+# PURE-BASH FALLBACK. The payload was assembled by python3, so a broken or
+# missing interpreter produced `{}` — the session still started (fail-open,
+# correct) but shipped ZERO rules, silently. Measured 2026-08-30 with python3
+# stubbed to exit 127: 2 bytes out, "OPERATING RULES" absent, no complaint
+# anywhere. The rules are the entire point of this hook and the one payload
+# that must survive its most likely dependency failing; the file read that
+# produces them needs no python at all.
+if [ -z "$OUT" ] && [ -n "$MSG" ]; then
+    ESC=$(printf '%s' "$MSG" \
+        | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/\t/\\t/g' -e 's/\r//g' \
+        | awk 'BEGIN{ORS=""} NR>1{print "\\n"} {print}')
+    OUT="{\"hookSpecificOutput\":{\"hookEventName\":\"$EV\",\"additionalContext\":\"$ESC\"}}"
+fi
 
 trap - EXIT
 [ -z "$OUT" ] && emit_nothing

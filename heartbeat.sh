@@ -29,6 +29,10 @@ set -uo pipefail          # NOT -e: one failing step must not skip the rest
 SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG="${MEDITATE_HEARTBEAT_LOG:-$HOME/.claude/meditation/heartbeat.log}"
 MAX_LINES="${MEDITATE_HEARTBEAT_LOG_LINES:-4000}"
+# Generous: the slowest real step measured is doctor --quick at ~22s,
+# and go --auto can legitimately sit while it opens windows. This is a
+# stall guard, not a performance budget.
+STEP_TIMEOUT="${MEDITATE_STEP_TIMEOUT:-600}"
 PY="${MEDITATE_PYTHON:-python3}"
 
 mkdir -p "$(dirname "$LOG")"
@@ -70,8 +74,27 @@ run_all() {
     echo "═══ heartbeat $started ═══"
     for step in "${STEPS[@]}"; do
         t0=$(date +%s)
+        # PER-STEP TIMEOUT. Nothing here was bounded, so one hung step stalled
+        # the whole pass forever — and launchd will not start the next pass
+        # while this one is still running, so the tool would silently stop
+        # grading, repairing, dispatching and self-checking with no failure
+        # anywhere to read. That is the dead-lane shape doctor exists to
+        # catch, in the thing that RUNS doctor. macOS ships no `timeout(1)`,
+        # so this is a background pid and a poll.
         # shellcheck disable=SC2086
-        $PY "$SKILL_DIR"/$step 2>&1
+        $PY "$SKILL_DIR"/$step 2>&1 &
+        step_pid=$!
+        waited=0
+        while kill -0 "$step_pid" 2>/dev/null; do
+            if [ "$waited" -ge "$STEP_TIMEOUT" ]; then
+                kill -9 "$step_pid" 2>/dev/null
+                echo "── TIMEOUT  ${step}  killed after ${STEP_TIMEOUT}s"
+                break
+            fi
+            sleep 1
+            waited=$((waited + 1))
+        done
+        wait "$step_pid" 2>/dev/null
         rc=$?
         t1=$(date +%s)
         if [ "$rc" -ne 0 ] && [[ " $TOLERANT " == *" ${step%% *} "* ]]; then

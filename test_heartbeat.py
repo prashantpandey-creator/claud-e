@@ -201,6 +201,75 @@ def test_a_REAL_breakage_still_counts():
     assert "failed=$((failed + 1))" in src
 
 
+
+def test_a_HUNG_step_cannot_stall_the_whole_pass():
+    """Nothing in the chain was bounded. One hung step stalls the pass
+    forever — and launchd will not start the next while this one runs, so the
+    tool silently stops grading, repairing, dispatching and self-checking with
+    no failure anywhere to read. That is the dead-lane shape doctor exists to
+    catch, in the thing that RUNS doctor.
+
+    Proven by running the real script with a step that sleeps far past the
+    cap: it is killed, named, and the pass completes.
+    """
+    import subprocess, tempfile, os as _os
+    d = tempfile.mkdtemp()
+    with open(_os.path.join(d, "sleeper.py"), "w") as f:
+        f.write("import time; time.sleep(600)\n")
+    log = _os.path.join(d, "rounds.log")
+    src = open(_os.path.join(SKILL_DIR, "heartbeat.sh")).read()
+    # same script, one step, pointed at the sleeper
+    src = src.replace(src[src.index("STEPS=("):src.index(")\n", src.index("STEPS=("))+1],
+                      'STEPS=(\n  "sleeper.py"\n)')
+    hb = _os.path.join(d, "hb.sh")
+    open(hb, "w").write(src)
+    r = subprocess.run(["bash", hb],
+                       env=dict(_os.environ, MEDITATE_HEARTBEAT_LOG=log,
+                                MEDITATE_STEP_TIMEOUT="3", MEDITATE_TESTING="1",
+                                MEDITATE_SKILL_DIR=d),
+                       capture_output=True, text=True, timeout=90)
+    body = open(log).read() if _os.path.exists(log) else ""
+    assert "TIMEOUT" in body, "a hung step was not killed:\n" + body[-400:]
+    assert "done" in body, "the pass never finished after the kill"
+
+
+def test_the_verdict_ledger_is_BOUNDED():
+    """Appended every rounds pass, forever — 39 KB and climbing when first
+    measured, with nothing to trim it. Every other ledger in the tool has a
+    bound; this one was born without."""
+    src = open(_os_path_join_doctor()).read()
+    assert "getsize(VERDICT_LEDGER)" in src, "doctor.jsonl grows without limit again"
+
+
+def _os_path_join_doctor():
+    import os as _os
+    return _os.path.join(SKILL_DIR, "doctor.py")
+
+
+def test_the_rules_survive_a_BROKEN_python3():
+    """The hook parsed its own event name with python3, so a broken or missing
+    interpreter left it blind: it fell to the catch-all branch and emitted
+    `{}` — the session started (fail-open, right) with ZERO rules and no
+    complaint. Measured 2026-08-30 with python3 stubbed to exit 127: 2 bytes
+    out, 'OPERATING RULES' absent. The rules come from a plain file read and
+    must not need an interpreter to be DELIVERED.
+    """
+    import subprocess, tempfile, json as _json, os as _os
+    d = tempfile.mkdtemp()
+    stub = _os.path.join(d, "python3")
+    open(stub, "w").write("#!/bin/sh\nexit 127\n")
+    _os.chmod(stub, 0o755)
+    r = subprocess.run(["bash", _os.path.join(SKILL_DIR, "hooks", "meditate-hook.sh")],
+                       input=_json.dumps({"session_id": "s", "cwd": "/tmp",
+                                          "hook_event_name": "SessionStart"}),
+                       env=dict(_os.environ, PATH=d + ":/usr/bin:/bin"),
+                       capture_output=True, text=True, timeout=60)
+    out = _json.loads(r.stdout)          # must still be valid JSON
+    ctx = (out.get("hookSpecificOutput") or {}).get("additionalContext", "")
+    assert "OPERATING RULES" in ctx, \
+        "no rules reach a session when python3 is broken: %r" % ctx[:120]
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

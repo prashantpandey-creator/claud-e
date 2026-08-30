@@ -500,6 +500,16 @@ def _record_verdict(data: Dict[str, Any], quick: bool) -> None:
     if os.environ.get("MEDITATE_TESTING"):
         return                    # tests must not write to the real ledger
     try:
+        # Cap it. This is appended every rounds pass, forever — 39 KB and
+        # climbing when first measured, with nothing to trim it. Every other
+        # ledger in the tool has a bound; this one was born without.
+        try:
+            if os.path.getsize(VERDICT_LEDGER) > 512_000:
+                keep = open(VERDICT_LEDGER).read().splitlines()[-2000:]
+                with open(VERDICT_LEDGER, "w") as f:
+                    f.write("\n".join(keep) + "\n")
+        except OSError:
+            pass
         with open(VERDICT_LEDGER, "a") as f:
             f.write(json.dumps({
                 "ts": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()),
