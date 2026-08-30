@@ -509,6 +509,50 @@ def _unresolved_imports(path: str) -> List[str]:
     return out
 
 
+_SHIPPED_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def _personal_path_offenders(path: str) -> List[str]:
+    """test_packaging.test_no_personal_paths_in_shipped_code, run against the
+    ONE file just edited instead of the whole tree at test time.
+
+    Imports that test's own PERSONAL/_code_lines/EXEMPT_FILES rather than
+    keeping a second copy — one rule, two call sites, never two versions of
+    the same regex drifting apart.
+
+    Scoped hard to files living directly in THIS shipped skill directory
+    (matching test_packaging._shipped_modules() exactly: top-level .py, not
+    test_*, not exempt). A personal path in some other project's code is not
+    a packaging bug, it is normal life on this machine — that is most of
+    what gets edited, and flagging it would be exactly the cry-wolf this
+    layer exists to avoid. Known gap, inherited from the test it mirrors: a
+    worktree checkout's own copy of these files is never checked, because
+    the hook always runs the canonical install's coordination.py, whose
+    __file__ points at the canonical directory, not the worktree's.
+    """
+    try:
+        from test_packaging import PERSONAL, _code_lines, EXEMPT_FILES
+    except Exception:
+        return []
+    ap = os.path.abspath(path)
+    fn = os.path.basename(ap)
+    if (os.path.dirname(ap) != _SHIPPED_DIR or not fn.endswith(".py")
+            or fn.startswith("test_") or fn in EXEMPT_FILES):
+        return []
+    try:
+        lines = _code_lines(fn)
+    except OSError:
+        return []
+    out = []
+    for i, line in enumerate(lines, 1):
+        for pat in PERSONAL:
+            if re.search(pat, line):
+                out.append("%s:%d the author's machine is baked into shipped "
+                           "code: %s" % (fn, i, line.strip()[:70]))
+                break
+    return out
+
+
 def check_edit(path: str, seen_path: Optional[str] = None) -> str:
     """The red squiggly: what is wrong with this file, right now. '' = fine.
 
@@ -542,6 +586,8 @@ def check_edit(path: str, seen_path: Optional[str] = None) -> str:
     if not path.endswith(".py"):
         return ""                     # nothing honest to say about the rest
 
+    personal = _personal_path_offenders(path)
+
     # ruff first when it is installed: it sees inside function bodies, where
     # the stdlib pass below cannot go and where most real undefined-name bugs
     # live. Deliberately a THREE-RULE selection, not ruff's opinions --
@@ -557,7 +603,7 @@ def check_edit(path: str, seen_path: Optional[str] = None) -> str:
                 [ruff, "check", "--select", "E9,F821,F822", "--no-cache",
                  "--quiet", "--output-format", "concise", path],
                 capture_output=True, text=True, timeout=5)
-            found = [os.path.basename(l) if l.startswith("/") else l
+            found = personal + [os.path.basename(l) if l.startswith("/") else l
                      for l in (r.stdout or "").strip().splitlines() if l.strip()]
             return _only_new(path, found, seen_path)
         except (OSError, subprocess.SubprocessError):
@@ -566,15 +612,15 @@ def check_edit(path: str, seen_path: Optional[str] = None) -> str:
         with open(path, encoding="utf-8") as fh:
             src = fh.read()
     except (OSError, UnicodeDecodeError):
-        return ""
+        return _only_new(path, personal, seen_path)
     try:
         tree = ast.parse(src, filename=path)
     except SyntaxError as e:
-        return _only_new(path, ["%s:%s %s" % (os.path.basename(path),
+        return _only_new(path, personal + ["%s:%s %s" % (os.path.basename(path),
                                               e.lineno or "?",
                                               (e.msg or "invalid syntax"))], seen_path)
     except (ValueError, RecursionError):
-        return ""
+        return _only_new(path, personal, seen_path)
 
     bound = set(dir(builtins)) | {
         "__file__", "__name__", "__doc__", "__package__", "__spec__",
@@ -606,7 +652,7 @@ def check_edit(path: str, seen_path: Optional[str] = None) -> str:
                     and node.id not in bound):
                 found.append("%s:%s '%s' is used but never imported or defined"
                              % (os.path.basename(path), node.lineno, node.id))
-    return _only_new(path, found, seen_path)
+    return _only_new(path, personal + found, seen_path)
 
 
 def _only_new(path: str, found: List[str], seen_path: Optional[str]) -> str:
