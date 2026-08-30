@@ -130,6 +130,39 @@ def test_the_live_plan_renders():
           % (d["queued"], len(d["agents"]), format(d["projected_out_tokens"], ",")))
 
 
+
+def test_a_goal_row_carries_its_NAME_not_just_prose():
+    """The console's run button takes the name as its argument. The first cut
+    kept only the sentence, so the button dispatched with an EMPTY arg —
+    which means the WHOLE FLEET rather than the one goal it pointed at. A
+    button that does something broader than its label is the same defect
+    Casper's verb fall-through was."""
+    real = swarm.open_work
+    import go
+    real_run = go.run
+    go.run = lambda n: {"data": {"would": ["goal: my-goal -> ship the thing"],
+                                 "cooling": 0}}
+    try:
+        rows = [r for r in swarm.open_work() if r.get("kind") == "goal"]
+    finally:
+        go.run = real_run
+        swarm.open_work = real
+    assert rows and rows[0]["name"] == "my-goal", rows
+    # what is the THING, why is the reason — never both in both
+    assert rows[0]["what"] == "my-goal", rows[0]
+    assert "ship the thing" in rows[0]["why"] and "->" not in rows[0]["what"]
+
+
+def test_the_console_labels_a_button_with_what_it_will_DO():
+    """'run it' on a goal with no name would start the whole fleet. The label
+    has to name the target or the click is a surprise."""
+    html = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "twin_console.html"), errors="ignore").read()
+    assert "dispatch " in html and "start the fleet" in html, \
+        "the plan's buttons no longer say what they target"
+    assert 'data-act="${esc(v)}" data-arg="${esc(arg)}"' in html
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

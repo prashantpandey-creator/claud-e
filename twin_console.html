@@ -86,6 +86,9 @@ void main(){
     <div class="body"><svg id="chart" style="width:100%"></svg>
     <div class="basis" id="chart-basis"></div></div></div>
 
+  <div class="sec"><h3>THE PLAN <span style="color:var(--faint)">who would take what, and what it would cost</span></h3>
+    <div class="body"><div id="swarm">reading the dispatcher…</div></div></div>
+
   <div class="sec"><h3>LIVE</h3><div class="body feed" id="feed"></div></div>
 </div>
 
@@ -386,6 +389,47 @@ function applyState(s){
   } else if(warn){ warn.remove(); }
 }
 
+function renderSwarm(d){
+  const box = document.getElementById("swarm");
+  if(!box) return;
+  const rows = (d.agents||[]);
+  if(!rows.length && !(d.notes||[]).length){
+    box.innerHTML = '<div style="color:var(--faint)">nothing queued and nothing offered.</div>';
+    return;
+  }
+  // The verb each row already has. The plan does not invent a new way to
+  // dispatch — it points at the one /api/act the mascot and the page share.
+  const verb = a => a.kind === "revive" ? ["revive", a.what]
+             : a.kind === "repair" ? ["fix", ""]
+             : ["go", a.name || ""];
+  // Say what the button will actually do. "run it" on a goal with no name
+  // would launch the whole fleet; the label has to name the target or the
+  // click is a surprise.
+  const label = a => a.kind === "revive" ? "open " + a.what
+               : a.kind === "repair" ? "repair now"
+               : (a.name ? "dispatch " + a.name : "start the fleet");
+  box.innerHTML = rows.map(a => {
+    const [v, arg] = verb(a);
+    const cost = a.usd == null ? `\u2264${(a.out_tokens||0).toLocaleString()} tokens`
+                               : `\u2264$${a.usd.toFixed(2)}`;
+    const max = Math.max(...rows.map(x=>x.out_tokens||0), 1);
+    const bar = Math.round(60 * (a.out_tokens||0) / max);
+    return `<div class="li"><span class="txt">
+        <b style="color:var(--gold);font-weight:500">${esc(a.kind)}</b> ${esc(a.what)}
+        <div style="color:var(--faint);font-size:11px">${esc(a.why)}</div>
+        <div style="color:var(--dim);font-size:11px">send ${esc(a.model)} at ${esc(a.effort||"default")} effort
+          [${esc(a.basis)}] \u00b7 up to ${a.turns} turns, ${cost}
+          <span style="display:inline-block;height:3px;width:${bar}px;background:var(--gold);
+            opacity:.5;vertical-align:middle;margin-left:8px"></span></div>
+      </span><button data-act="${esc(v)}" data-arg="${esc(arg)}"
+        title="${esc(a.policy_why||"")}">${esc(label(a))}</button></div>`;
+  }).join("") + (d.notes||[]).map(n =>
+      `<div class="li"><span class="txt" style="color:var(--faint)">note \u2014 ${esc(n.what)}: ${esc(n.why)}</span></div>`
+    ).join("") + `<div class="basis">${rows.length} planned \u00b7 projected \u2264${
+      (d.projected_out_tokens||0).toLocaleString()} output tokens${
+      d.priced ? " \u2248 $" + d.projected_usd : " \u00b7 priced in tokens: no price table on this machine"}</div>`;
+}
+
 async function load(){
   const [t, s] = await Promise.all([
     fetch("/api/twin",{headers:H}).then(r=>r.json()),
@@ -393,6 +437,9 @@ async function load(){
   SECTIONS = t.sections || [];
   renderSections(); applyState(s);
   if(t.series){ LAST_SERIES = t.series; drawChart(t.series); }
+  fetch("/api/swarm",{headers:H}).then(r=>r.json()).then(renderSwarm)
+    .catch(()=>{ const b=document.getElementById("swarm");
+                 if(b) b.textContent = "couldn't reach the dispatcher"; });
 }
 
 document.addEventListener("click", e => {

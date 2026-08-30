@@ -122,8 +122,23 @@ def open_work() -> List[Dict[str, Any]]:
             kind = kind.strip().lower()
             if kind not in ("repair", "goal", "thread"):
                 kind = "goal"
-            out.append({"kind": kind, "what": rest.strip()[:70] or line,
-                        "why": "queued by the dispatcher"})
+            # Carry the GOAL NAME, not just the prose. go.py's dry-run line
+            # reads "goal: <name> -> <milestone>", and the first cut kept only
+            # the sentence — so the console's run button dispatched with an
+            # EMPTY argument, which means the whole fleet rather than the one
+            # goal it was pointing at. A button that does something broader
+            # than its label is the Casper fall-through again.
+            rest = rest.strip()
+            name, sep, milestone = rest.partition("->")
+            # `what` is the THING, `why` is the reason — never both in both.
+            # Keeping the whole "name -> milestone" string in `what` printed
+            # the milestone twice in the console, once in the title and again
+            # in the line under it.
+            out.append({"kind": kind,
+                        "what": (name.strip() if sep else rest[:70]) or line,
+                        "name": name.strip() if sep else "",
+                        "why": ("next: " + milestone.strip()[:70]) if sep
+                               else "queued by the dispatcher"})
         out.append({"_gates": {"cooling": data.get("cooling", 0)}})
     except Exception as e:
         out.append({"kind": "unknown", "what": "could not ask the dispatcher",

@@ -806,6 +806,24 @@ def report_data() -> Dict[str, Any]:
             "generated": time.strftime("%A %-d %B, %H:%M")}
 
 
+_SWARM_CACHE: Dict[str, Any] = {"at": 0.0, "data": None}
+
+
+def _swarm_cached(ttl_s: float = 45.0) -> Dict[str, Any]:
+    """The dispatch plan, warm. It asks go.py's dry run, which walks goals and
+    the cooldown ledger, so it is not free — and the answer only changes when
+    the queue does."""
+    if time.time() - _SWARM_CACHE["at"] < ttl_s and _SWARM_CACHE["data"]:
+        return _SWARM_CACHE["data"]
+    try:
+        import swarm as _sw
+        d = _sw.plan()
+    except Exception as e:
+        d = {"agents": [], "notes": [], "error": str(e)[:200]}
+    _SWARM_CACHE.update({"at": time.time(), "data": d})
+    return d
+
+
 _TWIN_CACHE: Dict[str, Any] = {"at": 0.0, "data": None}
 
 
@@ -1446,6 +1464,9 @@ class _Handler(BaseHTTPRequestHandler):
                 if d is None:
                     d = {"error": "no such goal: %s" % name}
                 body = json.dumps(d).encode()
+                ctype = "application/json"
+            elif self.path == "/api/swarm":
+                body = json.dumps(_swarm_cached()).encode()
                 ctype = "application/json"
             elif self.path == "/api/twin":
                 body = json.dumps(_twin_cached()).encode()
