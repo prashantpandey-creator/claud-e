@@ -220,6 +220,41 @@ def goal_series() -> Dict[str, Any]:
     return {"goals": out, "points": sum(len(v) for v in out.values())}
 
 
+def who_did_the_work() -> Dict[str, Any]:
+    """Which model drove, at what effort, and how its commands fared.
+
+    Attributed per TURN — 9 of 40 sessions used more than one model, so a
+    session-level label is false on a quarter of the record. `effort` is a row
+    field and thinking_tokens sits inside usage.output_tokens_details; the two
+    halves of "how hard was it trying" live in different places, which is why
+    neither had ever reached a report.
+
+    Never a ranking. Error share is confounded by task difficulty and
+    difficulty is recorded nowhere.
+    """
+    lines: List[str] = []
+    basis = "unavailable"
+    try:
+        import models as _md
+        d = _md.scan(limit=40)
+        for r in d["models"][:6]:
+            share = "—" if r["error_share"] is None else "%.1f%%" % (100 * r["error_share"])
+            lines.append("%s — %d turns, %s of its tool calls errored, "
+                         "%d thinking tokens a turn, run at %s"
+                         % (r["model"], r["turns"], share,
+                            r["think_per_turn"], r["effort_mix"]))
+        if lines:
+            lines.append("error share is NOT a quality score — difficulty is "
+                         "recorded nowhere, so this says what happened while "
+                         "each was driving, not which is better")
+        basis = ("%d transcripts, attributed per turn (%d sessions mixed models)"
+                 % (d["scanned"], d["mixed_sessions"]))
+    except Exception as e:
+        lines.append("could not read the transcripts: %s" % str(e)[:60])
+    return {"title": "WHO DID THE WORK — model and effort, from the record",
+            "lines": lines, "basis": basis}
+
+
 def do_better() -> Dict[str, Any]:
     """The gaps, quoted from the branches that already admit them. This
     section must never soften: it is the one he asked for by name."""
@@ -338,6 +373,7 @@ _BOOT_LABELS = [
     ("decision record", "how you actually decide", how_you_decide),
     ("project field", "everything you have built", your_scale),
     ("goal trajectories", "where each goal moved", how_goals_evolve),
+    ("model attribution", "who drove, at what effort", who_did_the_work),
     ("gap analysis", "what the record holds against you", do_better),
     ("switch integrity", "every autonomous link, checked", switch_state),
 ]
@@ -376,7 +412,7 @@ def boot(write=None) -> List[Dict[str, Any]]:
 
 def build() -> List[Dict[str, Any]]:
     return [who_you_are(), how_you_decide(), your_scale(),
-            how_goals_evolve(), do_better(), switch_state()]
+            how_goals_evolve(), who_did_the_work(), do_better(), switch_state()]
 
 
 def render(sections: Optional[List[Dict[str, Any]]] = None) -> str:

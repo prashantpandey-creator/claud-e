@@ -58,10 +58,12 @@ def scan(limit: Optional[int] = 40) -> Dict[str, Any]:
     """
     per: Dict[str, Dict[str, Any]] = {}
     sessions: List[Dict[str, Any]] = []
+    effort_all: Dict[str, int] = {}
 
     def slot(m):
         return per.setdefault(m, {"model": m, "turns": 0, "tool_calls": 0,
                                   "tool_errors": 0, "out_tokens": 0,
+                                  "think_tokens": 0, "effort": {},
                                   "sessions": set(), "first": "", "last": ""})
 
     for f in _transcripts(limit):
@@ -93,6 +95,16 @@ def scan(limit: Optional[int] = 40) -> Dict[str, Any]:
                     here[m] = here.get(m, 0) + 1
                     u = msg.get("usage") or {}
                     s["out_tokens"] += u.get("output_tokens") or 0
+                    # thinking_tokens sits in usage.output_tokens_details, and
+                    # `effort` is a ROW field, not a message field — the two
+                    # halves of "how hard was it trying" live in different
+                    # places, which is why neither was in any report.
+                    det = u.get("output_tokens_details") or {}
+                    s["think_tokens"] += det.get("thinking_tokens") or 0
+                    e = d.get("effort")
+                    if e:
+                        s["effort"][e] = s["effort"].get(e, 0) + 1
+                        effort_all[e] = effort_all.get(e, 0) + 1
                     if ts:
                         s["first"] = min(s["first"] or ts, ts)
                         s["last"] = max(s["last"], ts)
@@ -110,30 +122,44 @@ def scan(limit: Optional[int] = 40) -> Dict[str, Any]:
                              "mixed": len(here) > 1,
                              "turns": sum(here.values())})
 
+    # Ordered hardest-first so "mostly max" and "mostly low" read at a glance.
+    LADDER = ["max", "xhigh", "high", "medium", "low"]
     rows = []
     for m, s in per.items():
         calls = s["tool_calls"]
+        eff = s["effort"]
+        seen = sum(eff.values())
         rows.append({**s,
                      "sessions": len(s["sessions"]),
                      "error_share": round(s["tool_errors"] / calls, 3) if calls else None,
-                     "out_per_turn": round(s["out_tokens"] / s["turns"]) if s["turns"] else 0})
+                     "out_per_turn": round(s["out_tokens"] / s["turns"]) if s["turns"] else 0,
+                     "think_per_turn": round(s["think_tokens"] / s["turns"]) if s["turns"] else 0,
+                     # None, not 0: a turn with no effort recorded is not a
+                     # turn that tried nothing.
+                     "top_effort": (max(eff, key=eff.get) if eff else None),
+                     "effort_mix": " ".join("%s %d%%" % (k, round(100 * eff[k] / seen))
+                                            for k in LADDER if eff.get(k)) or "—"})
     rows.sort(key=lambda r: -r["turns"])
     mixed = sum(1 for x in sessions if x["mixed"])
     return {"models": rows, "sessions": sessions,
             "scanned": len(_transcripts(limit)),
-            "mixed_sessions": mixed}
+            "mixed_sessions": mixed, "effort_all": effort_all}
 
 
 def render(d: Optional[Dict[str, Any]] = None) -> str:
     d = d or scan()
     out = ["WHICH MODEL DID WHICH WORK", "=" * 62]
-    out.append("  %-26s %6s %7s %8s %7s %6s" %
-               ("model", "turns", "calls", "errored", "out/turn", "sess"))
+    out.append("  %-24s %6s %7s %8s %8s %8s %5s" %
+               ("model", "turns", "calls", "errored", "out/turn", "think/tn", "sess"))
     for r in d["models"]:
         share = "—" if r["error_share"] is None else "%.1f%%" % (100 * r["error_share"])
-        out.append("  %-26s %6d %7d %8s %7d %6d" %
-                   (r["model"][:26], r["turns"], r["tool_calls"], share,
-                    r["out_per_turn"], r["sessions"]))
+        out.append("  %-24s %6d %7d %8s %8d %8d %5d" %
+                   (r["model"][:24], r["turns"], r["tool_calls"], share,
+                    r["out_per_turn"], r["think_per_turn"], r["sessions"]))
+    out.append("")
+    out.append("  effort each was run at:")
+    for r in d["models"]:
+        out.append("  %-24s %s" % (r["model"][:24], r["effort_mix"]))
     out.append("")
     out.append("  %d transcripts · %d of %d sessions used MORE THAN ONE model, so"
                % (d["scanned"], d["mixed_sessions"], len(d["sessions"])))

@@ -126,6 +126,74 @@ def test_the_live_record_attributes_every_turn():
                                       for r in d["models"][:4]))
 
 
+
+def test_effort_and_thinking_are_BOTH_captured():
+    """They live in different places and neither had reached a report: `effort`
+    is a ROW field (22,052 of 22,346 turns), thinking_tokens is nested in
+    usage.output_tokens_details (22,091). Reading only the message misses both.
+    """
+    old = models.PROJECTS
+    rows = [{"type": "assistant", "timestamp": "2026-08-30T10:00:00Z",
+             "effort": "max",
+             "message": {"model": "m-a",
+                         "usage": {"output_tokens": 100,
+                                   "output_tokens_details": {"thinking_tokens": 40}},
+                         "content": []}},
+            {"type": "assistant", "timestamp": "2026-08-30T10:01:00Z",
+             "effort": "low",
+             "message": {"model": "m-a",
+                         "usage": {"output_tokens": 100,
+                                   "output_tokens_details": {"thinking_tokens": 0}},
+                         "content": []}}]
+    models.PROJECTS = _fixture(rows)
+    try:
+        r = models.scan()["models"][0]
+    finally:
+        models.PROJECTS = old
+    assert r["think_tokens"] == 40 and r["think_per_turn"] == 20, r
+    assert r["effort"] == {"max": 1, "low": 1}, r["effort"]
+    assert "max 50%" in r["effort_mix"] and "low 50%" in r["effort_mix"], r["effort_mix"]
+
+
+def test_effort_mix_reads_HARDEST_first():
+    """'max 97% xhigh 3%' and 'low 90% high 10%' must be distinguishable at a
+    glance; alphabetical order would put low before max and invert it."""
+    old = models.PROJECTS
+    rows = [{"type": "assistant", "timestamp": "2026-08-30T10:00:00Z", "effort": e,
+             "message": {"model": "m", "usage": {}, "content": []}}
+            for e in ["low", "max", "xhigh", "high", "medium"]]
+    models.PROJECTS = _fixture(rows)
+    try:
+        mix = models.scan()["models"][0]["effort_mix"]
+    finally:
+        models.PROJECTS = old
+    order = [w for w in mix.split() if not w.endswith("%")]
+    assert order == ["max", "xhigh", "high", "medium", "low"], mix
+
+
+def test_a_turn_with_NO_effort_recorded_is_not_called_zero():
+    """294 real turns carry no effort field. Reporting them as an effort level
+    would invent one; the mix says '—'."""
+    old = models.PROJECTS
+    models.PROJECTS = _fixture([{"type": "assistant", "timestamp": "2026-08-30T10:00:00Z",
+                                 "message": {"model": "m", "usage": {}, "content": []}}])
+    try:
+        r = models.scan()["models"][0]
+    finally:
+        models.PROJECTS = old
+    assert r["top_effort"] is None and r["effort_mix"] == "—", r
+
+
+def test_the_twin_carries_the_model_section():
+    import twin
+    titles = [s["title"] for s in twin.build()]
+    assert any(t.startswith("WHO DID THE WORK") for t in titles), titles
+    sec = [s for s in twin.build() if s["title"].startswith("WHO DID THE WORK")][0]
+    assert sec["lines"], "the section is empty on the live record"
+    assert any("thinking tokens" in l for l in sec["lines"])
+    assert any("NOT a quality score" in l for l in sec["lines"]),         "the caveat did not travel into the twin"
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0
