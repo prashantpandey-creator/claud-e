@@ -163,6 +163,41 @@ def test_the_console_labels_a_button_with_what_it_will_DO():
     assert 'data-act="${esc(v)}" data-arg="${esc(arg)}"' in html
 
 
+
+def _console():
+    return open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "twin_console.html"), errors="ignore").read()
+
+
+def test_a_click_shows_its_state_where_the_finger_IS():
+    """A dispatch takes seconds. The old click fired and said nothing until
+    the answer landed, so the page looked broken for the whole wait. The
+    button holds its own state: label -> working -> the first line of what
+    happened -> label. Proven live: 'open flight-postman' became 'opening a
+    window on flight-p' and restored."""
+    html = _console()
+    assert 'btn.textContent = "working…"' in html
+    assert "btn.disabled = true" in html
+    assert 'act(b.dataset.act, b.dataset.arg, b)' in html, \
+        "the click no longer hands the button to act()"
+
+
+def test_a_REFUSAL_is_shown_as_a_refusal():
+    """/api/act answers started:false when it declines — a nonexistent
+    project, for one. Printing its message alone reads like success."""
+    assert 'd.started === false' in _console()
+
+
+def test_completion_offers_only_targets_that_EXIST():
+    """A palette listing a verb with no target is how `go ` with an empty
+    argument launched the whole fleet. The list is built from the goals the
+    dispatcher named and the repos it offered, never hand-typed."""
+    html = _console()
+    assert 'list="targets"' in html and '<datalist id="targets">' in html
+    assert 'if(a.kind === "goal" && a.name) opts.add("go " + a.name)' in html
+    assert 'opts.add("revive " + a.what)' in html
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

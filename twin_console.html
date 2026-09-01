@@ -75,8 +75,9 @@ void main(){
 
   <canvas id="core"></canvas>
 
-  <input class="cmd" id="cmd" autocomplete="off" spellcheck="false"
+  <input class="cmd" id="cmd" autocomplete="off" spellcheck="false" list="targets"
          placeholder="ask CLAUD-E, or type a verb — fix · go · grade · revive &lt;project&gt; · what did I leave">
+  <datalist id="targets"></datalist>
   <div class="hint">enter to run · <b>/</b> focus · <b>g</b> fleet · <b>f</b> repair · <b>r</b> re-check · click any ring segment</div>
   <div id="say"></div>
 
@@ -105,17 +106,31 @@ const MARK = [
 "   ╚═════╝ ╚══════╝╚═╝  ╚═╝  ╚═════╝  ╚═════╝        ╚══════╝"].join("\n");
 document.getElementById("mark").textContent = MARK;
 const esc = s => { const d=document.createElement("i"); d.textContent = s==null?"":String(s); return d.innerHTML; };
-let SECTIONS = [], STATE = {}, uni = null, LAST_SERIES = null;
+let SECTIONS = [], STATE = {}, uni = null, LAST_SERIES = null, LAST_PLAN = null;
 
-async function act(action, arg){
+async function act(action, arg, btn){
+  // A click used to fire and say nothing until the answer landed — on a
+  // dispatch that is several seconds of a page that looks broken. The button
+  // holds its own state now: label -> "working…" -> the first line of what
+  // actually happened, restored after. Feedback belongs where the finger is.
   const say = document.getElementById("say");
+  const was = btn ? btn.textContent : null;
+  if(btn){ btn.textContent = "working…"; btn.disabled = true; btn.style.opacity = ".6"; }
   say.textContent = "…";
+  let line = "";
   try{
     const r = await fetch("/api/act", {method:"POST", headers:{...H,"Content-Type":"application/json"},
       body: JSON.stringify({action, arg: arg||"", value:""})});
     const d = await r.json();
-    say.textContent = (d.output || d.speech || "done").split("\n")[0];
-  }catch(e){ say.textContent = "couldn't reach the console"; }
+    line = (d.output || d.speech || "done").split("\n")[0];
+    if(d.started === false) line = "refused: " + line;
+  }catch(e){ line = "couldn't reach the console"; }
+  say.textContent = line;
+  if(btn){
+    btn.textContent = line.slice(0, 28);
+    setTimeout(() => { btn.textContent = was; btn.disabled = false;
+                       btn.style.opacity = ""; }, 4000);
+  }
   load();
 }
 
@@ -389,7 +404,25 @@ function applyState(s){
   } else if(warn){ warn.remove(); }
 }
 
+function fillTargets(){
+  // Completion over things that EXIST, not a hand-typed menu: the goals the
+  // dispatcher named, the dormant repos it offered, and the questions the
+  // branch router actually answers. A palette listing a verb with no target
+  // is how "go " with an empty argument launched the whole fleet.
+  const dl = document.getElementById("targets");
+  if(!dl) return;
+  const opts = new Set(["fix", "grade", "go",
+                        "what did I leave unfinished", "what is broken",
+                        "what am I working on", "who is running right now"]);
+  (LAST_PLAN && LAST_PLAN.agents || []).forEach(a => {
+    if(a.kind === "goal" && a.name) opts.add("go " + a.name);
+    if(a.kind === "revive") opts.add("revive " + a.what);
+  });
+  dl.innerHTML = [...opts].map(o => `<option value="${esc(o)}">`).join("");
+}
+
 function renderSwarm(d){
+  LAST_PLAN = d;
   const box = document.getElementById("swarm");
   if(!box) return;
   const rows = (d.agents||[]);
@@ -437,14 +470,15 @@ async function load(){
   SECTIONS = t.sections || [];
   renderSections(); applyState(s);
   if(t.series){ LAST_SERIES = t.series; drawChart(t.series); }
-  fetch("/api/swarm",{headers:H}).then(r=>r.json()).then(renderSwarm)
+  fetch("/api/swarm",{headers:H}).then(r=>r.json())
+    .then(d => { renderSwarm(d); fillTargets(); })
     .catch(()=>{ const b=document.getElementById("swarm");
                  if(b) b.textContent = "couldn't reach the dispatcher"; });
 }
 
 document.addEventListener("click", e => {
   const b = e.target.closest("button[data-act]");
-  if(b){ act(b.dataset.act, b.dataset.arg); return; }
+  if(b){ act(b.dataset.act, b.dataset.arg, b); return; }
   const h = e.target.closest("h3[data-toggle]");
   if(h) h.parentElement.classList.toggle("collapsed");
 });
