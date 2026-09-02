@@ -48,10 +48,24 @@ sys.path.insert(0, SKILL)
 # two answers to "is brain companion?" and the drift would be silent.
 import test_layers  # noqa: E402
 
-# The product's front doors, in the order SKILL.md documents them. Everything
-# else it needs is walked from here — never listed by hand.
+# The product's front doors. Everything else it needs is walked from here —
+# never listed by hand.
+#
+# nidra_bridge is deliberately NOT one. It is the grading pipe, and it needs
+# the author's separate `nidra` package: on a clean HOME, ask.query() hit
+# `except ImportError: return []` and reported NO RESULTS instead of NO
+# ENGINE. Caught by running the published one-liner against an empty HOME —
+# test_ask 3/6 and test_formation 6/9 red in a buyer's first minute.
+#
+# Vendoring a retriever would have kept the feature. Cutting it is the
+# better answer: graded memory is the COMPANION's pitch, and it made the
+# product's own claim — no dependency outside the standard library — false.
 ENTRY = ["sessions", "still", "launch", "scan_projects", "archive",
-         "nidra_bridge"]
+         # not a front door — it carries the packaging rule (PERSONAL,
+         # code_lines) that the shipped gate checks the other modules with.
+         # It used to live in a test file, so a build without tests had no
+         # rule at all and reported clean.
+         "paths"]
 
 # Files that are the product but are not python modules, copied as-is.
 EXTRA = ["LICENSE", "VERSION"]
@@ -61,7 +75,12 @@ EXTRA = ["LICENSE", "VERSION"]
 # `get.sh` are the COMPANION's — they build Casper and start a local server,
 # neither of which exists in the product — so they are not shipped.
 PRODUCT_DIR = os.path.join(SKILL, "product")
-PRODUCT_FILES = ["meditate", "install.sh", "uninstall.sh"]
+PRODUCT_FILES = ["meditate", "install.sh", "uninstall.sh", "get.sh"]
+
+# Where the product is published. The README's install line is the first
+# command a buyer runs, and it used to point at the COMPANION's repo — it
+# returned 200 and installed the wrong product, which is worse than 404.
+PRODUCT_REPO = "prashantpandey-creator/meditate-sessions"
 
 # Tests that guard the whole product rather than one module.
 #   test_release.py  imports test_layers and release — neither ships.
@@ -257,44 +276,78 @@ def _readme(p: Dict[str, Any]) -> str:
     """The buyer-facing page. States what it does and what it does not."""
     return """# meditate
 
-Your Claude Code sessions become one 35 MB tangle. `meditate` reads them
-without loading them, finds the separate threads inside, and writes one
-paste-able continuation chat per live thread — so you resume a thread
-instead of re-reading a session.
+**One long Claude Code session becomes a 100 MB tangle of unrelated work.
+`meditate` reads it without loading it, finds the separate threads inside,
+and hands you a paste-able prompt to resume any one of them.**
 
-    curl -fsSL https://raw.githubusercontent.com/%(repo)s/main/get.sh | sh
+```sh
+curl -fsSL https://raw.githubusercontent.com/%(repo)s/main/get.sh | sh
+```
 
-## What it does
+Then:
 
-    meditate                 read every session, write the stillness reading
-    meditate sessions        the session pass only
-    meditate <id|title>      split one session
-    meditate archive         set down the finished ones (asks first)
-    meditate repo            the optional repo lens
+```sh
+meditate sessions
+```
 
-It reads `~/.claude/projects/*/*.jsonl` by streaming — a 37 MB transcript
-never enters a context window. Each session comes back as a capped record:
-title, how tangled it is, where the topic changed, the human intents with
-noise stripped, the files it touched.
+```
+329 sessions across 17 projects
 
-## What it does not do
+  sprawl   126  117.1MB    83u  ch:0   [vedic-puran]  Game work elements resume
+  sprawl    90   39.3MB   296u  ch:12  [vedic-puran]  chart engine + pricing
+  sprawl    78   29.2MB   238u  ch:12  [vedic-puran]  reader latency
+```
 
-It never moves, renames or deletes a transcript or a project file. It writes
-to two places: your project's memory directory and `~/.meditation/`.
-Archiving a session is reversible and asks per session.
+Sprawl is how many distinct threads are tangled in one session. The top row
+is the one you keep scrolling through to find where you were.
 
-## Running the tests
+## The commands
 
-    for t in test_*.py; do python3 "$t"; done
+| | |
+|---|---|
+| `meditate sessions` | every session, ranked by how tangled it is |
+| `meditate split <id>` | one session, broken into its threads |
+| `meditate threads` | what is still open across everything you split |
+| `meditate open` | a Terminal per live thread, cd'd and prompted (macOS) |
+| `meditate archive` | what's finished and can be set down (dry run) |
+| `meditate repo` | the optional repo lens |
+| `meditate test` | run the suite |
 
-%(n)d modules, %(lines)d lines, no dependencies outside the standard library.
-Python 3.9+. macOS and Linux.
+## How it reads a 100 MB transcript
+
+By streaming it. A transcript never enters a context window — there is no
+model call anywhere in this tool, and no network call at all. Each session
+comes back as a capped record: title, sprawl, where the topic changed, the
+human intents with tool noise stripped, and the files it touched.
+
+That is also why it is fast and why it costs nothing to run.
+
+## What it will not do
+
+It never moves, renames or deletes a transcript or a project file. Every
+delete site in the source is enumerated in `test_product.py` and a new one
+fails the suite. It writes to two places: your project's memory directory
+and `~/.meditation/`. `archive` is a dry run unless you pass `--apply`, and
+archiving is reversible.
+
+`install.sh` links one command and installs one skill. No background
+service, no launch agent, no permissions requested. `uninstall.sh` undoes
+exactly that and leaves your readings alone.
+
+## Verify it yourself before you trust it
+
+```sh
+meditate test
+```
+
+%(n)d modules, %(lines)d lines, no dependency outside the Python standard
+library. Python 3.9+, macOS and Linux. Every module is checked to import
+with nothing else on the path, and the suite ships with the code.
 
 ## Licence
 
 See LICENSE.
-""" % {"repo": "prashantpandey-creator/meditate", "n": len(p["modules"]),
-       "lines": p["lines"]}
+""" % {"repo": PRODUCT_REPO, "n": len(p["modules"]), "lines": p["lines"]}
 
 
 def build(dest: str) -> Dict[str, Any]:

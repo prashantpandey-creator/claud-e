@@ -78,9 +78,10 @@ def test_the_packaging_RULE_ships_with_the_code_it_checks():
     check returned [] forever — reporting clean because the rule was gone."""
     import paths
     assert paths.PERSONAL and paths.EXEMPT_FILES and paths.code_lines
-    src = open(os.path.join(HERE, "coordination.py"), errors="ignore").read()
-    assert "from test_packaging import" not in src, \
-        "shipped code still reaches into a test file for its rule"
+    for f in _shipped():
+        src = open(os.path.join(HERE, f), errors="ignore").read()
+        assert "from test_packaging import" not in src, \
+            "%s reaches into a test file for its rule" % f
 
 
 def test_the_command_runs_and_its_help_matches_what_it_dispatches():
@@ -108,23 +109,17 @@ def test_the_product_does_NOT_contain_the_companion_or_the_twin():
     assert not os.path.exists(os.path.join(HERE, "mascot")), "mascot shipped"
 
 
-# Every place shipped code deletes a file, read and accounted for. A RATCHET:
-# a new delete site fails this test until somebody reads it and either
-# removes it or adds it here with what it deletes. It may not be widened by
-# reflex — that is the whole value of it being a list and not a regex.
-DELETE_SITES = {
-    # the repair queue this same function wrote, when the queue is empty
-    ("ask.py", "os.unlink(path)"),
-    # its own stale .json coordination state, older than PRUNE_AGE
-    ("coordination.py", "os.unlink(path)"),
-}
+# Delete sites in SHIPPED code. Currently empty, and that is the claim the
+# README makes: this tool does not delete. A RATCHET — a new entry here needs
+# somebody to have read the site and written down what it removes. It may not
+# be widened by reflex; that is the whole value of a list over a regex.
+DELETE_SITES = set()
 
 
-def test_it_writes_only_where_it_says_it_does():
-    """The vow, checked: nothing shipped deletes a transcript or a project
-    file. A regex cannot tell WHAT a variable named `path` points at, so
-    this does not pretend to — it pins the delete sites that were read, and
-    fails on any new one."""
+def test_nothing_shipped_DELETES_a_file():
+    """The vow, and it is checkable exactly because it is absolute. `archive`
+    MOVES a transcript into ~/.claude/meditation/archive and records where it
+    came from; nothing in the product calls rmtree, remove or unlink."""
     found = set()
     for f in _shipped():
         src = open(os.path.join(HERE, f), errors="ignore").read()
@@ -133,12 +128,23 @@ def test_it_writes_only_where_it_says_it_does():
             if re.search(r"shutil\.rmtree|os\.removedirs|os\.remove\(|os\.unlink\(", s):
                 found.add((f, s))
     new = found - DELETE_SITES
-    assert not new, ("unreviewed delete site(s) in shipped code — read each "
-                     "and add it to DELETE_SITES with what it deletes: %s"
+    assert not new, ("shipped code now deletes files — read each site and "
+                     "either remove it or record it in DELETE_SITES: %s"
                      % sorted(new))
-    gone = DELETE_SITES - found
-    assert not gone, ("DELETE_SITES lists sites that no longer exist, so the "
-                      "list is stale: %s" % sorted(gone))
+    assert not (DELETE_SITES - found), "DELETE_SITES is stale"
+
+
+def test_every_ARCHIVE_move_has_a_way_back():
+    """Reversible is a promise, not a mood. If archive.py can move a
+    transcript out, something in it must move one back."""
+    ap = os.path.join(HERE, "archive.py")
+    if not os.path.exists(ap):
+        return
+    src = open(ap, errors="ignore").read()
+    moves = len(re.findall(r"shutil\.move\(", src))
+    assert moves, "archive.py moves nothing — has it stopped working?"
+    assert re.search(r"def restore|--restore", src), \
+        "archive.py moves files out with no restore path"
 
 
 def _main():

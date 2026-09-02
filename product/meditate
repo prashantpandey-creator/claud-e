@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
 # meditate — read your Claude Code sessions, find the threads, resume one.
 #
-#   meditate              the full pass: read, grade, write the reading
-#   meditate sessions     every session ranked by how tangled it is
+#   meditate              every session, ranked by how tangled it is
+#   meditate sessions     the same, explicitly
 #   meditate split <id>   split one session into continuation chats
 #   meditate threads      the live threads across every split session
 #   meditate open         open a Terminal per live thread (macOS)
-#   meditate grade        import sessions into the graded store, sleep pass
 #   meditate archive      set down finished sessions (dry-run unless --apply)
 #   meditate repo         the optional repo lens
 #   meditate test         run the suite
@@ -18,20 +17,16 @@ set -euo pipefail
 DIR="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")" && pwd)"
 PY="${MEDITATE_PYTHON:-python3}"
 
-usage() { sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; }
 
 case "${1:-}" in
-  ""|full)
-    "$PY" "$DIR/nidra_bridge.py" --sleep || true
-    "$PY" "$DIR/sessions.py"
-    ;;
+  ""|full)   exec "$PY" "$DIR/sessions.py" ;;
   sessions)  shift; exec "$PY" "$DIR/sessions.py" "$@" ;;
   split)     shift
              [ $# -gt 0 ] || { echo "which session? try: meditate sessions"; exit 2; }
              exec "$PY" "$DIR/sessions.py" --session "$1" --json ;;
   threads)   shift; exec "$PY" "$DIR/launch.py" "$@" ;;
   open)      shift; exec "$PY" "$DIR/launch.py" --open "$@" ;;
-  grade)     shift; exec "$PY" "$DIR/nidra_bridge.py" --sleep "$@" ;;
   archive)   shift; exec "$PY" "$DIR/archive.py" "$@" ;;
   repo)      shift; exec "$PY" "$DIR/still.py" "$@" ;;
   scan)      shift; exec "$PY" "$DIR/scan_projects.py" "$@" ;;

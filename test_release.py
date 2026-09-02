@@ -132,6 +132,41 @@ def test_the_products_OWN_gate_is_run_against_the_built_product():
         shutil.rmtree(os.path.dirname(dest), ignore_errors=True)
 
 
+def test_the_install_line_points_at_the_PRODUCT_repo():
+    """The worst kind of broken: the README's curl line returned 200 from
+    the COMPANION's repo, so the first command a buyer ran installed the
+    wrong software — Casper, a local server and three launch agents — and
+    reported success. A 404 would have been kinder."""
+    rep, dest = _staged()
+    try:
+        readme = open(os.path.join(dest, "README.md")).read()
+        assert release.PRODUCT_REPO in readme, release.PRODUCT_REPO
+        # the falsifier: the companion repo path must not appear at all
+        assert "/meditate/main/" not in readme, \
+            "install line still points at the companion repo"
+        assert "get.sh" in readme and "get.sh" in os.listdir(dest), \
+            "README offers a one-liner whose script does not ship"
+    finally:
+        shutil.rmtree(os.path.dirname(dest), ignore_errors=True)
+
+
+def test_every_command_the_README_lists_is_one_the_CLI_HANDLES():
+    """A table of commands is a promise. One that names a verb the
+    dispatcher does not have is found by the buyer, not by us."""
+    rep, dest = _staged()
+    try:
+        import re as _re
+        readme = open(os.path.join(dest, "README.md")).read()
+        cli = open(os.path.join(dest, "meditate")).read()
+        verbs = set(_re.findall(r"`meditate (\w+)", readme))
+        missing = [v for v in sorted(verbs)
+                   if not (_re.search(r"^\s+%s[)|]" % v, cli, _re.M)
+                           or _re.search(r"\|%s[)|]" % v, cli))]
+        assert not missing, "README promises verbs the CLI lacks: %s" % missing
+    finally:
+        shutil.rmtree(os.path.dirname(dest), ignore_errors=True)
+
+
 def test_the_report_says_what_was_LEFT_OUT_not_only_what_shipped():
     """A build report listing 16 shipped files reads as complete. The 31 it
     did not ship are the fact that decides whether the split is right."""
