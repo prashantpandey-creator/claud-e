@@ -137,10 +137,15 @@ def _check_pushed(text: str, goal: Dict[str, Any], f: Dict[str, Any]):
         return None, ""
     cwd = goal.get("cwd") or ""
     if not cwd or not os.path.isdir(cwd):
-        return None, ""
+        return None, "no working directory recorded for this goal"
     ahead = _git(cwd, "rev-list", "--count", "@{u}..HEAD")
     if ahead == "":
-        return None, ""
+        # Not checkable, and it must SAY not-checkable. Returning (None, "")
+        # made a fresh clone with no upstream look identical to a milestone
+        # this checker simply does not apply to — an absent answer rendered
+        # as no answer at all.
+        return None, "%s has no upstream branch to compare against" % (
+            os.path.basename(cwd.rstrip("/")) or cwd)
     n = int(ahead or 0)
     if n == 0:
         return True, "%s has nothing unpushed" % os.path.basename(cwd)

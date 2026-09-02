@@ -53,7 +53,27 @@ ACTIONS = {
                            "--revive-open", arg or ""],
     "tell":  lambda arg: ["python3", os.path.join(SKILL_DIR, "inbox.py"), "send"]
                          + (arg.split(" ", 1) if " " in (arg or "") else [arg or "", ""]),
+    # The meditate acts. The console could dispatch agents and grade memory
+    # but not do the thing the tool is named after — so stilling a session
+    # still meant leaving here and typing a command, which is the one thing
+    # the owner said he wanted to stop doing.
+    "still":   lambda arg: ["python3", os.path.join(SKILL_DIR, "sessions.py")]
+                           + (["--session", arg] if arg else []),
+    "threads": lambda arg: ["python3", os.path.join(SKILL_DIR, "launch.py")],
+    # --open spawns Terminal windows. Deliberately a separate verb from
+    # `threads`: seeing the plan and executing it are different acts, and
+    # one click should not open twenty windows.
+    "open":    lambda arg: ["python3", os.path.join(SKILL_DIR, "launch.py"),
+                            "--open"],
+    # Dry-run only. Archiving is reversible but it is still the owner's
+    # call per session, and a button that silently sets down finished work
+    # is not a button, it is a surprise. `--apply` is not reachable here.
+    "settle":  lambda arg: ["python3", os.path.join(SKILL_DIR, "archive.py")],
 }
+
+# Verbs whose OUTPUT is the answer, not a status line. They get a real
+# character budget and a longer leash; everything else keeps the short one.
+READING = {"still", "threads", "settle"}
 
 
 def _note(step: str) -> None:
@@ -72,7 +92,12 @@ def _default_runner(action: str, arg: str) -> Dict[str, Any]:
     owner in the terminal."""
     _note({"go": "starting the fleet", "fix": "repairing what broke",
            "grade": "re-checking every memory",
-           "revive": "opening the project you left"}.get(action, "running " + action))
+           "revive": "opening the project you left",
+           "still": "reading every session",
+           "threads": "finding the live threads",
+           "open": "opening a window per live thread",
+           "settle": "checking what is finished"}.get(action,
+                                                      "running " + action))
     cmd = ACTIONS[action](arg)
     if action == "grade":
         subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
@@ -101,13 +126,21 @@ def _default_runner(action: str, arg: str) -> Dict[str, Any]:
         return {"started": True,
                 "output": "opening a window on %s — it takes a few seconds to "
                           "come up" % (arg or "it")}
+    # A reading verb IS its output: 600 chars turned a 329-session list into
+    # four rows and said nothing about the other 325. The cap stays for the
+    # status verbs, and when it does bite it now says so.
+    cap = 24_000 if action in READING else 600
+    limit = 90 if action in READING else 25
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=25)
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=limit)
         out = (r.stdout or r.stderr or "").strip() or "(no output)"
     except subprocess.TimeoutExpired:
-        out = "still running after 25s — check `meditate fleet`"
+        out = "still running after %ds — check `meditate fleet`" % limit
     _note("")
-    return {"started": True, "output": out[:600]}
+    if len(out) > cap:
+        kept = out[:cap].rsplit("\n", 1)[0]
+        out = kept + "\n… %d more characters not shown" % (len(out) - len(kept))
+    return {"started": True, "output": out}
 
 
 ACT_RUNNER = _default_runner   # tests monkeypatch this

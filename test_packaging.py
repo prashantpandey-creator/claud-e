@@ -32,18 +32,11 @@ sys.path.insert(0, SKILL)
 
 # Things that only exist on one person's machine. Tests and docs may mention
 # them; shipped code may not depend on them.
-PERSONAL = [
-    r"/Users/[a-z]+/",             # anybody's absolute home
-    r"\bbadenath\b",
-    r"projects/nidra",
-    r"expanduser\([\"']~/claude-sync",   # DEPENDING on the sync folder
-]
-# "claude-sync" appearing in a blocklist of directory names to ignore is a
-# heuristic, not a dependency — it costs nothing to a user who has no such
-# folder. Only resolving PATHS from it is the packaging defect.
-# paths.py is the ONE place allowed to name conventional locations, because
-# naming them is its whole job. Docstrings elsewhere may quote the history.
-EXEMPT_FILES = {"paths.py", "test_packaging.py"}
+# The rule itself now lives in paths.py, which SHIPS. It used to live here,
+# and coordination.py's live squiggle imported it from this test file — so a
+# build without tests silently had no rule at all. Re-exported so this file
+# and its callers keep working, but there is one definition.
+from paths import PERSONAL, EXEMPT_FILES, code_lines as _paths_code_lines
 
 
 def _shipped_modules():
@@ -54,27 +47,8 @@ def _shipped_modules():
 
 
 def _code_lines(path):
-    """Source lines with comments and docstrings stripped, roughly — enough to
-    tell 'this module DEPENDS on the path' from 'this module MENTIONS it'."""
-    out = []
-    in_doc = False
-    delim = ""
-    for line in open(os.path.join(SKILL, path), encoding="utf-8",
-                     errors="replace"):
-        stripped = line.strip()
-        if in_doc:
-            if delim in stripped:
-                in_doc = False
-            continue
-        if stripped.startswith(('"""', "'''")):
-            delim = stripped[:3]
-            if not (stripped.endswith(delim) and len(stripped) > 3):
-                in_doc = True
-            continue
-        code = line.split("#", 1)[0]
-        if code.strip():
-            out.append(code)
-    return out
+    """Kept as this file's name for the shared rule in paths.py."""
+    return _paths_code_lines(path, SKILL)
 
 
 def test_no_personal_paths_in_shipped_code():

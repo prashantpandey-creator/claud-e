@@ -670,19 +670,20 @@ def test_squiggle_catches_a_personal_path_baked_into_a_shipped_module():
     """Promoted from test_packaging.test_no_personal_paths_in_shipped_code:
     same rule, checked at edit time on the one file just written instead of
     the whole tree at test time. Patches _SHIPPED_DIR (coordination's gate)
-    and test_packaging.SKILL (where _code_lines reads from) to the same
-    tempdir so the real shipped tree is never touched by a test."""
-    import tempfile, test_packaging as tp
+    to a tempdir so the real shipped tree is never touched by a test.
+    The rule itself lives in paths.py now, and the gate reads from its own
+    _SHIPPED_DIR, so this one patch is the whole redirection."""
+    import tempfile
     with tempfile.TemporaryDirectory() as d:
         f = os.path.join(d, "brain.py")
         with open(f, "w") as fh:
             fh.write("import os\nHOME = os.path.expanduser('/Users/badenath/x')\n")
-        real_dir, real_skill = co._SHIPPED_DIR, tp.SKILL
-        co._SHIPPED_DIR, tp.SKILL = d, d
+        real_dir = co._SHIPPED_DIR
+        co._SHIPPED_DIR = d
         try:
             msg = co.check_edit(f)
         finally:
-            co._SHIPPED_DIR, tp.SKILL = real_dir, real_skill
+            co._SHIPPED_DIR = real_dir
         assert "badenath" in msg, msg
         assert "brain.py" in msg, msg
 
@@ -706,18 +707,18 @@ def test_squiggle_silent_on_a_personal_path_in_a_comment_or_docstring():
     explicitly, and the promoted check must honor the same exemption or it
     cries wolf on exactly the kind of comment this coordination.py carries
     about its own past bugs."""
-    import tempfile, test_packaging as tp
+    import tempfile
     with tempfile.TemporaryDirectory() as d:
         f = os.path.join(d, "brain.py")
         with open(f, "w") as fh:
             fh.write('"""History: this used to hardcode /Users/badenath/x."""\n'
                       "import os\nX = os.sep  # was /Users/badenath/x once\n")
-        real_dir, real_skill = co._SHIPPED_DIR, tp.SKILL
-        co._SHIPPED_DIR, tp.SKILL = d, d
+        real_dir = co._SHIPPED_DIR
+        co._SHIPPED_DIR = d
         try:
             msg = co.check_edit(f)
         finally:
-            co._SHIPPED_DIR, tp.SKILL = real_dir, real_skill
+            co._SHIPPED_DIR = real_dir
         assert msg == "", msg
 
 
@@ -726,10 +727,10 @@ def test_squiggle_ignores_exempt_and_test_files_in_the_shipped_dir():
     test_*.py fixtures routinely use real paths as sample data — both are
     exempt in test_packaging.py, and the promoted check must inherit that
     exemption rather than re-litigate it with a second list."""
-    import tempfile, test_packaging as tp
+    import tempfile
     with tempfile.TemporaryDirectory() as d:
-        real_dir, real_skill = co._SHIPPED_DIR, tp.SKILL
-        co._SHIPPED_DIR, tp.SKILL = d, d
+        real_dir = co._SHIPPED_DIR
+        co._SHIPPED_DIR = d
         try:
             for fn in ("paths.py", "test_something.py"):
                 f = os.path.join(d, fn)
@@ -737,7 +738,7 @@ def test_squiggle_ignores_exempt_and_test_files_in_the_shipped_dir():
                     fh.write("HOME = '/Users/badenath/x'\n")
                 assert co.check_edit(f) == "", fn
         finally:
-            co._SHIPPED_DIR, tp.SKILL = real_dir, real_skill
+            co._SHIPPED_DIR = real_dir
 
 
 def test_squiggle_personal_path_merges_with_other_findings_not_a_second_report():
@@ -747,7 +748,7 @@ def test_squiggle_personal_path_merges_with_other_findings_not_a_second_report()
     a naive bolt-on would introduce. One shipped file with BOTH a personal
     path and an undefined name must report on the first edit, then go
     silent on a second identical edit for both problems at once."""
-    import tempfile, test_packaging as tp
+    import tempfile
     with tempfile.TemporaryDirectory() as d:
         f = os.path.join(d, "brain.py")
         seen = os.path.join(d, "seen.json")
@@ -755,13 +756,13 @@ def test_squiggle_personal_path_merges_with_other_findings_not_a_second_report()
             fh.write("import os\n"
                       "HOME = os.path.expanduser('/Users/badenath/x')\n"
                       "BAD = never_defined_name\n")
-        real_dir, real_skill = co._SHIPPED_DIR, tp.SKILL
-        co._SHIPPED_DIR, tp.SKILL = d, d
+        real_dir = co._SHIPPED_DIR
+        co._SHIPPED_DIR = d
         try:
             first = co.check_edit(f, seen_path=seen)
             second = co.check_edit(f, seen_path=seen)
         finally:
-            co._SHIPPED_DIR, tp.SKILL = real_dir, real_skill
+            co._SHIPPED_DIR = real_dir
         assert first != "", "first edit must report something"
         assert second == "", "repeat edit must not re-report either finding: %r" % second
 

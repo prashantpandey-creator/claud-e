@@ -516,9 +516,11 @@ def _personal_path_offenders(path: str) -> List[str]:
     """test_packaging.test_no_personal_paths_in_shipped_code, run against the
     ONE file just edited instead of the whole tree at test time.
 
-    Imports that test's own PERSONAL/_code_lines/EXEMPT_FILES rather than
-    keeping a second copy — one rule, two call sites, never two versions of
-    the same regex drifting apart.
+    Reads the rule from paths.py, which ships. It used to import it FROM
+    test_packaging.py, so any build that shipped code without tests made
+    this function return [] forever — the squiggle reported clean because
+    the rule was missing, not because the code was. One rule, two call
+    sites, and now both of them can reach it.
 
     Scoped hard to files living directly in THIS shipped skill directory
     (matching test_packaging._shipped_modules() exactly: top-level .py, not
@@ -530,17 +532,16 @@ def _personal_path_offenders(path: str) -> List[str]:
     the hook always runs the canonical install's coordination.py, whose
     __file__ points at the canonical directory, not the worktree's.
     """
-    try:
-        from test_packaging import PERSONAL, _code_lines, EXEMPT_FILES
-    except Exception:
-        return []
+    from paths import PERSONAL, EXEMPT_FILES, code_lines as _code_lines
     ap = os.path.abspath(path)
     fn = os.path.basename(ap)
     if (os.path.dirname(ap) != _SHIPPED_DIR or not fn.endswith(".py")
             or fn.startswith("test_") or fn in EXEMPT_FILES):
         return []
     try:
-        lines = _code_lines(fn)
+        # read from the gate's OWN dir, not paths.py's — otherwise a test
+        # that redirects _SHIPPED_DIR still greps the live install
+        lines = _code_lines(fn, _SHIPPED_DIR)
     except OSError:
         return []
     out = []

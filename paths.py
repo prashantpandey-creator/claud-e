@@ -32,6 +32,55 @@ import os
 from typing import List, Optional
 
 HOME = os.path.expanduser("~")
+
+# ---------------------------------------------------------------------------
+# What "the author's machine" looks like, so shipped code can be checked
+# against it. This lived in test_packaging.py, and coordination.py's live
+# red-squiggle check imported it FROM THE TEST FILE — so in any build that
+# ships code without tests the check silently returned [] and reported
+# nothing. An absent check that renders as a passing one.
+#
+# It belongs here because deciding where things live is this module's whole
+# job, and PERSONAL is the negative of that: the places nothing may hardcode.
+# ---------------------------------------------------------------------------
+PERSONAL = [
+    r"/Users/[a-z]+/",                   # anybody's absolute home
+    r"\bbadenath\b",
+    r"projects/nidra",
+    r"expanduser\([\"']~/claude-sync",   # DEPENDING on the sync folder
+]
+# "claude-sync" in a blocklist of directory names to ignore is a heuristic,
+# not a dependency — it costs nothing to a user with no such folder. Only
+# resolving PATHS from it is the packaging defect. paths.py is the ONE file
+# allowed to name conventional locations, because naming them is its job;
+# docstrings elsewhere may quote the history.
+EXEMPT_FILES = {"paths.py", "test_packaging.py"}
+
+
+def code_lines(path: str, root: Optional[str] = None) -> List[str]:
+    """Source lines with comments and docstrings stripped, roughly — enough
+    to tell 'this module DEPENDS on the path' from 'this module MENTIONS
+    it'."""
+    out: List[str] = []
+    in_doc = False
+    delim = ""
+    full = path if os.path.isabs(path) else os.path.join(
+        root or os.path.dirname(os.path.abspath(__file__)), path)
+    for line in open(full, encoding="utf-8", errors="replace"):
+        stripped = line.strip()
+        if in_doc:
+            if delim in stripped:
+                in_doc = False
+            continue
+        if stripped.startswith(('"""', "'''")):
+            delim = stripped[:3]
+            if not (stripped.endswith(delim) and len(stripped) > 3):
+                in_doc = True
+            continue
+        code = line.split("#", 1)[0]
+        if code.strip():
+            out.append(code)
+    return out
 MEDITATION_DIR = os.environ.get("MEDITATE_HOME") or os.path.join(
     HOME, ".claude", "meditation")
 

@@ -92,10 +92,15 @@ def test_push_as_a_noun_belongs_to_someone_else():
 
 
 def test_a_real_push_milestone_still_checks():
+    """Three-valued: yes / no / cannot tell — and CANNOT TELL still has to
+    say why. Caught in a fresh clone with no upstream, where this returned
+    (None, "") and read exactly like a milestone the checker skips."""
     v, ev = ms._check_pushed("backend branch pushed and deployed",
                              {"cwd": SKILL}, {})
-    assert v in (True, False), ev
-    assert ev, "a verdict must carry its evidence"
+    assert v in (True, False, None), v
+    assert ev, "a verdict must carry its evidence, including 'cannot tell'"
+    if v is None:
+        assert "no upstream" in ev or "no working directory" in ev, ev
 
 
 def _main():

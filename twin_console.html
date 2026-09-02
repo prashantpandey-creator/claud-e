@@ -76,9 +76,12 @@ void main(){
   <canvas id="core"></canvas>
 
   <input class="cmd" id="cmd" autocomplete="off" spellcheck="false" list="targets"
-         placeholder="ask CLAUD-E, or type a verb — fix · go · grade · revive &lt;project&gt; · what did I leave">
+         placeholder="ask CLAUD-E, or type a verb — go · fix · grade · still · threads · revive &lt;project&gt; · what did I leave">
   <datalist id="targets"></datalist>
-  <div class="hint">enter to run · <b>/</b> focus · <b>g</b> fleet · <b>f</b> repair · <b>r</b> re-check · click any ring segment</div>
+  <div class="hint">enter to run · <b>/</b> focus · <b>g</b> fleet · <b>f</b> repair · <b>r</b> re-check · <b>s</b> still · click any ring segment</div>
+  <!-- The stilling row. These four are meditate, which is now its own product
+       and no longer something he types: the console is the only door to it. -->
+  <div class="row" id="stillrow" style="margin-top:8px;gap:6px;flex-wrap:wrap"></div>
   <div id="say"></div>
 
   <div id="sections"></div>
@@ -111,6 +114,45 @@ document.getElementById("mark").textContent = MARK;
 const esc = s => { const d=document.createElement("i"); d.textContent = s==null?"":String(s); return d.innerHTML; };
 let SECTIONS = [], STATE = {}, uni = null, LAST_SERIES = null, LAST_PLAN = null;
 
+// meditate is its own product now. It is still what the twin stands on, so
+// these are not gone — they moved off the keyboard and onto this page.
+const STILL_BUTTONS = [
+  ["read my sessions", "still",   "", "every session, ranked by how tangled"],
+  ["live threads",     "threads", "", "what is still open across the splits"],
+  ["open them",        "open",    "", "a Terminal per live thread"],
+  ["what's finished",  "settle",  "", "dry run — never archives on its own"],
+];
+const READOUT = new Set(["still", "threads", "settle"]);
+
+function showReadout(action, text){
+  let box = document.getElementById("readout");
+  if(!box){
+    box = document.createElement("pre");
+    box.id = "readout";
+    box.style.cssText = "margin:10px 0 0;padding:10px 12px;background:#0b0b0b;"
+      + "border:1px solid #1c1a16;border-radius:6px;color:var(--dim);"
+      + "font-size:11.5px;line-height:1.55;max-height:340px;overflow:auto;"
+      + "white-space:pre-wrap";
+    document.getElementById("stillrow").after(box);
+  }
+  box.textContent = (text || "").trim() || "(nothing came back)";
+  const head = document.createElement("div");
+  head.style.cssText = "color:var(--faint);font-size:10.5px;letter-spacing:.12em;"
+    + "margin-bottom:6px";
+  head.textContent = action.toUpperCase();
+  box.prepend(head);
+}
+
+function stillRow(){
+  const row = document.getElementById("stillrow");
+  if(!row || row.children.length) return;
+  row.innerHTML = STILL_BUTTONS.map(([label, verb, arg, why]) =>
+    `<button class="j-still" data-verb="${verb}" data-arg="${arg}" title="${why}"
+      style="background:#0e0d0b;border:1px solid #24211a;color:var(--dim);
+             border-radius:5px;padding:5px 11px;font:inherit;font-size:11.5px;
+             cursor:pointer">${label}</button>`).join("");
+}
+
 async function act(action, arg, btn){
   // A click used to fire and say nothing until the answer landed — on a
   // dispatch that is several seconds of a page that looks broken. The button
@@ -127,6 +169,9 @@ async function act(action, arg, btn){
     const d = await r.json();
     line = (d.output || d.speech || "done").split("\n")[0];
     if(d.started === false) line = "refused: " + line;
+    // still/threads/settle ARE their output — a session list summarised to
+    // its first line tells you nothing. Reading verbs get the whole thing.
+    if(READOUT.has(action)) showReadout(action, d.output || d.speech || "");
   }catch(e){ line = "couldn't reach the console"; }
   say.textContent = line;
   if(btn){
@@ -526,7 +571,7 @@ async function load(){
     fetch("/api/twin",{headers:H}).then(r=>r.json()),
     fetch("/api/state",{headers:H}).then(r=>r.json())]);
   SECTIONS = t.sections || [];
-  renderSections(); applyState(s);
+  renderSections(); applyState(s); stillRow();
   if(t.series){ LAST_SERIES = t.series; drawChart(t.series); }
   fetch("/api/spend",{headers:H}).then(r=>r.json()).then(renderSpend)
     .catch(()=>{});
@@ -539,6 +584,8 @@ async function load(){
 document.addEventListener("click", e => {
   const b = e.target.closest("button[data-act]");
   if(b){ act(b.dataset.act, b.dataset.arg, b); return; }
+  const st = e.target.closest("button.j-still");
+  if(st){ act(st.dataset.verb, st.dataset.arg, st); return; }
   const h = e.target.closest("h3[data-toggle]");
   if(h) h.parentElement.classList.toggle("collapsed");
 });
@@ -548,7 +595,8 @@ cmd.addEventListener("keydown", e => {
   if(e.key !== "Enter") return;
   const v = cmd.value.trim(); if(!v) return;
   const w = v.split(/\s+/)[0].toLowerCase();
-  const verbs = ["go","fix","grade","revive","clear","tell"];
+  const verbs = ["go","fix","grade","revive","clear","tell",
+                 "still","threads","open","settle"];
   if(verbs.includes(w)) act(w, v.slice(w.length).trim());
   else act("say", v);
   cmd.value = "";
@@ -559,6 +607,7 @@ addEventListener("keydown", e => {
   if(e.key === "g") act("go","");
   if(e.key === "f") act("fix","");
   if(e.key === "r") act("grade","");
+  if(e.key === "s") act("still","");
 });
 
 function feed(){
