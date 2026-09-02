@@ -87,6 +87,9 @@ void main(){
     <div class="body"><svg id="chart" style="width:100%"></svg>
     <div class="basis" id="chart-basis"></div></div></div>
 
+  <div class="sec"><h3>WHAT IT SPENT <span style="color:var(--faint)">every agent reports its own bill</span></h3>
+    <div class="body"><div id="spend">reading the ledger…</div></div></div>
+
   <div class="sec"><h3>THE PLAN <span style="color:var(--faint)">who would take what, and what it would cost</span></h3>
     <div class="body"><div id="swarm">reading the dispatcher…</div></div></div>
 
@@ -404,6 +407,34 @@ function applyState(s){
   } else if(warn){ warn.remove(); }
 }
 
+function renderSpend(d){
+  const box = document.getElementById("spend");
+  if(!box) return;
+  const rows = (d.rows||[]).slice().reverse();
+  if(!rows.length){
+    box.innerHTML = '<div style="color:var(--faint)">no agent has reported a bill yet.</div>';
+    return;
+  }
+  const max = Math.max(...rows.map(r=>r.cost_usd||0), 0.01);
+  box.innerHTML = rows.slice(0,10).map(r => {
+    const w = Math.round(70 * (r.cost_usd||0) / max);
+    const ok = r.ok ? "var(--gold)" : "#d3653f";
+    return `<div class="li"><span class="txt">
+      <b style="color:${ok};font-weight:500">$${(r.cost_usd||0).toFixed(2)}</b>
+      ${esc(r.name)}
+      <span style="display:inline-block;height:3px;width:${w}px;background:${ok};
+        opacity:.55;vertical-align:middle;margin-left:8px"></span>
+      <div style="color:var(--faint);font-size:11px">${esc(r.model||"?")} ·
+        ${r.turns} turns · ${Math.round((r.duration_ms||0)/1000)}s ·
+        out ${(r.out_tokens||0).toLocaleString()} ·
+        cache read ${(r.cache_read||0).toLocaleString()}</div>
+    </span></div>`;
+  }).join("") + `<div class="basis">${d.runs} recorded runs · $${
+    (d.total_usd||0).toFixed(2)} total · ` + (d.per_model||[]).map(m =>
+      `${esc(m.model)} ${m.runs}\u00d7 $${m.usd.toFixed(2)}`).join(" · ") +
+    ` \u00b7 measured by each agent, not estimated</div>`;
+}
+
 function fillTargets(){
   // Completion over things that EXIST, not a hand-typed menu: the goals the
   // dispatcher named, the dormant repos it offered, and the questions the
@@ -470,6 +501,8 @@ async function load(){
   SECTIONS = t.sections || [];
   renderSections(); applyState(s);
   if(t.series){ LAST_SERIES = t.series; drawChart(t.series); }
+  fetch("/api/spend",{headers:H}).then(r=>r.json()).then(renderSpend)
+    .catch(()=>{});
   fetch("/api/swarm",{headers:H}).then(r=>r.json())
     .then(d => { renderSwarm(d); fillTargets(); })
     .catch(()=>{ const b=document.getElementById("swarm");

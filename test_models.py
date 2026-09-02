@@ -392,6 +392,54 @@ def test_the_cap_is_a_STOP_SIGNAL_not_a_hard_ceiling():
     assert "0.0242" in src, "the measured overshoot is not recorded"
 
 
+
+def test_a_ZERO_percent_winner_is_never_called_evidence():
+    """The lie this pins, shipped and caught live 2026-08-30.
+
+    pick("goal") returned basis=evidence with the reason "on goal tasks opus
+    produced work 0 of 18 times (0%)" — recommending a model BECAUSE it had a
+    0% success rate. Sorting descending makes the only model in the data
+    "best" even when it produced nothing. Zero is an absence, not a finding.
+    """
+    real = models.spend
+    models.spend = lambda ledger=None: {"rows": [
+        {"name": "goal-x", "model": "opus", "ok": False, "cost_usd": 0}
+        for _ in range(18)], "runs": 18, "total_usd": 0, "per_model": []}
+    try:
+        ev = models.evidence_for("goal")
+        p = models.pick("goal")
+    finally:
+        models.spend = real
+    assert ev["by_model"]["opus"]["produced"] == 0, ev
+    assert p["basis"] == "default", \
+        "a 0%% producer was recommended as evidence: %r" % p
+
+
+def test_outcomes_come_from_a_field_something_actually_WRITES():
+    """The dispatch ledger's `produced` was designed and never populated, so
+    every rate computed over it was an empty column with a percent sign. The
+    spend ledger's `ok` is written by reconcile from the agent's own result
+    line."""
+    import inspect
+    src = inspect.getsource(models.evidence_for)
+    assert "spend()" in src, "outcomes read from the unwritten field again"
+    assert "dispatch.jsonl" not in src
+
+
+def test_a_real_producer_DOES_win_on_evidence():
+    """FALSIFIER for the zero guard: it must not mute a genuine result."""
+    real = models.spend
+    models.spend = lambda ledger=None: {"rows": [
+        {"name": "goal-y", "model": "sonnet", "ok": True, "cost_usd": 0.5}
+        for _ in range(6)], "runs": 6, "total_usd": 3.0, "per_model": []}
+    try:
+        p = models.pick("goal")
+    finally:
+        models.spend = real
+    assert p["basis"] == "evidence" and p["model"] == "sonnet", p
+    assert "6 of 6" in p["why"], p["why"]
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

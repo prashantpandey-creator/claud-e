@@ -320,27 +320,29 @@ def evidence_for(kind: str, limit: int = 40) -> Dict[str, Any]:
     began carrying model/effort/kind on 2026-08-30; before that date the rows
     cannot answer, and this says so rather than averaging over silence.
     """
-    ledger = os.path.expanduser("~/.claude/meditation/dispatch.jsonl")
-    seen: Dict[str, Dict[str, int]] = {}
+    # OUTCOMES COME FROM THE SPEND LEDGER, not the dispatch ledger.
+    #
+    # The dispatch ledger has a `produced` field that NOTHING EVER WROTE — it
+    # was designed and never populated, so every row read 0, and pick() then
+    # recommended opus on the stated grounds that it "produced work 0 of 18
+    # times (0%)". A rate computed over a field nobody sets is not evidence,
+    # it is an empty column with a percentage sign on it.
+    #
+    # spend.jsonl is written by reconcile() from an agent's own result line,
+    # so `ok` there means the run really finished. That is an outcome.
     rows = 0
-    try:
-        with open(ledger) as f:
-            for ln in f:
-                try:
-                    r = json.loads(ln)
-                except ValueError:
-                    continue
-                if r.get("kind") != kind or not r.get("model"):
-                    continue
-                rows += 1
-                s = seen.setdefault(r["model"], {"dispatched": 0, "produced": 0})
-                s["dispatched"] += 1
-                if r.get("produced"):
-                    s["produced"] += 1
-    except OSError:
-        pass
+    seen: Dict[str, Dict[str, int]] = {}
+    for r in spend()["rows"]:
+        if not (r.get("name") or "").startswith(kind):
+            continue
+        m = r.get("model") or "?"
+        rows += 1
+        s = seen.setdefault(m, {"dispatched": 0, "produced": 0})
+        s["dispatched"] += 1
+        if r.get("ok") and (r.get("cost_usd") or 0) > 0:
+            s["produced"] += 1
     return {"kind": kind, "rows": rows, "by_model": seen,
-            "enough": rows >= 10}
+            "enough": rows >= 6}
 
 
 def pick(kind: str, limit: int = 40) -> Dict[str, Any]:
@@ -355,7 +357,11 @@ def pick(kind: str, limit: int = 40) -> Dict[str, Any]:
                         key=lambda kv: -(kv[1]["produced"] / max(1, kv[1]["dispatched"])))
         best, s = ranked[0]
         rate = s["produced"] / max(1, s["dispatched"])
-        if s["dispatched"] >= 5:
+        # A WINNER AT 0% IS NOT A WINNER. Sorting descending makes the only
+        # model in the data "best" even when it never produced anything, and
+        # the reason string then reads "produced work 0 of 18 times (0%)" as
+        # a justification. Zero is an absence; fall through and say so.
+        if s["dispatched"] >= 3 and rate > 0:
             return {"model": best, "effort": effort, "basis": "evidence",
                     "why": "on %s tasks %s produced work %d of %d times (%.0f%%)"
                            % (kind, best, s["produced"], s["dispatched"], 100 * rate)}

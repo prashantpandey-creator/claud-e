@@ -1465,6 +1465,15 @@ class _Handler(BaseHTTPRequestHandler):
                     d = {"error": "no such goal: %s" % name}
                 body = json.dumps(d).encode()
                 ctype = "application/json"
+            elif self.path == "/api/spend":
+                try:
+                    import models as _md
+                    _md.reconcile()          # fold in anything that just finished
+                    body = json.dumps(_md.spend()).encode()
+                except Exception as e:
+                    body = json.dumps({"runs": 0, "rows": [], "per_model": [],
+                                       "error": str(e)[:160]}).encode()
+                ctype = "application/json"
             elif self.path == "/api/swarm":
                 body = json.dumps(_swarm_cached()).encode()
                 ctype = "application/json"
