@@ -156,7 +156,7 @@ HEADLESS_LOG_DIR = os.path.join(MEDITATION_DIR, "agents")
 
 
 def _headless(cwd: str, prompt: str, name: str, model: str = "",
-              effort: str = "") -> bool:
+              effort: str = "", budget_usd: float = 0.0) -> bool:
     """Run the agent with no GUI at all, output to a log.
 
     `claude -p` needs no window, no Terminal and no awake display — verified
@@ -169,10 +169,24 @@ def _headless(cwd: str, prompt: str, name: str, model: str = "",
         stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
         log = os.path.join(HEADLESS_LOG_DIR, "%s-%s.log" % (stamp, name[:40]))
         with open(log, "w") as fh:
-            fh.write("# %s\n# cwd: %s\n\n" % (name, cwd))
+            fh.write("# %s\n# cwd: %s\n# model: %s effort: %s budget: %s\n\n"
+                     % (name, cwd, model or "sonnet", effort or "default",
+                        budget_usd or "none"))
             fh.flush()
             subprocess.Popen(
-                ["claude", "-p", prompt, "--model", model or "sonnet"]
+                # --output-format json so the agent REPORTS ITS OWN SPEND.
+                # Measured 2026-08-30: the result line carries total_cost_usd,
+                # num_turns, duration_ms and per-model usage — real money from
+                # the CLI itself, so no price table has to be guessed at. A
+                # trivial PONG cost $0.052 because 25,953 cache-creation
+                # tokens load on every dispatch; that is the floor for any
+                # agent, and it was invisible before this.
+                ["claude", "-p", prompt, "--model", model or "sonnet",
+                 "--output-format", "json"]
+                # A REAL cap, enforced by the CLI — the turn ceiling never was
+                # (the plan said "up to 12 turns" and one agent ran 14). Set
+                # from what the same kind of task actually cost.
+                + (["--max-budget-usd", str(budget_usd)] if budget_usd else [])
                 + (["--effort", effort] if effort else [])
                 + [
                  "--dangerously-skip-permissions"],
@@ -184,7 +198,7 @@ def _headless(cwd: str, prompt: str, name: str, model: str = "",
         return False
 
 
-def _call_headless(fn, cwd, prompt, name, model, effort):
+def _call_headless(fn, cwd, prompt, name, model, effort, budget_usd=0.0):
     """Call a headless launcher that may or may not accept `effort`.
 
     Adding a fifth positional argument broke every existing caller and fake at
@@ -194,7 +208,10 @@ def _call_headless(fn, cwd, prompt, name, model, effort):
     """
     try:
         import inspect
-        if "effort" in inspect.signature(fn).parameters:
+        params = inspect.signature(fn).parameters
+        if "budget_usd" in params:
+            return fn(cwd, prompt, name, model, effort, budget_usd)
+        if "effort" in params:
             return fn(cwd, prompt, name, model, effort)
     except (TypeError, ValueError):
         pass
@@ -226,7 +243,7 @@ def choose(kind: str, model: str = "") -> Dict[str, Any]:
 def dispatch_one(cwd: str, prompt: str, name: str, model: str = "",
                  gui=None, headless=None,
                  prefer_headless: Optional[bool] = None,
-                 effort: str = "") -> bool:
+                 effort: str = "", budget_usd: float = 0.0) -> bool:
     """Open a watchable window if we can; otherwise run it headless.
 
     Measured live: the heartbeat's first real run selected the right work,
@@ -273,7 +290,7 @@ def dispatch_one(cwd: str, prompt: str, name: str, model: str = "",
             prefer_headless = False
     if prefer_headless:
         try:
-            if _call_headless(headless, cwd, prompt, name, model, effort):
+            if _call_headless(headless, cwd, prompt, name, model, effort, budget_usd):
                 dispatch_one.how = "headless (display likely off)"
                 return True
         except Exception as e:
@@ -288,7 +305,7 @@ def dispatch_one(cwd: str, prompt: str, name: str, model: str = "",
         # heartbeat.log, same failure every time, seen by nobody.
         dispatch_one.how = "gui-error: " + str(e)[:60]
     try:
-        ok = bool(_call_headless(headless, cwd, prompt, name, model, effort))
+        ok = bool(_call_headless(headless, cwd, prompt, name, model, effort, budget_usd))
         dispatch_one.how = ("headless" if ok else "headless-refused") \
             + ("" if not dispatch_one.how.startswith("gui-") else " after " + dispatch_one.how)
         return ok

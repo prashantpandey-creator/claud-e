@@ -362,3 +362,158 @@ def pick(kind: str, limit: int = 40) -> Dict[str, Any]:
     return {"model": model, "effort": effort, "basis": "default",
             "why": reason + " — no like-for-like evidence yet (%d recorded %s runs)"
                    % (ev["rows"], kind)}
+
+
+# ---------------------------------------------------------------------------
+# what a dispatched agent ACTUALLY spent
+# ---------------------------------------------------------------------------
+
+SPEND_LEDGER = os.path.expanduser("~/.claude/meditation/spend.jsonl")
+AGENT_LOGS = os.path.expanduser("~/.claude/meditation/agents")
+
+
+def _result_line(text: str) -> Optional[Dict[str, Any]]:
+    """The `--output-format json` result object, from anywhere in a log.
+
+    It is not always the last line: a crashed or chatty run can append after
+    it, and a run still in flight has none at all. Scanned from the end, and
+    absence returns None rather than a zero — an agent that has not finished
+    has not spent nothing.
+    """
+    for ln in reversed(text.splitlines()):
+        ln = ln.strip()
+        if not ln.startswith("{") or '"total_cost_usd"' not in ln:
+            continue
+        try:
+            d = json.loads(ln)
+        except ValueError:
+            continue
+        if d.get("type") == "result":
+            return d
+    return None
+
+
+def reconcile(log_dir: Optional[str] = None,
+              ledger: Optional[str] = None) -> Dict[str, Any]:
+    """Read finished agent logs and record what each one really cost.
+
+    Dispatch is fire-and-forget by design — blocking on an agent would freeze
+    the rounds — so the actual cannot be written at launch. This closes the
+    loop afterwards: every log with a result line becomes one spend row, keyed
+    by the log's own name so a second pass cannot double-count.
+    """
+    import glob as _g
+    log_dir = log_dir or AGENT_LOGS
+    ledger = ledger or SPEND_LEDGER
+    seen = set()
+    try:
+        with open(ledger) as f:
+            for ln in f:
+                try:
+                    seen.add(json.loads(ln).get("log"))
+                except ValueError:
+                    continue
+    except OSError:
+        pass
+
+    added, pending = [], 0
+    for path in sorted(_g.glob(os.path.join(log_dir, "*.log"))):
+        key = os.path.basename(path)
+        if key in seen:
+            continue
+        try:
+            text = open(path, errors="replace").read()
+        except OSError:
+            continue
+        res = _result_line(text)
+        if res is None:
+            pending += 1          # still running, or died before reporting
+            continue
+        head = {}
+        for ln in text.splitlines()[:4]:
+            if ln.startswith("# model:"):
+                bits = ln[8:].split("effort:")
+                head["model"] = bits[0].strip()
+                head["effort"] = bits[1].strip() if len(bits) > 1 else ""
+        u = res.get("usage") or {}
+        row = {"log": key,
+               "name": key.split("-", 2)[-1].replace(".log", ""),
+               "model": head.get("model", ""), "effort": head.get("effort", ""),
+               "ok": not res.get("is_error"),
+               "cost_usd": res.get("total_cost_usd"),
+               "turns": res.get("num_turns"),
+               "duration_ms": res.get("duration_ms"),
+               "out_tokens": u.get("output_tokens"),
+               "cache_creation": u.get("cache_creation_input_tokens"),
+               "cache_read": u.get("cache_read_input_tokens")}
+        added.append(row)
+
+    if added:
+        try:
+            with open(ledger, "a") as f:
+                for r in added:
+                    f.write(json.dumps(r) + "\n")
+        except OSError:
+            pass
+    return {"added": len(added), "pending": pending, "rows": added}
+
+
+def spend(ledger: Optional[str] = None) -> Dict[str, Any]:
+    """Every recorded dispatch, and what it really cost."""
+    rows = []
+    try:
+        with open(ledger or SPEND_LEDGER) as f:
+            for ln in f:
+                try:
+                    rows.append(json.loads(ln))
+                except ValueError:
+                    continue
+    except OSError:
+        pass
+    total = sum(r.get("cost_usd") or 0 for r in rows)
+    per: Dict[str, Dict[str, Any]] = {}
+    for r in rows:
+        m = r.get("model") or "?"
+        s = per.setdefault(m, {"model": m, "runs": 0, "usd": 0.0, "turns": 0})
+        s["runs"] += 1
+        s["usd"] += r.get("cost_usd") or 0
+        s["turns"] += r.get("turns") or 0
+    return {"runs": len(rows), "total_usd": round(total, 4),
+            "per_model": sorted(per.values(), key=lambda x: -x["usd"]),
+            "rows": rows}
+
+
+def budget_for(kind: str, headroom: float = 2.0) -> Dict[str, Any]:
+    """A real, ENFORCED dollar cap for one dispatched agent.
+
+    `--max-budget-usd` halts the run (subtype error_max_budget_usd, proven
+    live), which is strictly better than the turn ceiling this replaced: that
+    one was never enforced at all — the plan said "up to 12 turns" and bro-os
+    ran 14.
+
+    It is a STOP SIGNAL, NOT A HARD CEILING. A single API call can already
+    cost more than a tight cap, so it overshoots by up to one call: measured
+    $0.0242 against a $0.001 cap. At realistic caps the overshoot is one
+    call's worth, and the number below says which basis it came from.
+
+    Derived from what the same KIND of task really cost — the only comparison
+    task difficulty does not poison.
+    """
+    d = spend()
+    same = [r for r in d["rows"]
+            if (r.get("name") or "").startswith(kind) and r.get("cost_usd")]
+    if len(same) >= 3:
+        costs = sorted(r["cost_usd"] for r in same)
+        med = costs[len(costs) // 2]
+        return {"usd": round(max(0.25, med * headroom), 2), "basis": "evidence",
+                "why": "median of %d measured %s runs ($%.2f) x%.1f"
+                       % (len(same), kind, med, headroom),
+                "runs": len(same), "median": round(med, 4)}
+    # No like-for-like runs yet. A stated default, not a guess dressed up:
+    # every dispatch loads ~26k cache-creation tokens before it does anything,
+    # so nothing useful finishes under a quarter.
+    return {"usd": 2.00, "basis": "default",
+            "why": "no measured %s runs yet (%d recorded) — a stated cap, and "
+                   "every dispatch pays ~26k cache-creation tokens before it "
+                   "starts" % (kind, len(same)),
+            "runs": len(same), "median": None}

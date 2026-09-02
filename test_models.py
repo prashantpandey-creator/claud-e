@@ -330,6 +330,68 @@ def test_the_leash_caveat_reaches_the_TWIN():
     assert "leash is NOT a rating" in joined, joined[-160:]
 
 
+
+# ---------------------------------------------------------------------------
+# what a dispatch REALLY costs — measured 2026-08-30 by running three
+# ---------------------------------------------------------------------------
+
+def test_a_running_agent_is_PENDING_not_free():
+    """A log with no result line has not finished. Reading it as zero spend
+    would make every in-flight agent look free — 51 old logs predate JSON
+    output and must count as pending, not as $0."""
+    import tempfile, json as _j
+    d = tempfile.mkdtemp()
+    open(os.path.join(d, "a.log"), "w").write("# running\nno result yet\n")
+    r = models.reconcile(log_dir=d, ledger=os.path.join(d, "spend.jsonl"))
+    assert r["added"] == 0 and r["pending"] == 1, r
+
+
+def test_the_result_line_is_found_from_the_END():
+    """It is not always last: a chatty or crashed run appends after it."""
+    import tempfile, json as _j
+    d = tempfile.mkdtemp()
+    res = _j.dumps({"type": "result", "total_cost_usd": 0.5, "num_turns": 3,
+                    "is_error": False, "usage": {"output_tokens": 100}})
+    open(os.path.join(d, "b.log"), "w").write(
+        "# revive-x\n# model: sonnet effort: high\n\n" + res + "\ntrailing noise\n")
+    r = models.reconcile(log_dir=d, ledger=os.path.join(d, "spend.jsonl"))
+    assert r["added"] == 1 and r["rows"][0]["cost_usd"] == 0.5, r
+    assert r["rows"][0]["model"] == "sonnet", r["rows"][0]
+
+
+def test_reconcile_cannot_DOUBLE_COUNT():
+    """Keyed by the log's own name, so a second pass adds nothing."""
+    import tempfile, json as _j
+    d = tempfile.mkdtemp()
+    led = os.path.join(d, "spend.jsonl")
+    res = _j.dumps({"type": "result", "total_cost_usd": 1.0, "num_turns": 1,
+                    "is_error": False, "usage": {}})
+    open(os.path.join(d, "c.log"), "w").write("# n\n\n" + res + "\n")
+    assert models.reconcile(log_dir=d, ledger=led)["added"] == 1
+    assert models.reconcile(log_dir=d, ledger=led)["added"] == 0
+
+
+def test_the_budget_cap_comes_from_LIKE_FOR_LIKE_runs():
+    """Difficulty poisons cross-kind comparison; revive runs resemble each
+    other. Under three measured runs it must say `default`, never invent an
+    evidence-shaped number."""
+    b = models.budget_for("kind-that-never-ran")
+    assert b["basis"] == "default" and b["usd"] > 0, b
+    live = models.budget_for("revive")
+    if live["runs"] >= 3:
+        assert live["basis"] == "evidence" and live["median"], live
+
+
+def test_the_cap_is_a_STOP_SIGNAL_not_a_hard_ceiling():
+    """Proven live: $0.0242 spent against a $0.001 cap, because one API call
+    already costs more than that. The docstring must not promise a ceiling it
+    cannot hold."""
+    import inspect
+    src = inspect.getsource(models.budget_for)
+    assert "NOT A HARD CEILING" in src.upper()
+    assert "0.0242" in src, "the measured overshoot is not recorded"
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

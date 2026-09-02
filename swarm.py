@@ -198,6 +198,17 @@ def plan(max_agents: int = 6) -> Dict[str, Any]:
         # a forecast. Dispatched agents have no measured turn counts yet (0
         # recorded runs), so this is a stated block size, and the projection
         # below is a CEILING for that block.
+        # The turn ceiling is gone. It was never enforced — the plan said
+        # "up to 12 turns" and a measured agent ran 14 — and it modelled the
+        # wrong quantity anyway: the three real runs spent 4,955 output tokens
+        # against 618,402 cache-READ, so projecting output alone described
+        # about 1% of the volume. The cap is dollars now, enforced by the CLI,
+        # set from what the same kind of task actually cost.
+        try:
+            import models as _md2
+            cap = _md2.budget_for(it["kind"])
+        except Exception:
+            cap = {"usd": 2.00, "basis": "default", "why": "policy unreadable"}
         turns = BLOCK_TURNS
         out_tok = (r.get("out", 0) + r.get("think", 0)) * turns
         if not r:
@@ -207,7 +218,9 @@ def plan(max_agents: int = 6) -> Dict[str, Any]:
         if full and full in px:
             cost = px[full] * out_tok / 1_000_000
             priced += cost
-        agents.append({**it, "model": pick["model"], "measured_as": full,
+        agents.append({**it, "cap_usd": cap["usd"], "cap_basis": cap["basis"],
+                       "cap_why": cap["why"],
+                       "model": pick["model"], "measured_as": full,
                        "effort": pick["effort"], "basis": pick["basis"],
                        "policy_why": pick["why"], "turns": turns,
                        "out_tokens": out_tok, "usd": cost})
@@ -228,10 +241,9 @@ def render(d: Optional[Dict[str, Any]] = None) -> str:
         out.append("")
         out.append("  %-8s %s" % (a["kind"], a["what"][:60]))
         out.append("           %s" % a["why"][:70])
-        out.append("           send %s at %s effort [%s] · up to %d turns, <=%s out-tokens%s"
+        out.append("           send %s at %s effort [%s] · capped at $%.2f [%s]"
                    % (a["model"], a["effort"] or "default", a["basis"],
-                      a["turns"], format(a["out_tokens"], ","),
-                      "" if a["usd"] is None else " (~$%.2f)" % a["usd"]))
+                      a["cap_usd"], a["cap_basis"]))
         if a["measured_as"] is None:
             out.append("           no measured rate for this model — the turn "
                        "count is a floor, not a projection")
