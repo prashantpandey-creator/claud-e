@@ -10,7 +10,7 @@ a{color:var(--gold);text-decoration:none}
 .row{display:flex;align-items:center;gap:14px}
 .pill{border:1px solid var(--line);border-radius:999px;padding:3px 11px;font-size:12px;color:var(--dim)}
 .pill b{color:var(--gold);font-weight:500}
-#core{width:100%;height:230px;display:block}
+#core{width:100%;height:132px;display:block}
 .cmd{width:100%;background:#0a0906;border:1px solid var(--line);border-radius:10px;color:var(--fg);
      padding:11px 14px;font:13px/1.4 ui-monospace,Menlo,monospace;outline:none}
 .cmd:focus{border-color:var(--gold)}
@@ -29,6 +29,16 @@ button:active{transform:scale(.97)}
 #say{color:var(--gold);font-size:13px;min-height:20px;margin:10px 0}
 .feed{font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--faint);max-height:92px;overflow:hidden}
 .collapsed .body{display:none}
+.sec h3::after{content:"";width:5px;height:5px;border-right:1px solid var(--faint);
+  border-bottom:1px solid var(--faint);transform:rotate(45deg);margin-left:10px;
+  transition:transform .15s}
+.collapsed h3::after{transform:rotate(-45deg)}
+.sec h3>span:first-child{flex:1}
+.sec h3>span:last-of-type{letter-spacing:0;font-variant-numeric:tabular-nums}
+.txt.more{cursor:pointer;border-bottom:1px dotted var(--faint)}
+.txt.more:hover{color:var(--gold);border-bottom-color:var(--gold)}
+.sec{padding:11px 0 2px}
+.li{padding:4px 0}
 .axis text{fill:#57524a;font-size:10px}
 .axis path,.axis line{stroke:#241f18}
 </style>
@@ -76,9 +86,9 @@ void main(){
   <canvas id="core"></canvas>
 
   <input class="cmd" id="cmd" autocomplete="off" spellcheck="false" list="targets"
-         placeholder="ask CLAUD-E, or type a verb — go · fix · grade · still · threads · revive &lt;project&gt; · what did I leave">
+         placeholder="ask CLAUD-E anything — or a verb: go, fix, still, revive &lt;project&gt;">
   <datalist id="targets"></datalist>
-  <div class="hint">enter to run · <b>/</b> focus · <b>g</b> fleet · <b>f</b> repair · <b>r</b> re-check · <b>s</b> still · click any ring segment</div>
+  <div class="hint"><b>/</b> focus · <b>g</b> fleet · <b>f</b> repair · <b>r</b> re-check · <b>s</b> still</div>
   <!-- The stilling row. These four are meditate, which is now its own product
        and no longer something he types: the console is the only door to it. -->
   <div class="row" id="stillrow" style="margin-top:8px;gap:6px;flex-wrap:wrap"></div>
@@ -86,17 +96,17 @@ void main(){
 
   <div id="sections"></div>
 
-  <div class="sec"><h3>GOAL TRAJECTORIES <span style="color:var(--faint)">every stamped snapshot</span></h3>
+  <div class="sec collapsed"><h3 title="every stamped snapshot of every goal"><span style="display:flex;align-items:center;gap:9px"><svg viewBox="0 0 18 18" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M3 13l4-5 3 3 5-7"/></svg>TRAJECTORY</span></h3>
     <div class="body"><svg id="chart" style="width:100%"></svg>
     <div class="basis" id="chart-basis"></div></div></div>
 
-  <div class="sec"><h3>WHAT IT SPENT <span style="color:var(--faint)">every agent reports its own bill</span></h3>
+  <div class="sec collapsed"><h3 title="every agent reports its own bill"><span style="display:flex;align-items:center;gap:9px"><svg viewBox="0 0 18 18" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3v12 M12 5.5C12 4 10.7 3.4 9 3.4S6 4 6 5.5 7.3 8 9 8s3 .6 3 2.3-1.3 2.3-3 2.3-3-.7-3-2.2"/></svg>SPEND</span><span id="spend-n" style="color:var(--faint)"></span></h3>
     <div class="body"><div id="spend">reading the ledger…</div></div></div>
 
-  <div class="sec"><h3>THE PLAN <span style="color:var(--faint)">who would take what, and what it would cost</span></h3>
+  <div class="sec collapsed"><h3 title="who would take what, and what it would cost"><span style="display:flex;align-items:center;gap:9px"><svg viewBox="0 0 18 18" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h12 M3 9h8 M3 14h5 M14 11l2 2-2 2"/></svg>PLAN</span><span id="plan-n" style="color:var(--faint)"></span></h3>
     <div class="body"><div id="swarm">reading the dispatcher…</div></div></div>
 
-  <div class="sec"><h3>LIVE</h3><div class="body feed" id="feed"></div></div>
+  <div class="sec collapsed"><h3 title="what the fleet is doing right now"><span style="display:flex;align-items:center;gap:9px"><svg viewBox="0 0 18 18" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M2 9h3l2-5 3 10 2-5h4"/></svg>LIVE</span></h3><div class="body feed" id="feed"></div></div>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -182,6 +192,57 @@ async function act(action, arg, btn){
   load();
 }
 
+// ONE WORD and one mark per section. Measured before rewriting: 11,567
+// characters over 4.4 screens, seven headings averaging six words, and a
+// single 338-character line. A heading that explains itself is a heading you
+// have to read; a mark you have seen twice you stop reading.
+// The server's full title survives as the tooltip — nothing is deleted, it
+// is folded.
+const SEC = [
+  ["WHO YOU ARE",            "RULES",  "rules",  false],
+  ["HOW YOU DECIDE",         "METHOD", "method", false],
+  ["YOUR SCALE",             "SCALE",  "scale",  false],
+  ["YOUR GOALS",             "GOALS",  "goals",  true ],
+  ["WHO DID THE WORK",       "MODELS", "models", false],
+  ["WHAT YOU COULD DO BETTER","GAPS",  "gaps",   true ],
+  ["THE SWITCH",             "WIRING", "wiring", false],
+];
+// Geometric marks, drawn not decorated: each one is the shape of what the
+// section measures. 14px, stroke only, one colour.
+const GLYPH = {
+  rules:  "M4 3h9l3 3v8H4z M13 3v3h3",
+  method: "M9 2v5 M9 7 4 13 M9 7l5 6 M4 13h3 M12 13h3",
+  scale:  "M3 14V9 M7 14V5 M11 14V7 M15 14V3",
+  goals:  "M9 2a7 7 0 1 0 0 14 7 7 0 0 0 0-14z M9 6a3 3 0 1 0 0 6 3 3 0 0 0 0-6z",
+  models: "M6 6h6v6H6z M9 2v4 M9 12v4 M2 9h4 M12 9h4",
+  gaps:   "M9 2a7 7 0 0 1 6 3.6 M16 9a7 7 0 0 1-3.6 6 M9 16a7 7 0 0 1-6-3.6 M2 9a7 7 0 0 1 2-4.9",
+  wiring: "M7 11 4.5 8.5a3 3 0 0 1 4.2-4.2L11 6.5 M11 7l2.5 2.5a3 3 0 0 1-4.2 4.2L7 11.5",
+  spend:  "M9 3v12 M12 5.5C12 4 10.7 3.4 9 3.4S6 4 6 5.5 7.3 8 9 8s3 .6 3 2.3-1.3 2.3-3 2.3-3-.7-3-2.2",
+  plan:   "M3 4h12 M3 9h8 M3 14h5 M14 11l2 2-2 2",
+  live:   "M2 9h3l2-5 3 10 2-5h4",
+  chart:  "M3 13l4-5 3 3 5-7",
+};
+const ico = (k, c) => `<svg viewBox="0 0 18 18" width="13" height="13"
+   fill="none" stroke="${c||"currentColor"}" stroke-width="1.3"
+   stroke-linecap="round" stroke-linejoin="round"
+   style="flex:none;vertical-align:-2px"><path d="${GLYPH[k]||GLYPH.rules}"/></svg>`;
+
+function secMeta(title){
+  for(const [pre, name, icon, open] of SEC)
+    if(title.startsWith(pre)) return {name, icon, open};
+  return {name: title.split("—")[0].trim(), icon: "rules", open: false};
+}
+
+// The first sentence is the claim; the rest is why. Show the claim, keep the
+// why one click away. A 338-character line in a list is not information, it
+// is a wall you scroll past.
+function clip(t){
+  const s = String(t||"");
+  if(s.length <= 120) return null;
+  const dot = s.slice(0, 150).search(/[.;:]\s/);
+  return (dot > 40 ? s.slice(0, dot + 1) : s.slice(0, 117).trimEnd() + "…");
+}
+
 function rowActions(secTitle, line){
   const b = [];
   if(secTitle.startsWith("WHAT YOU COULD DO BETTER")){
@@ -199,14 +260,28 @@ function rowActions(secTitle, line){
 }
 
 function renderSections(){
-  document.getElementById("sections").innerHTML = SECTIONS.map((s,i) => `
-    <div class="sec" id="sec${i}">
-      <h3 data-toggle="${i}">${esc(s.title)}<span style="color:var(--faint)">${s.lines.length}</span></h3>
+  // Closed by default. Open only what is asking for something — GOALS and
+  // GAPS — because a page where everything is open is a page with no
+  // emphasis, and 4.4 screens of it is a page nobody reads twice.
+  document.getElementById("sections").innerHTML = SECTIONS.map((s,i) => {
+    const m = secMeta(s.title);
+    const shut = m.open && s.lines.length ? "" : " collapsed";
+    return `
+    <div class="sec${shut}" id="sec${i}">
+      <h3 data-toggle="${i}" title="${esc(s.title)} · basis: ${esc(s.basis)}">
+        <span style="display:flex;align-items:center;gap:9px">${ico(m.icon)}${esc(m.name)}</span>
+        <span style="color:var(--faint);font-variant-numeric:tabular-nums">${s.lines.length}</span>
+      </h3>
       <div class="body">
-        ${s.lines.map(l => `<div class="li"><span class="txt">${esc(l)}</span>${rowActions(s.title,l)}</div>`).join("")}
-        <div class="basis">basis: ${esc(s.basis)}</div>
+        ${s.lines.map(l => {
+          const short = clip(l);
+          const txt = short
+            ? `<span class="txt more" data-full="${esc(l)}">${esc(short)}</span>`
+            : `<span class="txt">${esc(l)}</span>`;
+          return `<div class="li">${txt}${rowActions(s.title,l)}</div>`;
+        }).join("")}
       </div>
-    </div>`).join("");
+    </div>`;}).join("");
 }
 
 function drawChart(series){
@@ -396,7 +471,9 @@ function initCore2D(){
 function initCore(){
   if(typeof THREE === "undefined") return initCore2D();
   const cv = document.getElementById("core");
-  const w = cv.clientWidth || 1016, h = 230;
+  // read the height from the element: a literal here and a number in the
+  // CSS are two answers to one question, and the shader believes this one
+  const w = cv.clientWidth || 1016, h = cv.clientHeight || 132;
   const renderer = new THREE.WebGLRenderer({canvas:cv, alpha:true, antialias:true});
   renderer.setPixelRatio(Math.min(2, devicePixelRatio||1)); renderer.setSize(w,h,false);
   const scene = new THREE.Scene();
@@ -417,7 +494,8 @@ function initCore(){
   })();
   addEventListener("resize", () => {
     if(LAST_SERIES) drawChart(LAST_SERIES);
-    const nw = cv.clientWidth||1016; renderer.setSize(nw,h,false); uni.uAspect.value = nw/h;
+    const nw = cv.clientWidth||1016, nh = cv.clientHeight||h;
+    renderer.setSize(nw,nh,false); uni.uAspect.value = nw/nh;
   });
 }
 
@@ -482,6 +560,9 @@ function kindTable(d){
 function renderSpend(d){
   const box = document.getElementById("spend");
   if(!box) return;
+  // A shut section that says nothing is a shut section you never open.
+  const n = document.getElementById("spend-n");
+  if(n) n.textContent = d.runs ? `${d.runs} runs · $${(d.total_usd||0).toFixed(2)}` : "";
   const rows = (d.rows||[]).slice().reverse();
   if(!rows.length){
     box.innerHTML = '<div style="color:var(--faint)">no agent has reported a bill yet.</div>';
@@ -529,6 +610,8 @@ function renderSwarm(d){
   const box = document.getElementById("swarm");
   if(!box) return;
   const rows = (d.agents||[]);
+  const pn = document.getElementById("plan-n");
+  if(pn) pn.textContent = rows.length ? `${rows.length} would run` : "nothing queued";
   if(!rows.length && !(d.notes||[]).length){
     box.innerHTML = '<div style="color:var(--faint)">nothing queued and nothing offered.</div>';
     return;
@@ -586,6 +669,8 @@ document.addEventListener("click", e => {
   if(b){ act(b.dataset.act, b.dataset.arg, b); return; }
   const st = e.target.closest("button.j-still");
   if(st){ act(st.dataset.verb, st.dataset.arg, st); return; }
+  const mo = e.target.closest(".txt.more");
+  if(mo){ mo.textContent = mo.dataset.full; mo.classList.remove("more"); return; }
   const h = e.target.closest("h3[data-toggle]");
   if(h) h.parentElement.classList.toggle("collapsed");
 });

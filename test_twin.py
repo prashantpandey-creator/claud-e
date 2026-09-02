@@ -312,6 +312,57 @@ def test_arm_on_a_healthy_machine_needs_nothing():
     assert r["done"] == 0
 
 
+CONSOLE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                       "twin_console.html")
+
+
+def test_every_section_has_a_ONE_WORD_name_in_the_console():
+    """Measured before the rewrite: 11,567 characters over 4.4 screens and
+    seven headings averaging six words. The console folds each to one word
+    and a mark, from a table keyed on the server's title PREFIX.
+
+    The drift this pins: rename a section here and the console silently
+    falls back to the long title, so the page grows a six-word heading back
+    one at a time and nobody notices until it is 4 screens again."""
+    import re
+    html = open(CONSOLE, errors="ignore").read()
+    block = html[html.index("const SEC = ["):html.index("];", html.index("const SEC = ["))]
+    prefixes = re.findall(r'\["([^"]+)",\s*"([A-Z]+)"', block)
+    assert prefixes, block[:200]
+    titles = [s["title"] for s in twin.build()]
+    unmapped = [t for t in titles
+                if not any(t.startswith(p) for p, _ in prefixes)]
+    assert not unmapped, ("section(s) with no short name — the console will "
+                          "print the full heading: %s" % unmapped)
+    for _, short in prefixes:
+        assert " " not in short and len(short) <= 10, short
+
+
+def test_every_short_name_still_matches_a_REAL_section():
+    """The other direction. A stale entry is harmless on screen and lying in
+    the file — it says a section exists that does not."""
+    import re
+    html = open(CONSOLE, errors="ignore").read()
+    block = html[html.index("const SEC = ["):html.index("];", html.index("const SEC = ["))]
+    prefixes = [p for p, _ in re.findall(r'\["([^"]+)",\s*"([A-Z]+)"', block)]
+    titles = [s["title"] for s in twin.build()]
+    stale = [p for p in prefixes if not any(t.startswith(p) for t in titles)]
+    assert not stale, "SEC names sections that no longer exist: %s" % stale
+
+
+def test_the_console_ships_a_MARK_for_every_short_name():
+    """A heading with no glyph falls back to the RULES mark, so two
+    different sections look identical at a glance — which is the opposite of
+    what the marks are for."""
+    import re
+    html = open(CONSOLE, errors="ignore").read()
+    block = html[html.index("const SEC = ["):html.index("];", html.index("const SEC = ["))]
+    icons = re.findall(r'"[A-Z]+",\s*"(\w+)"', block)
+    glyphs = set(re.findall(r'^\s*(\w+):\s*"M', html, re.M))
+    missing = [i for i in icons if i not in glyphs]
+    assert not missing, "no glyph for: %s" % missing
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0
