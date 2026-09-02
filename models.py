@@ -441,17 +441,38 @@ def reconcile(log_dir: Optional[str] = None,
                 bits = ln[8:].split("effort:")
                 head["model"] = bits[0].strip()
                 head["effort"] = bits[1].strip() if len(bits) > 1 else ""
+        # modelUsage, NOT usage.
+        #
+        # `usage` is the LAST TURN only; `modelUsage` is the whole session,
+        # and total_cost_usd is computed from the latter. Recording `usage`
+        # printed last-turn tokens beside a whole-session bill: one run
+        # showed "700 output tokens · $1.41" when it had really produced
+        # 18,500 and read 771,225 cached. It was caught because that run
+        # appeared to cost MORE than a run with more of every token — which
+        # is impossible, and was the only reason to look.
+        #
+        # modelUsage also names the model that ACTUALLY ran. `--model opus`
+        # resolved to claude-opus-4-8, while the alias recorded in the header
+        # said "opus" — so per-model spend was being filed under a name no
+        # model has.
+        mu = res.get("modelUsage") or {}
+        real = max(mu, key=lambda k: mu[k].get("costUSD", 0)) if mu else ""
+        v = mu.get(real, {}) if real else {}
         u = res.get("usage") or {}
         row = {"log": key,
                "name": key.split("-", 2)[-1].replace(".log", ""),
-               "model": head.get("model", ""), "effort": head.get("effort", ""),
+               "model": real or head.get("model", ""),
+               "alias": head.get("model", ""),
+               "effort": head.get("effort", ""),
                "ok": not res.get("is_error"),
                "cost_usd": res.get("total_cost_usd"),
                "turns": res.get("num_turns"),
                "duration_ms": res.get("duration_ms"),
-               "out_tokens": u.get("output_tokens"),
-               "cache_creation": u.get("cache_creation_input_tokens"),
-               "cache_read": u.get("cache_read_input_tokens")}
+               "out_tokens": v.get("outputTokens", u.get("output_tokens")),
+               "cache_creation": v.get("cacheCreationInputTokens",
+                                       u.get("cache_creation_input_tokens")),
+               "cache_read": v.get("cacheReadInputTokens",
+                                   u.get("cache_read_input_tokens"))}
         added.append(row)
 
     if added:

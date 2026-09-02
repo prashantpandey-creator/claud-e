@@ -24,14 +24,25 @@ RATES = {"claude-opus-5": {"out": 900, "think": 300, "turns": 20000, "leash": 17
          "claude-sonnet-5": {"out": 980, "think": 230, "turns": 2800, "leash": 9}}
 
 
-def test_an_alias_resolves_to_the_MOST_USED_model_not_the_most_verbose():
-    """The first cut tie-broke on tokens-per-turn, so "opus" resolved to
+def test_the_alias_FALLBACK_is_most_used_not_most_verbose():
+    """The fallback, for an alias no dispatch has used yet.
+
+    The first cut tie-broke on tokens-per-turn, so "opus" resolved to
     whichever opus was most VERBOSE (4-8 at 1,927/turn) instead of the one
-    doing the work (opus-5, 15,424 turns against 2,222). Most-used is the
-    representative rate; most-verbose is an accident of what it was asked."""
-    assert swarm._match(RATES, "opus") == "claude-opus-5"
-    assert swarm._match(RATES, "sonnet") == "claude-sonnet-5"
-    assert swarm._match(RATES, "claude-opus-4-8") == "claude-opus-4-8"
+    doing the work. Most-used is the representative rate. This rule now sits
+    BEHIND the real-run lookup — a dispatch that actually happened beats any
+    name match — so it is exercised here with an empty spend ledger.
+    """
+    import models
+    real = models.spend
+    models.spend = lambda ledger=None: {"rows": [], "runs": 0,
+                                        "total_usd": 0, "per_model": []}
+    try:
+        assert swarm._match(RATES, "opus") == "claude-opus-5"
+        assert swarm._match(RATES, "sonnet") == "claude-sonnet-5"
+        assert swarm._match(RATES, "claude-opus-4-8") == "claude-opus-4-8"
+    finally:
+        models.spend = real
 
 
 def test_an_unknown_model_matches_NOTHING_rather_than_guessing():
@@ -196,6 +207,24 @@ def test_completion_offers_only_targets_that_EXIST():
     assert 'list="targets"' in html and '<datalist id="targets">' in html
     assert 'if(a.kind === "goal" && a.name) opts.add("go " + a.name)' in html
     assert 'opts.add("revive " + a.what)' in html
+
+
+
+def test_an_alias_resolves_to_what_it_REALLY_RAN():
+    """Substring matching picked opus-5 because it had the most turns, while
+    `--model opus` actually runs claude-opus-4-8 — so every projection used
+    the wrong model's rates. A dispatch that actually happened outranks a
+    name match."""
+    import models
+    real = models.spend
+    models.spend = lambda ledger=None: {"rows": [
+        {"alias": "opus", "model": "claude-opus-4-8", "cost_usd": 1.0}] * 3,
+        "runs": 3, "total_usd": 3.0, "per_model": []}
+    try:
+        got = swarm._match(RATES, "opus")
+    finally:
+        models.spend = real
+    assert got == "claude-opus-4-8", got
 
 
 def _main():

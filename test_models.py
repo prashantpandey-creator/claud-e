@@ -461,6 +461,47 @@ def test_the_double_count_guard_holds_ACROSS_PROCESSES():
     assert len(rows) == 1, "the same run was billed twice"
 
 
+
+def test_whole_session_usage_is_recorded_not_the_LAST_TURN():
+    """The impossible number that exposed this: a run showed 700 output
+    tokens and $1.41 while another showed 7,520 tokens and $1.30 — less of
+    every token, more money. `usage` is the LAST TURN; `modelUsage` is the
+    whole session, and total_cost_usd is computed from the latter. The real
+    figures were 18,500 output and 771,225 cache-read."""
+    import tempfile, json as _j
+    d = tempfile.mkdtemp()
+    res = _j.dumps({"type": "result", "total_cost_usd": 1.4, "num_turns": 2,
+                    "is_error": False,
+                    "usage": {"output_tokens": 700,
+                              "cache_read_input_tokens": 186065},
+                    "modelUsage": {"claude-opus-4-8": {
+                        "outputTokens": 18500, "cacheReadInputTokens": 771225,
+                        "cacheCreationInputTokens": 50424, "costUSD": 1.4}}})
+    open(os.path.join(d, "g.log"), "w").write(
+        "# goal-x\n# model: opus effort: max\n\n" + res + "\n")
+    r = models.reconcile(log_dir=d, ledger=os.path.join(d, "s.jsonl"))
+    row = r["rows"][0]
+    assert row["out_tokens"] == 18500, row
+    assert row["cache_read"] == 771225, row
+
+
+def test_the_REAL_model_is_recorded_not_the_alias():
+    """`--model opus` ran claude-opus-4-8 on this machine. Filing spend under
+    "opus" files it under a name no model has, and made the plan project with
+    opus-5's rates."""
+    import tempfile, json as _j
+    d = tempfile.mkdtemp()
+    res = _j.dumps({"type": "result", "total_cost_usd": 1.0, "num_turns": 1,
+                    "is_error": False, "usage": {},
+                    "modelUsage": {"claude-opus-4-8": {"costUSD": 1.0,
+                                                       "outputTokens": 10}}})
+    open(os.path.join(d, "h.log"), "w").write(
+        "# goal-y\n# model: opus effort: max\n\n" + res + "\n")
+    row = models.reconcile(log_dir=d, ledger=os.path.join(d, "s.jsonl"))["rows"][0]
+    assert row["model"] == "claude-opus-4-8", row
+    assert row["alias"] == "opus", row
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

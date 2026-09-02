@@ -88,6 +88,22 @@ def _match(rates: Dict[str, Dict[str, int]], alias: str) -> Optional[str]:
     exact = [m for m in rates if m.lower() == alias]
     if exact:
         return exact[0]
+    # WHAT THE ALIAS REALLY RAN, when the record knows.
+    #
+    # `--model opus` resolves to claude-opus-4-8 on this machine, not opus-5 —
+    # read out of a dispatched agent's own modelUsage. Guessing by substring
+    # picked opus-5 (most turns) and projected with the wrong model's rates
+    # entirely. A dispatch that actually happened outranks a name match.
+    try:
+        import models as _md
+        ran = [r.get("model") for r in _md.spend()["rows"]
+               if (r.get("alias") or "").lower() == alias and r.get("model")]
+        if ran:
+            best = max(set(ran), key=ran.count)
+            if best in rates:
+                return best
+    except Exception:
+        pass
     # Tie-break on TURNS, not on tokens-per-turn. The first cut sorted by
     # output size, so "opus" resolved to whichever opus was most VERBOSE
     # (4-8 at 1,927/turn) rather than the one actually doing the work
