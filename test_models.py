@@ -440,6 +440,27 @@ def test_a_real_producer_DOES_win_on_evidence():
     assert "6 of 6" in p["why"], p["why"]
 
 
+
+def test_the_double_count_guard_holds_ACROSS_PROCESSES():
+    """Proven live 2026-08-30, by accident: the brain server reconciles on
+    every /api/spend read, so the console picked up a finished repair agent
+    before the CLI did. The CLI's own reconcile then correctly reported
+    `added 0` while the row was already in the ledger — two reconcilers, one
+    row, no duplicate. The guard is the log NAME, which both processes see.
+    """
+    import tempfile, json as _j
+    d = tempfile.mkdtemp()
+    led = os.path.join(d, "spend.jsonl")
+    res = _j.dumps({"type": "result", "total_cost_usd": 0.13, "num_turns": 2,
+                    "is_error": False, "usage": {"output_tokens": 40}})
+    open(os.path.join(d, "r.log"), "w").write("# repair-x\n\n" + res + "\n")
+    first = models.reconcile(log_dir=d, ledger=led)
+    second = models.reconcile(log_dir=d, ledger=led)      # the other process
+    assert first["added"] == 1 and second["added"] == 0, (first, second)
+    rows = [ln for ln in open(led)]
+    assert len(rows) == 1, "the same run was billed twice"
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0
