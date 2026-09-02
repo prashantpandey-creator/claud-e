@@ -49,6 +49,10 @@ STEPS=(
   "dashboard.py"
   "go.py --auto"
   "census.py ping"
+  # Push the summary-only snapshot to the remote VIEW (a secret gist / your
+  # own receiver). Inert unless remote-config.json exists; best-effort by
+  # design — `auto` always exits 0 so an offline push never fails the pass.
+  "remote.py auto"
   # LAST BUT ONE, and --quick on purpose. It judges the state this pass just
   # left behind, and writes a verdict to doctor.jsonl that the tree reads —
   # without that it is one more thing printed into a log nothing reads, which

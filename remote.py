@@ -128,6 +128,110 @@ def _esc(s: Any) -> str:
             .replace(">", "&gt;").replace('"', "&quot;"))
 
 
+# ---- the gist backend (a host you already own: github.com, not a new box) ----
+#
+# The receiver above needs a server you stand up. This path needs none: it
+# writes the same summary-only snapshot into a SECRET gist through the `gh`
+# token already on the machine. The gist's URL hash is the view secret; GitHub
+# renders the markdown for the phone. Same one-way guarantee: we WRITE out via
+# `gh` and read only its exit status — nothing gh returns is eval'd or acted on.
+
+def _md_cell(s: Any) -> str:
+    return str(s or "").replace("|", "/").replace("\n", " ").strip()
+
+
+def render_md(snap: Dict[str, Any]) -> str:
+    """The snapshot as GitHub-flavoured markdown — summary only, no raw text."""
+    c = snap.get("counts", {})
+    out = ["# 🧘 meditate — remote view", "",
+           "**%d facts · %d verified · %d to fix**  "
+           % (c.get("facts", 0), c.get("verified", 0), c.get("repair", 0)), "",
+           "as of %s · pushed from your machine · read-only"
+           % _md_cell(snap.get("generated", "—")), "",
+           "| project | share | facts | goal | open |",
+           "|---|--:|--:|--:|---|"]
+    tot = sum(p.get("messages", 0) for p in snap.get("projects", [])) or 1
+    for p in snap.get("projects", []):
+        share = 100.0 * p.get("messages", 0) / tot
+        pct = ("%.0f%%" % p["pct"]) if p.get("pct") is not None else "—"
+        goal = pct + ((" · %d to fix" % p["repair_items"])
+                      if p.get("repair_items") else "")
+        tasks = "; ".join(_md_cell(t) for t in p.get("open_tasks", []))
+        out.append("| %s | %.0f%% | %d | %s | %s |"
+                   % (_md_cell(p.get("project", "")), share,
+                      p.get("facts", 0), goal, tasks))
+    return "\n".join(out) + "\n"
+
+
+def push_gist(gist_id: str, filename: str = "meditate-view.md",
+              gh_bin: str = "gh",
+              snapshot_fn: Callable[[], Dict[str, Any]] = snapshot) -> Dict[str, Any]:
+    """Replace the gist file in place with the current summary. One-way:
+    reads only the subprocess return code; gh's output is never actioned."""
+    import subprocess
+    import tempfile
+    md = render_md(snapshot_fn())
+    d = tempfile.mkdtemp()
+    local = os.path.join(d, filename)
+    try:
+        with open(local, "w") as f:
+            f.write(md)
+        r = subprocess.run([gh_bin, "gist", "edit", gist_id, "-f", filename, local],
+                           capture_output=True, text=True, timeout=30)
+        ok = r.returncode == 0
+        return {"pushed": ok, "status": r.returncode,
+                "error": "" if ok else (r.stderr or r.stdout)[:200]}
+    except Exception as e:                       # gh missing / offline / timeout
+        return {"pushed": False, "error": str(e)[:200]}
+    finally:
+        try:
+            os.remove(local); os.rmdir(d)
+        except OSError:
+            pass
+
+
+def gist_init(gh_bin: str = "gh", filename: str = "meditate-view.md",
+              snapshot_fn: Callable[[], Dict[str, Any]] = snapshot) -> Dict[str, Any]:
+    """Create the secret gist once and wire remote-config.json to it.
+    No new login: uses the gh token already on the machine."""
+    import shutil
+    import subprocess
+    import tempfile
+    resolved = shutil.which(gh_bin) or gh_bin
+    d = tempfile.mkdtemp()
+    local = os.path.join(d, filename)
+    try:
+        with open(local, "w") as f:
+            f.write(render_md(snapshot_fn()))
+        r = subprocess.run([resolved, "gist", "create", local,
+                            "-d", "meditate — remote view (secret)"],
+                           capture_output=True, text=True, timeout=30)
+        if r.returncode != 0:
+            return {"ok": False, "error": (r.stderr or r.stdout)[:200]}
+        url = ""
+        for line in (r.stdout + r.stderr).splitlines():
+            line = line.strip()
+            if line.startswith("https://gist.github.com/"):
+                url = line
+        if not url:
+            return {"ok": False, "error": "could not parse gist url from gh output"}
+        gid = url.rsplit("/", 1)[-1]
+        cfg = {"backend": "gist", "gist_id": gid, "gh_bin": resolved,
+               "filename": filename, "view_url": url}
+        cfg_path = os.path.expanduser("~/.claude/meditation/remote-config.json")
+        os.makedirs(os.path.dirname(cfg_path), exist_ok=True)
+        with open(cfg_path, "w") as f:
+            json.dump(cfg, f, indent=1)
+        return {"ok": True, "url": url, "gist_id": gid}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:200]}
+    finally:
+        try:
+            os.remove(local); os.rmdir(d)
+        except OSError:
+            pass
+
+
 def make_receiver(port: int, ingest_token: str, view_secret: str,
                   store_path: str) -> ThreadingHTTPServer:
     """POST /ingest (token) stores the snapshot; GET /?k=secret serves it.
@@ -181,12 +285,17 @@ def main(argv=None) -> int:
     sub = ap.add_subparsers(dest="cmd")
     pp = sub.add_parser("push"); pp.add_argument("--url", required=True)
     pp.add_argument("--token", required=True); pp.add_argument("--json", action="store_true")
-    sub.add_parser("auto")   # push from saved config (heartbeat calls this)
+    sub.add_parser("auto")        # push from saved config (heartbeat calls this)
+    sub.add_parser("gist-init")   # create the secret gist host + wire config
     sp = sub.add_parser("serve"); sp.add_argument("--port", type=int, default=8899)
     sp.add_argument("--ingest", required=True); sp.add_argument("--view", required=True)
     sp.add_argument("--store", default=os.path.expanduser("~/meditate-remote-latest.json"))
     args = ap.parse_args(argv)
 
+    if args.cmd == "gist-init":
+        r = gist_init()
+        print(r["url"] if r["ok"] else "failed: " + r.get("error", ""))
+        return 0 if r["ok"] else 1
     if args.cmd == "auto":
         cfg_path = os.path.expanduser("~/.claude/meditation/remote-config.json")
         try:
@@ -194,6 +303,12 @@ def main(argv=None) -> int:
         except Exception:
             print("no remote-config.json — remote view not configured (opt-in)")
             return 0
+        if cfg.get("backend") == "gist":
+            r = push_gist(cfg["gist_id"], filename=cfg.get("filename", "meditate-view.md"),
+                          gh_bin=cfg.get("gh_bin", "gh"))
+            print(("pushed to " + cfg.get("view_url", "gist")) if r["pushed"]
+                  else "push skipped (offline?): " + r.get("error", ""))
+            return 0            # heartbeat step: an outbound push never fails the pass
         r = push(cfg["url"], cfg["ingest_token"])
         print("pushed" if r["pushed"] else "failed: " + r.get("error", ""))
         return 0 if r["pushed"] else 1
