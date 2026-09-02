@@ -502,6 +502,81 @@ def test_the_REAL_model_is_recorded_not_the_alias():
     assert row["alias"] == "opus", row
 
 
+def _kind_ledger():
+    """A ledger with two kinds: one with enough runs for evidence, one without."""
+    import tempfile, json as _j
+    d = tempfile.mkdtemp()
+    p = os.path.join(d, "spend.jsonl")
+    rows = [{"name": "goal-a", "cost_usd": 1.00, "out_tokens": 1000,
+             "cache_read": 40_000, "turns": 2, "model": "claude-opus-4-8"},
+            {"name": "goal-b", "cost_usd": 2.00, "out_tokens": 1000,
+             "cache_read": 40_000, "turns": 2, "model": "claude-opus-4-8"},
+            {"name": "goal-c", "cost_usd": 3.00, "out_tokens": 2000,
+             "cache_read": 80_000, "turns": 4, "model": "claude-opus-4-8"},
+            {"name": "repair-a", "cost_usd": 0.10, "out_tokens": 100,
+             "cache_read": 50_000, "turns": 1, "model": "claude-sonnet-5"}]
+    open(p, "w").write("".join(_j.dumps(r) + "\n" for r in rows))
+    return p
+
+
+def test_spend_rolls_up_PER_KIND_not_only_per_model():
+    """Per-model spend answers nothing — difficulty, not the model, sets the
+    bill. The kind is the grouping the cap is actually derived from, so it has
+    to survive into what the dashboard reads."""
+    d = models.spend(ledger=_kind_ledger())
+    kinds = {k["kind"]: k for k in d["per_kind"]}
+    assert set(kinds) == {"goal", "repair"}, kinds
+    g = kinds["goal"]
+    assert g["runs"] == 3 and g["usd"] == 6.0, g
+    assert g["avg"] == 2.0 and g["lo"] == 1.0 and g["hi"] == 3.0, g
+    # cache-read against output is THE cost ratio: 160k read / 4k out = 40x
+    assert g["read_per_out"] == 40.0, g
+    assert g["out_per_turn"] == 500, g
+
+
+def test_per_kind_carries_the_caps_BASIS_not_just_a_number():
+    """A $2 cap from three measured runs and a $2 cap from nothing look
+    identical on screen. Every kind row must say which one it is."""
+    d = models.spend(ledger=_kind_ledger())
+    kinds = {k["kind"]: k for k in d["per_kind"]}
+    # 3 goal runs, median $2.00, x2.0 headroom
+    assert kinds["goal"]["cap_basis"] == "evidence", kinds["goal"]
+    assert kinds["goal"]["cap_usd"] == 4.00, kinds["goal"]
+    # 1 repair run is not enough to claim evidence
+    assert kinds["repair"]["cap_basis"] == "default", kinds["repair"]
+
+
+def test_a_kind_with_ZERO_output_does_not_divide_by_zero():
+    """A run killed before it emitted anything has out_tokens 0. The ratio is
+    then absent, and absent must render as absent — not as 0x, which reads as
+    'this run was free'."""
+    import tempfile, json as _j
+    d = tempfile.mkdtemp()
+    p = os.path.join(d, "s.jsonl")
+    open(p, "w").write(_j.dumps({"name": "revive-x", "cost_usd": 0.4,
+                                 "out_tokens": 0, "cache_read": 9_000,
+                                 "turns": 0, "model": "m"}) + "\n")
+    row = models.spend(ledger=p)["per_kind"][0]
+    assert row["read_per_out"] is None, row
+    assert row["out_per_turn"] is None, row
+
+
+def test_spend_and_budget_for_are_not_each_others_BASE_CASE():
+    """budget_for() used to call spend(), and spend() now calls budget_for()
+    for every kind — which recursed until the stack blew on the first real
+    ledger. spend() passes its own rows down; the guard is that this returns
+    at all."""
+    import inspect
+    src = inspect.getsource(models.budget_for)
+    assert "rows" in inspect.signature(models.budget_for).parameters
+    assert "spend()" in src, "the fallback path must still exist standalone"
+    # the falsifier: a ledger with rows, which is what actually recursed
+    d = models.spend(ledger=_kind_ledger())
+    assert d["per_kind"], d
+    # and standalone (rows=None) still reads the ledger for itself
+    assert models.budget_for("anything")["basis"] == "default"
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

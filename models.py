@@ -505,12 +505,43 @@ def spend(ledger: Optional[str] = None) -> Dict[str, Any]:
         s["runs"] += 1
         s["usd"] += r.get("cost_usd") or 0
         s["turns"] += r.get("turns") or 0
+    # PER KIND is the rollup that decides anything: it is the only grouping
+    # task difficulty does not poison, and it is what the budget is set from.
+    by_kind: Dict[str, Dict[str, Any]] = {}
+    for r in rows:
+        k = (r.get("name") or "?").split("-")[0]
+        s = by_kind.setdefault(k, {"kind": k, "runs": 0, "usd": 0.0,
+                                   "out": 0, "cache_read": 0, "turns": 0,
+                                   "costs": []})
+        s["runs"] += 1
+        s["usd"] += r.get("cost_usd") or 0
+        s["out"] += r.get("out_tokens") or 0
+        s["cache_read"] += r.get("cache_read") or 0
+        s["turns"] += r.get("turns") or 0
+        s["costs"].append(r.get("cost_usd") or 0)
+    kinds = []
+    for k, s in by_kind.items():
+        cap = budget_for(k, rows=rows)
+        kinds.append({"kind": k, "runs": s["runs"],
+                      "usd": round(s["usd"], 4),
+                      "avg": round(s["usd"] / s["runs"], 4) if s["runs"] else 0,
+                      "lo": round(min(s["costs"]), 4) if s["costs"] else 0,
+                      "hi": round(max(s["costs"]), 4) if s["costs"] else 0,
+                      "cap_usd": cap["usd"], "cap_basis": cap["basis"],
+                      # the ratio that IS the cost: cache-read against output.
+                      # 10-40x on every run measured so far.
+                      "read_per_out": round(s["cache_read"] / s["out"], 1)
+                                      if s["out"] else None,
+                      "out_per_turn": round(s["out"] / s["turns"])
+                                      if s["turns"] else None})
+    kinds.sort(key=lambda x: -x["usd"])
     return {"runs": len(rows), "total_usd": round(total, 4),
             "per_model": sorted(per.values(), key=lambda x: -x["usd"]),
-            "rows": rows}
+            "per_kind": kinds, "rows": rows}
 
 
-def budget_for(kind: str, headroom: float = 2.0) -> Dict[str, Any]:
+def budget_for(kind: str, headroom: float = 2.0,
+               rows: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     """A real, ENFORCED dollar cap for one dispatched agent.
 
     `--max-budget-usd` halts the run (subtype error_max_budget_usd, proven
@@ -526,8 +557,10 @@ def budget_for(kind: str, headroom: float = 2.0) -> Dict[str, Any]:
     Derived from what the same KIND of task really cost — the only comparison
     task difficulty does not poison.
     """
-    d = spend()
-    same = [r for r in d["rows"]
+    # rows are passed in by spend() itself — calling spend() here made the
+    # two functions each other's base case and the first run blew the stack.
+    src = rows if rows is not None else spend()["rows"]
+    same = [r for r in src
             if (r.get("name") or "").startswith(kind) and r.get("cost_usd")]
     if len(same) >= 3:
         costs = sorted(r["cost_usd"] for r in same)

@@ -407,6 +407,33 @@ function applyState(s){
   } else if(warn){ warn.remove(); }
 }
 
+function kindTable(d){
+  // THE ECONOMICS, not just the receipts. Per kind is the only grouping task
+  // difficulty does not poison, and it is what the budget is set from — so
+  // it is what decides anything. read/out is the ratio that IS the cost:
+  // cache-read against output, 33x to 497x on every run measured.
+  const ks = d.per_kind || [];
+  if(!ks.length) return "";
+  const rows = ks.map(k => `<tr>
+      <td style="padding:3px 14px 3px 0;color:var(--fg)">${esc(k.kind)}</td>
+      <td style="padding:3px 14px 3px 0;color:var(--dim)">${k.runs} run${k.runs===1?"":"s"}</td>
+      <td style="padding:3px 14px 3px 0;color:var(--gold)">$${k.avg.toFixed(2)} avg</td>
+      <td style="padding:3px 14px 3px 0;color:var(--dim)">$${k.lo.toFixed(2)}–$${k.hi.toFixed(2)}</td>
+      <td style="padding:3px 14px 3px 0;color:${k.cap_basis==="evidence"?"var(--gold)":"var(--faint)"}">
+        cap $${k.cap_usd} [${esc(k.cap_basis)}]</td>
+      <td style="padding:3px 0;color:var(--dim)">${
+        k.read_per_out == null ? "read/out not recorded"
+                               : k.read_per_out + "× read/out"}</td>
+    </tr>`).join("");
+  return `<div style="margin:14px 0 6px;letter-spacing:.14em;font-size:11px;color:#6b6557">
+      BY KIND — what the budget is actually set from</div>
+    <table style="border-collapse:collapse;font-size:12px">${rows}</table>
+    <div style="color:var(--faint);font-size:11px;margin-top:6px">
+      a cap reads [evidence] once three like-for-like runs exist; until then it
+      is a stated default. read/out is cache-read divided by output — the cost
+      is re-reading, not writing.</div>`;
+}
+
 function renderSpend(d){
   const box = document.getElementById("spend");
   if(!box) return;
@@ -429,7 +456,7 @@ function renderSpend(d){
         out ${(r.out_tokens||0).toLocaleString()} ·
         cache read ${(r.cache_read||0).toLocaleString()}</div>
     </span></div>`;
-  }).join("") + `<div class="basis">${d.runs} recorded runs · $${
+  }).join("") + kindTable(d) + `<div class="basis">${d.runs} recorded runs · $${
     (d.total_usd||0).toFixed(2)} total · ` + (d.per_model||[]).map(m =>
       `${esc(m.model)} ${m.runs}\u00d7 $${m.usd.toFixed(2)}`).join(" · ") +
     ` \u00b7 measured by each agent, not estimated</div>`;
