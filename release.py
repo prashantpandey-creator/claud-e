@@ -68,7 +68,10 @@ ENTRY = ["sessions", "still", "launch", "scan_projects", "archive",
          "paths"]
 
 # Files that are the product but are not python modules, copied as-is.
-EXTRA = ["LICENSE", "VERSION"]
+# COMMERCIAL.md is not optional furniture: the LICENSE points at it by
+# name, so a build without it hands a buyer terms that reference a file
+# that does not exist.
+EXTRA = ["LICENSE", "COMMERCIAL.md", "VERSION"]
 
 # The product's own shell, kept in product/ so it is a reviewed file and not
 # a string inside this script. The repo's own `meditate`, `install.sh` and
@@ -346,7 +349,15 @@ with nothing else on the path, and the suite ships with the code.
 
 ## Licence
 
-See LICENSE.
+**PolyForm Noncommercial License 1.0.0** — free for yourself, your own projects,
+study, hobby work, and for charities, schools, universities, public research
+and government. Read the source, change it, redistribute it.
+
+**Using it as part of your paid work needs a commercial licence** — at a
+company, on client work, or inside something you sell. See COMMERCIAL.md.
+
+Versions published before 2026-09-03 were MIT and that grant is permanent for
+those copies; it does not extend to this one.
 """ % {"repo": PRODUCT_REPO, "n": len(p["modules"]), "lines": p["lines"]}
 
 

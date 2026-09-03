@@ -83,7 +83,12 @@ def test_edge_heartbeat_captures_every_stage():
     src = open(hb).read()
     assert 'run_all >> "$LOG"' in src, \
         "the redirect no longer wraps the whole pass — a silent stage will eat it"
-    steps = src[src.index("STEPS=("):src.index(")", src.index("STEPS=("))]
+    # the array ends at a `)` alone on a line, NOT at the first `)`:
+    # a step comment containing "(a secret gist / your own receiver)"
+    # truncated this slice mid-comment and reported voice.py as gone
+    import re as _re
+    _i = src.index("STEPS=(")
+    steps = src[_i:_i + _re.search(r"^\)\s*$", src[_i:], _re.M).start()]
     for stage in ("nidra_bridge.py", "archive.py", "dashboard.py", "voice.py"):
         assert stage in steps, "%s is not in the pass" % stage
 

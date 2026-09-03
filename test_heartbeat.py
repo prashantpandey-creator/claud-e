@@ -35,11 +35,28 @@ SKILL_DIR = os.path.dirname(os.path.abspath(__file__))
 HB = os.path.join(SKILL_DIR, "heartbeat.sh")
 
 
+
+def _steps_span(src):
+    """Where the STEPS array really starts and ends.
+
+    Both call sites used src.index(")") and that broke the day a step got a
+    comment with a parenthesis in it — "(a secret gist / your own receiver)".
+    The slice stopped mid-comment, so the list test read a truncated array
+    and reported voice.py as dropped, and the harness spliced an unterminated
+    array into a script that then wrote no log at all. Eight red tests, one
+    paren. The array ends at a `)` alone on its own line.
+    """
+    i = src.index("STEPS=(")
+    m = re.search(r"^\)\s*$", src[i:], re.M)
+    assert m, "STEPS array has no closing paren on its own line"
+    return i, i + m.start()
+
+
 def _fake_run(steps, extra_files=None, log_lines=None):
     """Run heartbeat.sh with a substituted step list, in a scratch dir."""
     d = tempfile.mkdtemp()
     src = open(HB).read()
-    i, j = src.index("STEPS=("), src.index(")", src.index("STEPS=("))
+    i, j = _steps_span(src)
     body = "STEPS=(\n" + "".join('  "%s"\n' % s for s in steps)
     open(os.path.join(d, "heartbeat.sh"), "w").write(src[:i] + body + src[j:])
     os.chmod(os.path.join(d, "heartbeat.sh"), 0o755)
@@ -136,7 +153,8 @@ def test_the_list_holds_the_stage_that_ACTS():
     read-only, so without it the heartbeat can never move work forward — the
     exact failure the owner reported as the fleet not growing anything."""
     src = open(HB).read()
-    steps = src[src.index("STEPS=("):src.index(")", src.index("STEPS=("))]
+    i, j = _steps_span(src)
+    steps = src[i:j]
     for required in ("repair.py --apply", "go.py --auto", "nidra_bridge.py --sleep",
                      "archive.py --apply", "dashboard.py", "voice.py"):
         assert required in steps, "%s dropped out of the heartbeat" % required
@@ -165,8 +183,9 @@ def test_doctor_is_IN_the_chain():
     # Check the STEPS array, not the whole file — TOLERANT="doctor.py" and
     # the prose above it both mention doctor, and my first cut of this
     # assertion matched its own explanatory comment.
-    steps = src.split("STEPS=(", 1)[1].split(")", 1)[0]
-    doc = [l for l in steps.splitlines() if "doctor" in l and not l.strip().startswith("#")]
+    i, j = _steps_span(src)
+    doc = [l for l in src[i:j].splitlines()
+           if "doctor" in l and not l.strip().startswith("#")]
     assert doc and all("--quick" in l for l in doc), \
         "the FULL suite is wired into an hourly timer: %r" % doc
 
