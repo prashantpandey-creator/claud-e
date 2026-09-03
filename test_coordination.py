@@ -932,6 +932,106 @@ def test_wire_file_squiggle_still_works():
         assert "nope" in got, got
 
 
+# ---------------------------------------------------------------------------
+# the session brief: facts about THIS project, at the moment a session opens
+# ---------------------------------------------------------------------------
+#
+# Measured 2026-09-03: SessionStart injected 4,882 chars — 87% rules, one
+# goal line, and 0 facts about the work. The graded store (637 active)
+# reached a session only through the edit-time lane (11.9% reachable, 2.2%
+# served ever). The brief is the store speaking first.
+
+def _brief_world(t):
+    coord, store = _env(t)
+    gdir = os.path.join(t, "goals"); os.makedirs(gdir)
+    open(os.path.join(gdir, "shop.md"), "w").write(
+        "---\nname: shop-live\ntitle: Shop checkout live\nproject: shop\ncwd: /repo/shop\nstatus: active\n---\n"
+        "## Milestones\n- [x] cart page\n- [ ] razorpay webhook verified\n")
+    rows = [
+        {"id": "mem_a", "active": True, "statement": "razorpay webhook secret lives in stack.env; verify HMAC before trusting the payload",
+         "epistemic": {"evidence_status": "machine_checked"}, "tags": ["memory-file"],
+         "temporal": {"recorded_at": "2026-09-01T00:00:00+00:00"}},
+        {"id": "mem_b", "active": True, "statement": "checkout page posts to /api/order then redirects to razorpay",
+         "epistemic": {"evidence_status": "unverified"}, "tags": ["memory-file"],
+         "temporal": {"recorded_at": "2026-06-01T00:00:00+00:00"}},
+        {"id": "mem_s", "active": True, "statement": "Session 'razorpay checkout fix' on shop. 3 turns, 2 files, sprawl 0.4",
+         "epistemic": {"evidence_status": "machine_checked"}, "tags": ["meditate-session"],
+         "temporal": {"recorded_at": "2026-09-02T00:00:00+00:00"}},
+        {"id": "mem_z", "active": True, "statement": "the mascot uses a sine breathe on the orb",
+         "epistemic": {"evidence_status": "machine_checked"}, "tags": ["memory-file"],
+         "temporal": {"recorded_at": "2026-08-01T00:00:00+00:00"}},
+        {"id": "mem_gone", "active": False, "statement": "razorpay test keys were rotated",
+         "epistemic": {"evidence_status": "machine_checked"}, "tags": ["memory-file"]},
+    ]
+    with open(os.path.join(store, "memories.jsonl"), "w") as f:
+        for r in rows:
+            f.write(json.dumps(r) + "\n")
+    return coord, store, gdir
+
+
+def test_the_brief_serves_facts_about_THIS_project_ranked_by_its_goal():
+    with tempfile.TemporaryDirectory() as t:
+        coord, store, gdir = _brief_world(t)
+        b = co.brief_for("/repo/shop", store_dir=store, goals_dir=gdir, k=5)
+        ids = [x["id"] for x in b]
+        assert ids and ids[0] == "mem_a", ids          # webhook + razorpay, machine-checked
+        assert "mem_b" in ids, ids                      # razorpay checkout, unverified but relevant
+        assert "mem_z" not in ids, ids                  # the mascot is not this project
+        assert "mem_gone" not in ids, ids               # inactive never served
+        assert "mem_s" not in ids, ids                  # a session stub is metadata, not a fact
+
+
+def test_a_brief_line_carries_status_and_AGE():
+    """A fact from June with no check reads differently from one from
+    yesterday that the machine verified. The line says which."""
+    with tempfile.TemporaryDirectory() as t:
+        coord, store, gdir = _brief_world(t)
+        lines = co.render_brief(co.brief_for("/repo/shop", store_dir=store, goals_dir=gdir, k=5),
+                                now="2026-09-03T00:00:00+00:00")
+        joined = "\n".join(lines)
+        assert "machine-checked" in joined and "unverified" in joined, joined
+        assert "in store 2d" in joined and "in store 3mo" in joined, joined
+        assert "mem_a" in joined, "the id is how a session can cite it"
+
+
+def test_the_brief_is_in_session_start_and_LOGGED_as_served():
+    with tempfile.TemporaryDirectory() as t:
+        coord, store, gdir = _brief_world(t)
+        out = co.session_start({"session_id": "s1", "cwd": "/repo/shop"},
+                               coord_dir=coord, store_dir=store, goals_dir=gdir)
+        assert "razorpay webhook secret" in out, out
+        ev = [json.loads(l) for l in open(co.events_path(coord))]
+        served = [e for e in ev if e["type"] == "fact_served" and e.get("via") == "session_start"]
+        assert served and any(e["mem_id"] == "mem_a" for e in served), ev
+
+
+def test_an_EMPTY_store_briefs_nothing_and_says_nothing():
+    with tempfile.TemporaryDirectory() as t:
+        coord, store = _env(t)
+        gdir = os.path.join(t, "goals"); os.makedirs(gdir)
+        assert co.brief_for("/repo/x", store_dir=store, goals_dir=gdir) == []
+        out = co.session_start({"session_id": "s", "cwd": "/repo/x"},
+                               coord_dir=coord, store_dir=store, goals_dir=gdir)
+        assert "FACT" not in out
+
+
+def test_the_brief_is_BOUNDED():
+    """Five facts, ~120 chars each. The point is to fit beside the rules,
+    not to become the second 5k-token dump."""
+    with tempfile.TemporaryDirectory() as t:
+        coord, store, gdir = _brief_world(t)
+        with open(os.path.join(store, "memories.jsonl"), "a") as f:
+            for i in range(30):
+                f.write(json.dumps({"id": "mem_r%d" % i, "active": True,
+                                    "statement": "razorpay checkout webhook note %d " % i + "x" * 300,
+                                    "epistemic": {"evidence_status": "machine_checked"},
+                                    "tags": ["memory-file"],
+                                    "temporal": {"recorded_at": "2026-09-01T00:00:00+00:00"}}) + "\n")
+        lines = co.render_brief(co.brief_for("/repo/shop", store_dir=store, goals_dir=gdir))
+        assert len(lines) <= 6, len(lines)                     # header + 5
+        assert sum(len(l) for l in lines) <= 1000, sum(len(l) for l in lines)
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

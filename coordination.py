@@ -967,8 +967,118 @@ def done_digest(store_dir: str = STORE_DIR, coord_dir: str = COORD_DIR,
     return "Done silently (24h): " + ", ".join(parts) + "."
 
 
+BRIEF_K = 5
+BRIEF_STMT_CHARS = 120
+
+
+def _age_label(recorded_at: str, now: Optional[str] = None) -> str:
+    try:
+        import datetime as _dt
+        a = _dt.datetime.fromisoformat(recorded_at.replace("Z", "+00:00"))
+        b = _dt.datetime.fromisoformat((now or _iso(time.time())).replace("Z", "+00:00"))
+        d = max(0, int((b - a).total_seconds() // 86400))
+        return "%dd" % d if d < 60 else "%dmo" % (d // 30)
+    except Exception:
+        return "?"
+
+
+def brief_for(cwd: str, store_dir: str = STORE_DIR, goals_dir: Optional[str] = None,
+              k: int = BRIEF_K) -> List[Dict[str, Any]]:
+    """The store's facts about THIS project, ranked by what the project is
+    trying to do — served at the moment a session opens.
+
+    Measured 2026-09-03 before this: SessionStart injected 87% rules, one
+    goal line, and 0 facts. The query is the goal governing the cwd — its
+    title and open milestones — plus the directory's own name, so a session
+    hears what the store knows about the work it is about to do, not a
+    random slice. Session stubs (tag meditate-session) are metadata about
+    chats, not facts, and are never served. Inactive rows never.
+    """
+    if not cwd:
+        return []
+    terms: List[str] = [os.path.basename(cwd.rstrip("/")).replace("-", " ").replace("_", " ")]
+    try:
+        import goals as _gl
+        kw = {"goals_dir": goals_dir} if goals_dir else {}
+        for g in _gl.scan(**kw):
+            gc = g.get("cwd") or ""
+            if gc and (cwd == gc or cwd.startswith(gc.rstrip("/") + "/")):
+                terms.append(g.get("title") or "")
+                terms += [m.get("headline") or m.get("text") or ""
+                          for m in (g.get("milestones") or []) if not m.get("done")]
+    except Exception:
+        pass
+    query = " ".join(t for t in terms if t).strip()
+    if not query:
+        return []
+    mems: List[Dict[str, Any]] = []
+    try:
+        with open(os.path.join(store_dir, "memories.jsonl"), errors="replace") as f:
+            for ln in f:
+                try:
+                    m = json.loads(ln)
+                except ValueError:
+                    continue
+                if not m.get("active") or "meditate-session" in (m.get("tags") or []):
+                    continue
+                if not (m.get("statement") or "").strip():
+                    continue
+                mems.append(m)
+    except OSError:
+        return []
+    if not mems:
+        return []
+    try:
+        import paths as _p
+        _p.add_nidra_to_path()
+        from nidra.retrieval import retrieve
+        hits = retrieve(mems, query, k=k * 2)
+    except Exception:
+        # nidra absent: the same tf-idf, inline, so the brief does not vanish
+        import math
+        from collections import Counter
+        toks = lambda s_: re.findall(r"[a-z0-9]{2,}", (s_ or "").lower())
+        docs = [(m, Counter(toks(m["statement"]))) for m in mems]
+        df: Counter = Counter()
+        for _, tk in docs:
+            df.update(tk.keys())
+        q = toks(query)
+        scored = []
+        for m, tk in docs:
+            sc = sum((1 + math.log(tk[t])) * math.log(len(docs) / (1 + df[t]) + 1) for t in q if t in tk)
+            if sc > 0:
+                scored.append((sc, m))
+        scored.sort(key=lambda x: -x[0])
+        hits = [m for _, m in scored[:k * 2]]
+    # verified first within the hit set; then the ranker's order
+    rank = {"machine_checked": 0, "source_linked": 1, "unverified": 2}
+    hits.sort(key=lambda m: rank.get((m.get("epistemic") or {}).get("evidence_status", "unverified"), 3))
+    return hits[:k]
+
+
+def render_brief(hits: List[Dict[str, Any]], now: Optional[str] = None) -> List[str]:
+    """One line per fact: status, age, statement, id — the id is how the
+    session can cite it, which is the only outcome that proves the brief
+    was worth its tokens."""
+    if not hits:
+        return []
+    lines = ["BRIEF — what the store knows about this project (cite by id if you use one):"]
+    for m in hits:
+        st = (m.get("epistemic") or {}).get("evidence_status", "unverified").replace("_", "-")
+        age = _age_label((m.get("temporal") or {}).get("recorded_at", ""), now)
+        stmt = " ".join((m.get("statement") or "").split())
+        if len(stmt) > BRIEF_STMT_CHARS:
+            stmt = stmt[:BRIEF_STMT_CHARS - 1].rstrip() + "…"
+        # "in store": recorded_at is when the store took it in (the memory
+        # files were imported 2026-08-21, so most read 13d today), not when
+        # the fact was learned. Say which, or 13d reads as "two weeks old".
+        lines.append("  FACT (%s, in store %s): %s [%s]" % (st, age, stmt, m.get("id", "")))
+    return lines
+
+
 def session_start(payload: Dict[str, Any],
-                  coord_dir: str = COORD_DIR, store_dir: str = STORE_DIR) -> str:
+                  coord_dir: str = COORD_DIR, store_dir: str = STORE_DIR,
+                  goals_dir: Optional[str] = None) -> str:
     """Extra SessionStart lines: live sessions + fresh drift. '' when quiet."""
     sid = str(payload.get("session_id") or "unknown")
     cwd = str(payload.get("cwd") or "")
@@ -1035,9 +1145,27 @@ def session_start(payload: Dict[str, Any],
     # Fail-open — a broken goals file must never cost the session its rules.
     try:
         from goals import goal_for_cwd
-        gline = goal_for_cwd(cwd)
+        gline = goal_for_cwd(cwd, goals_dir=goals_dir) if goals_dir else goal_for_cwd(cwd)
         if gline:
             lines.append(gline)
+    except Exception:
+        pass
+
+    # THE BRIEF: the store's facts about this project, first thing. Each one
+    # is logged as served (via session_start) so the served rate — 2.2% of
+    # the store, ever, before this — is measured, not hoped.
+    try:
+        hits = brief_for(cwd, store_dir=store_dir, goals_dir=goals_dir)
+        if hits:
+            lines.extend(render_brief(hits))
+            for m in hits:
+                try:
+                    with open(events_path(coord_dir), "a") as f:
+                        f.write(json.dumps({"type": "fact_served", "sid": sid[:16], "path": cwd,
+                                            "mem_id": m.get("id", ""), "via": "session_start",
+                                            "ts": _iso(time.time())}) + "\n")
+                except OSError:
+                    pass
     except Exception:
         pass
     return "\n".join(lines)

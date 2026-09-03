@@ -169,7 +169,7 @@ import os, sys
 sys.path.insert(0, os.path.expanduser("~/.claude/skills/meditate"))
 try:
     import creed
-    print(creed.render("action", budget=2600))
+    print(creed.render("action", budget=1500))
 except Exception:
     pass
 PYCREED
