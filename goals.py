@@ -593,6 +593,41 @@ def mine(memory_dir: Optional[str] = None, goals_dir: str = GOALS_DIR,
                                  "last_active": max(touched) if touched else "",
                                  "open_signal": open_signal,
                                  "goal_word_overlap": round(hit, 2)}})
+    # SESSION THREADS with no memory and no goal. Organic capture while
+    # searching: the tool must not depend on somebody having written a
+    # memory first. Two or more recent sessions sharing two subject words
+    # that no goal and no candidate memory names is a thread; one session
+    # is a visit.
+    named = set()
+    for c in out:
+        named |= _tokens(c["name"].replace("-", " "))
+    named |= covered
+    pairs: Dict[tuple, List[tuple]] = {}
+    for words, d in recent:
+        subj = sorted(w for w in words if w not in named)
+        # anchor on the two rarest-looking subject words a session carries:
+        # every pair the session has, so two sessions sharing any pair meet
+        for i in range(len(subj)):
+            for j in range(i + 1, min(len(subj), i + 6)):
+                pairs.setdefault((subj[i], subj[j]), []).append(d)
+    seen_pairs: set = set()
+    threads: List[Dict[str, Any]] = []
+    for (a, b), days in sorted(pairs.items(), key=lambda kv: (-len(kv[1]), kv[0])):
+        if len(days) < 2 or a in seen_pairs or b in seen_pairs:
+            continue
+        seen_pairs |= {a, b}
+        name = "%s-%s" % (a, b)
+        threads.append({"name": name, "title": "%s %s — a thread across %d sessions, no goal and no memory yet"
+                        % (a, b, len(days)), "cwd": "",
+                        "suggested_milestones": ["Define the milestones for this thread (mined from sessions)"],
+                        "evidence": {"memory": "", "source": "sessions", "sessions_30d": len(days),
+                                     "last_active": max(days), "open_signal": False,
+                                     "goal_word_overlap": 0.0}})
+        if len(threads) >= 4:
+            break
+    for c in out:
+        c["evidence"].setdefault("source", "memory")
+    out.extend(threads)
     out.sort(key=lambda c: (-int(c["evidence"]["open_signal"]), -c["evidence"]["sessions_30d"],
                             c["evidence"]["last_active"] and -int(c["evidence"]["last_active"].replace("-", "") or 0)))
     return out[:limit]

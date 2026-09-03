@@ -38,6 +38,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -64,12 +65,29 @@ STEPS_SCHEMA = {
                 "title": {"type": "string"},
                 "why": {"type": "string"},
                 "depends_on": {"type": "array", "items": {"type": "string"}},
-                "kind": {"type": "string", "enum": ["goal", "thread", "repair", "revive", "assess"]},
+                "kind": {"type": "string", "enum": ["goal", "thread", "repair", "revive", "assess", "human"]},
                 "check": {"type": "string"},
             },
             "required": ["id", "title", "why", "depends_on", "kind", "check"]}}},
     "required": ["steps"],
 }
+
+# YOUR HANDS. Some steps no dispatch can finish: a credential from a
+# dashboard, an approval that is Apple's or Google's, a payment, a
+# signature, a decision. Sent an agent, they cost the cap and come back
+# "blocked". They are a kind of their own — kept apart, never dispatched,
+# ticked by the owner — and an agent's `blocked_on` becomes one at runtime.
+_HUMAN_RE = re.compile(
+    r"\b(owner (supplies|provides|decides|signs|pays|approves|creates|must)|your hands|"
+    r"by hand|manually|dashboard[- ]only|no api path|apple('s)? (review|approval)|"
+    r"app store review|app review|play console approval|approved by (apple|google)|"
+    r"subscriptions? approved|password|passcode|2fa|otp|credit card|payment method|"
+    r"sign (the|a) |legal|contract|business verification|verify (the )?business|"
+    r"system user token|pixel id|app secret|api key from|token from)\b", re.I)
+
+
+def is_human(text: str) -> bool:
+    return bool(_HUMAN_RE.search(text or ""))
 
 
 IDEAS_SCHEMA = {
@@ -234,15 +252,21 @@ def build(goals_dir: Optional[str] = None, meditation_dir: str = MEDITATION_DIR,
             # the file, and the note is history, not the step
             head = (m.get("headline") or text).strip() or text
             mid = _nid(g["name"], text)
+            human = is_human(text)
             node = {"id": mid, "goal": g["name"], "goal_title": g.get("title") or g["name"],
                     "cwd": g.get("cwd") or "", "milestone": head, "title": head,
-                    "why": "an open milestone of " + (g.get("title") or g["name"]),
-                    "kind": "goal", "check": "", "depends_on": [prev_id] if prev_id else [],
-                    "status": "pending", "agent": agent_for("goal"),
-                    "name": "goal-%s-%s" % (g["name"][:16], mid),
+                    "why": ("only you can do this" if human else
+                            "an open milestone of " + (g.get("title") or g["name"])),
+                    "kind": "human" if human else "goal", "check": "",
+                    "depends_on": [prev_id] if prev_id else [],
+                    "status": "waiting" if human else "pending",
+                    "agent": ({"model": "you", "effort": "", "basis": "human", "budget_usd": 0.0,
+                               "cap_basis": "none", "why": "not dispatchable"} if human
+                              else agent_for("goal")),
+                    "name": "%s-%s-%s" % ("human" if human else "goal", g["name"][:16], mid),
                     "steers": [], "log": "", "session": "", "result": None}
             steps: List[Dict[str, Any]] = []
-            if elaborator is not None:
+            if elaborator is not None and not human:
                 try:
                     steps = elaborator(g["name"], text) if elaborator is not elaborate_with_claude \
                         else elaborator(g["name"], head, cwd=g.get("cwd") or "",
@@ -261,7 +285,9 @@ def build(goals_dir: Optional[str] = None, meditation_dir: str = MEDITATION_DIR,
                 ids[str(s["id"])] = mid + "." + str(s["id"])
             subs: List[Dict[str, Any]] = []
             for s in steps:
-                kind = s.get("kind") if s.get("kind") in ("goal", "thread", "repair", "revive", "assess") else "goal"
+                kind = s.get("kind") if s.get("kind") in ("goal", "thread", "repair", "revive", "assess", "human") else "goal"
+                if kind != "human" and is_human(str(s.get("title") or "") + " " + str(s.get("why") or "")):
+                    kind = "human"
                 sid = ids[str(s["id"])]
                 deps = [ids[d] for d in (s.get("depends_on") or []) if d in ids]
                 if prev_id:
@@ -270,7 +296,10 @@ def build(goals_dir: Optional[str] = None, meditation_dir: str = MEDITATION_DIR,
                              "cwd": node["cwd"], "milestone": head, "title": str(s["title"]).strip(),
                              "why": str(s.get("why") or "").strip(), "kind": kind,
                              "check": str(s.get("check") or "").strip(), "depends_on": deps,
-                             "status": "pending", "agent": agent_for(kind),
+                             "status": "waiting" if kind == "human" else "pending",
+                             "agent": ({"model": "you", "effort": "", "basis": "human", "budget_usd": 0.0,
+                                        "cap_basis": "none", "why": "not dispatchable"}
+                                       if kind == "human" else agent_for(kind)),
                              "name": "%s-%s-%s" % (kind, g["name"][:16], sid.replace(".", "_")),
                              "steers": [], "log": "", "session": "", "result": None})
             node["depends_on"] = node["depends_on"] + [s["id"] for s in subs]
@@ -319,20 +348,25 @@ def build(goals_dir: Optional[str] = None, meditation_dir: str = MEDITATION_DIR,
                            sessions=None if real else [])
     except Exception as e:
         notes.append("goal mining failed: %s" % str(e)[:80])
-    est = round(sum(n["agent"]["budget_usd"] for n in nodes if n["status"] != "idea"), 2)
+    est = round(sum(n["agent"]["budget_usd"] for n in nodes if n["status"] not in ("idea", "waiting")), 2)
     return {"id": time.strftime("%Y%m%d-%H%M%S", time.gmtime()), "created": _now_iso(),
             "armed": False, "armed_at": "", "paused_why": "", "max_parallel": DEFAULT_PARALLEL,
             "nodes": nodes, "notes": notes, "proposed_goals": proposed,
             "totals": {"goals": n_goals, "nodes": len([n for n in nodes if n["status"] != "idea"]),
-                       "ideas": n_ideas, "est_usd": est},
+                       "ideas": n_ideas, "human": len([n for n in nodes if n["kind"] == "human"]),
+                       "est_usd": est},
             "events": [{"ts": _now_iso(), "what": "planned", "nodes": len(nodes)}],
             "metrics": {}}
 
 
 def ready(g: Dict[str, Any]) -> List[Dict[str, Any]]:
     done = {n["id"] for n in g["nodes"] if n["status"] == "done"}
-    return [n for n in g["nodes"] if n["status"] == "pending"
+    return [n for n in g["nodes"] if n["status"] == "pending" and n.get("kind") != "human"
             and all(d in done for d in n["depends_on"])]
+
+
+def waiting_on_you(g: Dict[str, Any]) -> List[Dict[str, Any]]:
+    return [n for n in g["nodes"] if n.get("kind") == "human" and n["status"] == "waiting"]
 
 
 # ---------------------------------------------------------------------------
@@ -399,6 +433,15 @@ def _prompt_for(n: Dict[str, Any]) -> str:
 def dispatch_real(n: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     import go
     a = n["agent"]
+    if n.get("session") and n.get("resume_message"):
+        # the wall the agent hit has been cleared by the owner: the SAME
+        # session continues with that fact, instead of a fresh agent
+        # rediscovering everything up to the wall
+        r = go.continue_agent(n["name"], n["resume_message"])
+        if r.get("started"):
+            return {"log": r.get("log", ""), "session": r.get("session", n["session"]),
+                    "worktree": n.get("worktree", ""), "why": "resumed"}
+        return None
     ok = go._headless(n.get("cwd") or os.path.expanduser("~"), _prompt_for(n), n["name"],
                       a.get("model", "sonnet"), a.get("effort", ""), float(a.get("budget_usd") or 0))
     if not ok:
@@ -439,8 +482,10 @@ def _dispatch_ready(g: Dict[str, Any], max_parallel: int,
             continue
         n["status"] = "running"
         n["log"] = r.get("log", "")
-        n["session"] = r.get("session", "")
-        n["worktree"] = r.get("worktree", "")
+        n["session"] = r.get("session", "") or n.get("session", "")
+        n["worktree"] = r.get("worktree", "") or n.get("worktree", "")
+        if n.get("resume_message"):
+            n["resumed_with"] = n.pop("resume_message")
         n["started"] = _now_iso()
         n["started_epoch"] = time.time()
         running += 1
@@ -525,9 +570,31 @@ def _absorb(n: Dict[str, Any], res: Dict[str, Any], g: Dict[str, Any]) -> None:
         g["events"].append({"ts": _now_iso(), "what": "failed", "node": n["id"], "why": n["why_failed"]})
         return
     if so.get("blocked_on"):
-        n["status"] = "blocked"
-        n["blocked_on"] = str(so["blocked_on"])[:300]
-        g["events"].append({"ts": _now_iso(), "what": "blocked", "node": n["id"], "why": n["blocked_on"][:80]})
+        # The agent found the wall; the wall is the owner's. It becomes a
+        # human node this node waits on, and this node keeps its session so
+        # it can continue from the wall, not from the start.
+        wall_text = str(so["blocked_on"]).strip()[:300]
+        n["blocked_on"] = wall_text
+        wall = next((m for m in g["nodes"] if m.get("kind") == "human" and m["goal"] == n["goal"]
+                     and m["title"].strip().lower() == wall_text.lower()), None)
+        if wall is None:
+            wid = n["id"] + ".you"
+            while any(m["id"] == wid for m in g["nodes"]):
+                wid += "x"
+            wall = {"id": wid, "goal": n["goal"], "goal_title": n["goal_title"], "cwd": n["cwd"],
+                    "milestone": n["milestone"], "title": wall_text,
+                    "why": "the agent working \"%s\" hit this and only you can clear it" % n["title"][:50],
+                    "kind": "human", "check": "", "depends_on": [], "status": "waiting",
+                    "agent": {"model": "you", "effort": "", "basis": "human", "budget_usd": 0.0,
+                              "cap_basis": "none", "why": "not dispatchable"},
+                    "name": "human-%s-%s" % (n["goal"][:16], wid.replace(".", "_")),
+                    "steers": [], "log": "", "session": "", "result": None, "from_agent": n["id"]}
+            g["nodes"].append(wall)
+        if wall["id"] not in n["depends_on"]:
+            n["depends_on"].append(wall["id"])
+        n["status"] = "pending"
+        n["resume_message"] = ""
+        g["events"].append({"ts": _now_iso(), "what": "blocked", "node": n["id"], "why": wall_text[:80]})
         return
     n["status"] = "done"
     g["events"].append({"ts": _now_iso(), "what": "done", "node": n["id"],
@@ -556,6 +623,7 @@ def _metrics(g: Dict[str, Any], now: float) -> Dict[str, Any]:
     # done" over 13 steps the day ideas landed.
     ideas = [n for n in g["nodes"] if n["status"] == "idea"]
     ns = [n for n in g["nodes"] if n["status"] != "idea"]
+    human_waiting = [n for n in ns if n.get("kind") == "human" and n["status"] == "waiting"]
     by = {}
     for n in ns:
         by[n["status"]] = by.get(n["status"], 0) + 1
@@ -586,7 +654,7 @@ def _metrics(g: Dict[str, Any], now: float) -> Dict[str, Any]:
             "denials": sum(n["result"]["denials"] for n in fin),
             "grown": sum(1 for n in ns if n.get("grown")),
             "steers": sum(len(n.get("steers") or []) for n in ns),
-            "ideas": len(ideas),
+            "ideas": len(ideas), "human": len(human_waiting),
             "per_goal": per_goal, "hours": round(hours, 2)}
 
 
@@ -648,6 +716,44 @@ def steer(node_id: str, message: str, meditation_dir: str = MEDITATION_DIR,
     return {"ok": True, "node": n["id"], "log": n["log"]}
 
 
+def done(node_id: str, meditation_dir: str = MEDITATION_DIR, note: str = "",
+         goals_dir: Optional[str] = None, tick_fn: Optional[Callable] = None) -> Dict[str, Any]:
+    """The owner did the thing. The node is done by him, the goal file's
+    checkbox ticks when the node IS a milestone, and every node that was
+    waiting on it gets the fact as its resume message."""
+    g = load(meditation_dir)
+    if not g:
+        return {"ok": False, "why": "no campaign"}
+    n = next((m for m in g["nodes"] if m["id"] == node_id or m["name"] == node_id), None)
+    if not n:
+        return {"ok": False, "why": "no node %s" % node_id}
+    if n.get("kind") != "human":
+        return {"ok": False, "why": "%s is an agent's step, not yours — steer it instead" % node_id}
+    n["status"] = "done"
+    n["done_by"] = "owner"
+    n["note"] = note
+    n["finished"] = _now_iso()
+    ticked = None
+    if n["title"] == n["milestone"] and not n.get("from_agent"):
+        try:
+            import goals as gl
+            fn = tick_fn or gl.tick
+            r = fn(n["goal"], n["milestone"], goals_dir=goals_dir) if goals_dir else fn(n["goal"], n["milestone"])
+            ticked = r.get("closed") if isinstance(r, dict) else None
+        except Exception as e:
+            ticked = "tick failed: %s" % str(e)[:60]
+    for m in g["nodes"]:
+        if n["id"] in m["depends_on"] and m.get("session"):
+            m["resume_message"] = ("The owner has done this: %s.%s Continue from where you stopped."
+                                   % (n["title"], (" Note: " + note) if note else ""))
+    g["events"].append({"ts": _now_iso(), "what": "owner did", "node": n["id"],
+                        "title": n["title"][:60], "ticked": ticked})
+    g["metrics"] = _metrics(g, time.time())
+    save(g, meditation_dir)
+    return {"ok": True, "node": n["id"], "ticked": ticked,
+            "unblocked": [m["id"] for m in g["nodes"] if n["id"] in m["depends_on"]]}
+
+
 def accept(node_id: str, meditation_dir: str = MEDITATION_DIR) -> Dict[str, Any]:
     """The owner takes an idea: it becomes a pending node and runs after the
     goal's last open milestone. Nothing else in the graph changes."""
@@ -702,7 +808,8 @@ def status(meditation_dir: str = MEDITATION_DIR) -> Dict[str, Any]:
             "nodes": [{k: n.get(k) for k in ("id", "goal", "goal_title", "title", "kind", "status",
                                               "depends_on", "agent", "blocked_on", "stuck",
                                               "result", "steers", "grown", "name", "log",
-                                              "idea", "accepted", "why", "check")}
+                                              "idea", "accepted", "why", "check", "done_by",
+                                              "note", "from_agent", "milestone")}
                       for n in g["nodes"]],
             "events": g.get("events", [])[-30:]}
 
@@ -711,7 +818,8 @@ def status(meditation_dir: str = MEDITATION_DIR) -> Dict[str, Any]:
 # the pages
 # ---------------------------------------------------------------------------
 
-_GLYPH = {"done": "✓", "running": "▶", "blocked": "■", "failed": "✗", "pending": "·", "idea": "?"}
+_GLYPH = {"done": "✓", "running": "▶", "blocked": "■", "failed": "✗", "pending": "·", "idea": "?",
+          "waiting": "☐"}
 
 
 def render(g: Dict[str, Any]) -> str:
@@ -730,6 +838,16 @@ def render(g: Dict[str, Any]) -> str:
     elif g.get("paused_why"):
         out.append("PAUSED — " + g["paused_why"])
     out.append("")
+    yours = waiting_on_you(g)
+    if yours:
+        out.append("YOUR HANDS — %d thing%s only you can do; nothing behind them moves until you tick them"
+                   % (len(yours), "" if len(yours) == 1 else "s"))
+        for n in yours:
+            out.append("  ☐ %s   (%s)" % (n["title"][:100], n["goal_title"][:40]))
+            if n.get("why"):
+                out.append("      " + n["why"][:110])
+            out.append("      done? — campaign done %s" % n["id"])
+        out.append("")
     goals_seen: List[str] = []
     for n in g["nodes"]:
         if n["goal"] not in goals_seen:
@@ -798,8 +916,8 @@ def render_status(s: Dict[str, Any]) -> str:
              % (m["spent_usd"], m["est_usd"],
                 (" · $%.2f/h" % m["burn_usd_per_h"]) if m.get("burn_usd_per_h") is not None else "",
                 m["pushed"], m["verified_commits"], m["claimed_commits"], m["milestones_ticked"]),
-             "%d steps grown from results · %d steers · %d denials · %d ideas waiting for you"
-             % (m["grown"], m["steers"], m["denials"], m.get("ideas", 0))]
+             "%d steps grown from results · %d steers · %d denials · %d ideas waiting for you · %d things only you can do"
+             % (m["grown"], m["steers"], m["denials"], m.get("ideas", 0), m.get("human", 0))]
     for gname, pg in (m.get("per_goal") or {}).items():
         lines.append("  %-40s %d/%d%s%s" % (pg["title"][:40], pg["done"], pg["total"],
                                             (" · %d blocked" % pg["blocked"]) if pg["blocked"] else "",
@@ -813,7 +931,7 @@ def render_status(s: Dict[str, Any]) -> str:
 
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(prog="meditate campaign", description=__doc__.split("\n")[0])
-    ap.add_argument("verb", choices=["plan", "show", "go", "tick", "status", "pause", "steer", "accept", "accept-goal"])
+    ap.add_argument("verb", choices=["plan", "show", "go", "tick", "status", "pause", "steer", "accept", "accept-goal", "done"])
     ap.add_argument("args", nargs="*")
     ap.add_argument("--max", type=int, default=None, help="agents at a time")
     ap.add_argument("--no-elaborate", action="store_true", help="milestones only, no planner calls")
@@ -858,6 +976,13 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 2
         r = accept(a.args[0])
         print(json.dumps(r) if a.json else ("accepted %s" % r["node"] if r.get("ok") else "could not accept: " + r.get("why", "")))
+        return 0 if r.get("ok") else 1
+    if a.verb == "done":
+        if not a.args:
+            print("usage: campaign done <node-id> [note]")
+            return 2
+        r = done(a.args[0], note=" ".join(a.args[1:]))
+        print(json.dumps(r) if a.json else ("done — %d step(s) can move" % len(r.get("unblocked", [])) if r.get("ok") else "could not: " + r.get("why", "")))
         return 0 if r.get("ok") else 1
     if a.verb == "accept-goal":
         if not a.args:

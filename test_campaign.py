@@ -254,10 +254,16 @@ def test_a_BLOCKED_node_stops_its_branch_and_nothing_else():
                 read_result=lambda log: results.get(log))
         g3 = cp.load(med)
         by = {n["title"]: n for n in g3["nodes"]}
-        assert by["s1"]["status"] == "blocked" and "password" in by["s1"]["blocked_on"]
+        # the wall becomes the owner's; s1 waits on it, keeps its session,
+        # and nothing else in the graph is touched
+        wall = by["needs the App Store password"]
+        assert wall["kind"] == "human" and wall["status"] == "waiting"
+        assert by["s1"]["status"] == "pending" and wall["id"] in by["s1"]["depends_on"]
+        assert "password" in by["s1"]["blocked_on"]
         assert by["s2"]["status"] == "pending", by["s2"]
         assert by["only open"]["status"] == "done"
-        assert "BLOCKED: needs the App Store password" in cp.render(g3), "blocked node not on the page"
+        page = cp.render(g3)
+        assert "YOUR HANDS" in page and "needs the App Store password" in page, "the wall is not on the page"
 
 
 def test_the_monitor_reads_MONEY_from_the_result_not_the_plan():
@@ -436,6 +442,118 @@ def test_ideas_are_proposed_for_DONE_goals_too():
         c = [n for n in g["nodes"] if n["goal"] == "c-done"]
         assert len(c) == 1 and c[0]["status"] == "idea" and not c[0]["depends_on"]
         assert g["totals"]["goals"] == 3
+
+
+# ---------------------------------------------------------------------------
+# your hands: what only the owner can do, kept apart, ticked by him
+# ---------------------------------------------------------------------------
+
+GOAL_H = """---
+name: h-ads
+title: H ads
+project: h
+cwd: %s
+status: active
+---
+## Milestones
+- [ ] Owner supplies the Pixel ID and a System User token (dashboard-only)
+- [ ] Pixel activated in the deploy env
+"""
+
+
+def _world_h(t):
+    gdir = os.path.join(t, "goals"); os.makedirs(gdir)
+    open(os.path.join(gdir, "h.md"), "w").write(GOAL_H % t)
+    med = os.path.join(t, "med"); os.makedirs(med)
+    return gdir, med
+
+
+def test_a_step_only_the_owner_can_do_is_a_HUMAN_node():
+    """'Owner supplies…', 'approved by Apple', a password, a card — an agent
+    sent at these spends its cap to report blocked. They are kept apart."""
+    with tempfile.TemporaryDirectory() as t:
+        gdir, med = _world_h(t)
+        g = cp.build(goals_dir=gdir, meditation_dir=med, elaborator=lambda *a: [])
+        by = {n["title"]: n for n in g["nodes"]}
+        h = by["Owner supplies the Pixel ID and a System User token (dashboard-only)"]
+        assert h["kind"] == "human" and h["status"] == "waiting", h
+        assert by["Pixel activated in the deploy env"]["kind"] == "goal"
+        assert h["id"] in by["Pixel activated in the deploy env"]["depends_on"]
+        assert g["totals"]["human"] == 1
+
+
+def test_a_human_node_is_NEVER_dispatched():
+    with tempfile.TemporaryDirectory() as t:
+        gdir, med = _world_h(t)
+        g = cp.build(goals_dir=gdir, meditation_dir=med, elaborator=lambda *a: [])
+        cp.save(g, med)
+        sent = []
+        cp.go(meditation_dir=med, max_parallel=9,
+              dispatch=lambda n: sent.append(n["title"]) or {"log": "l", "session": "s"})
+        assert not sent, sent      # the agent step waits on the human one
+        assert cp.load(med)["metrics"]["human"] == 1
+
+
+def test_the_owner_ticks_it_DONE_and_the_branch_moves():
+    """Done by hand ticks the goal file too — the checkbox is the record."""
+    with tempfile.TemporaryDirectory() as t:
+        gdir, med = _world_h(t)
+        g = cp.build(goals_dir=gdir, meditation_dir=med, elaborator=lambda *a: [])
+        cp.save(g, med)
+        cp.go(meditation_dir=med, max_parallel=9, dispatch=lambda n: {"log": "l", "session": "s"})
+        h = [n for n in cp.load(med)["nodes"] if n["kind"] == "human"][0]
+        r = cp.done(h["id"], meditation_dir=med, note="token in vault", goals_dir=gdir)
+        assert r["ok"], r
+        g2 = cp.load(med)
+        h2 = [n for n in g2["nodes"] if n["id"] == h["id"]][0]
+        assert h2["status"] == "done" and h2["done_by"] == "owner" and "vault" in h2["note"]
+        assert "- [x] Owner supplies" in open(os.path.join(gdir, "h.md")).read()
+        sent = []
+        cp.tick(meditation_dir=med, max_parallel=9,
+                dispatch=lambda n: sent.append(n["title"]) or {"log": "l", "session": "s"},
+                read_result=lambda log: None)
+        assert sent == ["Pixel activated in the deploy env"], sent
+
+
+def test_an_agents_BLOCKED_ON_becomes_a_human_node_that_gates_it():
+    """The agent found the wall; the wall is the owner's. It waits on him,
+    and when he ticks it the same session continues, not a fresh one."""
+    with tempfile.TemporaryDirectory() as t:
+        gdir, med = _world(t)
+        g = cp.build(goals_dir=gdir, meditation_dir=med, elaborator=_elab)
+        cp.save(g, med)
+        cp.go(meditation_dir=med, max_parallel=2,
+              dispatch=lambda n: {"log": "l-" + n["id"], "session": "sess-" + n["id"]})
+        g2 = cp.load(med)
+        only = [n for n in g2["nodes"] if n["title"] == "only open"][0]
+        cp.tick(meditation_dir=med, dispatch=lambda n: {"log": "z", "session": "z"},
+                read_result=lambda log: _finished(blocked="needs the App Store password", pushed=False, commits=())
+                if log == only["log"] else None)
+        g3 = cp.load(med)
+        by = {n["title"]: n for n in g3["nodes"]}
+        wall = by["needs the App Store password"]
+        assert wall["kind"] == "human" and wall["status"] == "waiting", wall
+        assert by["only open"]["status"] == "pending" and wall["id"] in by["only open"]["depends_on"]
+        assert by["only open"]["session"] == only["session"], "session must survive the wait"
+        cp.done(wall["id"], meditation_dir=med, note="pasted it")
+        sent = []
+        cp.tick(meditation_dir=med, max_parallel=9,
+                dispatch=lambda n: sent.append(dict(n)) or {"log": "l2", "session": n.get("session") or "s"},
+                read_result=lambda log: None)
+        assert sent and sent[0]["title"] == "only open"
+        assert "pasted it" in (sent[0].get("resume_message") or ""), sent[0]
+        again = [n for n in cp.load(med)["nodes"] if n["title"] == "only open"][0]
+        assert "pasted it" in again.get("resumed_with", ""), "the resume is not on the record"
+
+
+def test_your_hands_is_its_OWN_section_on_the_page():
+    with tempfile.TemporaryDirectory() as t:
+        gdir, med = _world_h(t)
+        g = cp.build(goals_dir=gdir, meditation_dir=med, elaborator=lambda *a: [])
+        page = cp.render(g)
+        assert "YOUR HANDS" in page and "Owner supplies" in page
+        s = cp.status.__wrapped__(g) if hasattr(cp.status, "__wrapped__") else None
+        assert g["totals"]["human"] == 1
 
 
 def _main():

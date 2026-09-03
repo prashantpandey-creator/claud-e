@@ -648,8 +648,8 @@ function fillTargets(){
   dl.innerHTML = [...opts].map(o => `<option value="${esc(o)}">`).join("");
 }
 
-const AG = {done:"✓", running:"▶", blocked:"■", failed:"✗", pending:"·"};
-const AC = {done:"var(--gold)", running:"#e8b63f", blocked:"#c0392b", failed:"#c0392b", pending:"var(--faint)"};
+const AG = {done:"✓", running:"▶", blocked:"■", failed:"✗", pending:"·", waiting:"☐"};
+const AC = {done:"var(--gold)", running:"#e8b63f", blocked:"#c0392b", failed:"#c0392b", pending:"var(--faint)", waiting:"var(--gold)"};
 
 function renderCampaign(d){
   const box = document.getElementById("all"), n = document.getElementById("all-n"),
@@ -680,6 +680,19 @@ function renderCampaign(d){
         m.burn_usd_per_h!=null ? ` · $${m.burn_usd_per_h.toFixed(2)}/h` : ""}</span>
       <span>${m.pushed||0} pushed · ${m.verified_commits||0} commits verified</span>
       <span>${m.grown||0} steps grown · ${m.steers||0} steers</span></div>`;
+  // YOUR HANDS — what only the owner can do. Kept apart from the agents'
+  // steps, never dispatched, ticked here. Nothing behind one moves until
+  // it is ticked, so it sits above the graph, not inside it.
+  const yours = (d.nodes||[]).filter(x => x.kind === "human" && x.status === "waiting");
+  const hands = yours.length ? `<div style="margin:0 0 12px;padding:10px 12px;border:1px solid #3a2f14;border-radius:8px;background:rgba(227,177,64,.04)">
+      <div style="letter-spacing:.16em;font-size:11px;color:var(--gold);margin-bottom:6px">YOUR HANDS
+        <span style="color:var(--faint);letter-spacing:0;margin-left:8px">${yours.length} thing${yours.length===1?"":"s"} only you can do · nothing behind them moves until you tick them</span></div>
+      ${yours.map(x => `<div class="li" style="padding:4px 0">
+        <span class="txt" style="font-size:13px"><span style="font-family:ui-monospace,monospace;color:var(--gold)">☐</span> ${esc(x.title)}
+          <div style="color:var(--faint);font-size:11px">${esc(x.goal_title)}${x.why ? " · " + esc(x.why).slice(0,120) : ""}</div></span>
+        <input class="hand-note" data-node="${esc(x.id)}" placeholder="note (optional)" style="background:#0a0906;border:1px solid var(--line);border-radius:6px;color:var(--fg);padding:3px 8px;font:inherit;font-size:11.5px;width:150px">
+        <button class="hand-done" data-node="${esc(x.id)}" title="I did this">done</button>
+      </div>`).join("")}</div>` : "";
   // controls: exactly the verbs that make sense in this state
   const ctl = d.armed
     ? `<button data-act="pause-all" data-arg="paused from the console">pause</button>`
@@ -737,7 +750,7 @@ function renderCampaign(d){
         </span><button data-act="accept-goal" data-arg="${esc(c.name)}" title="write the goal file; re-plan brings it in">accept goal</button>
       </div>`; }).join("") : "";
   const notes = (d.notes||[]).map(t => `<div class="basis">note — ${esc(t)}</div>`).join("");
-  box.innerHTML = strip + `<div style="margin-bottom:8px">${ctl}</div>` + rows + proposed + notes;
+  box.innerHTML = hands + strip + `<div style="margin-bottom:8px">${ctl}</div>` + rows + proposed + notes;
 }
 
 function renderSwarm(d){
@@ -806,6 +819,11 @@ document.addEventListener("click", e => {
   if(b){ act(b.dataset.act, b.dataset.arg, b); return; }
   const st = e.target.closest("button.j-still");
   if(st){ act(st.dataset.verb, st.dataset.arg, st); return; }
+  const hd = e.target.closest("button.hand-done");
+  if(hd){
+    const note = (document.querySelector(`input.hand-note[data-node="${hd.dataset.node}"]`)||{}).value || "";
+    act("human-done", hd.dataset.node, hd, note); return;
+  }
   const mo = e.target.closest(".txt.more");
   if(mo){ mo.textContent = mo.dataset.full; mo.classList.remove("more"); return; }
   const h = e.target.closest("h3[data-toggle]");

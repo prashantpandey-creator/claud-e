@@ -149,6 +149,37 @@ def test_mine_on_the_REAL_store_returns_without_error():
         assert x["name"] and x["evidence"]["memory"]
 
 
+def test_a_thread_with_NO_memory_still_surfaces_from_sessions():
+    """Organic capture while searching: two or more recent sessions sharing
+    a subject that no goal and no memory names is a candidate on its own —
+    the tool must not depend on somebody having written a memory first."""
+    with tempfile.TemporaryDirectory() as t:
+        mem, gdir, sessions = _world(t)
+        sessions = sessions + [
+            {"title": "linkedin outreach tool scraper", "ts_end": "2026-09-02T10:00:00Z",
+             "user_messages": ["build the linkedin outreach scraper", "linkedin api limits"]},
+            {"title": "linkedin outreach followups", "ts_end": "2026-08-28T10:00:00Z",
+             "user_messages": ["outreach message templates for linkedin"]},
+        ]
+        c = gl.mine(memory_dir=mem, goals_dir=gdir, sessions=sessions, now="2026-09-03T00:00:00Z")
+        hit = [x for x in c if "linkedin" in x["name"]]
+        assert hit, [x["name"] for x in c]
+        ev = hit[0]["evidence"]
+        assert ev["sessions_30d"] == 2 and ev.get("memory") == "" and ev.get("source") == "sessions", ev
+        assert "outreach" in hit[0]["title"].lower()
+
+
+def test_a_single_session_is_NOT_a_thread():
+    """One session on a subject is a visit; two is a thread. Below two the
+    list would be every session title on the machine."""
+    with tempfile.TemporaryDirectory() as t:
+        mem, gdir, sessions = _world(t)
+        sessions = sessions + [{"title": "random one-off spike", "ts_end": "2026-09-02T10:00:00Z",
+                                "user_messages": ["try the random spike"]}]
+        c = gl.mine(memory_dir=mem, goals_dir=gdir, sessions=sessions, now="2026-09-03T00:00:00Z")
+        assert not any("random" in x["name"] for x in c), [x["name"] for x in c]
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

@@ -1433,6 +1433,20 @@ class _Handler(BaseHTTPRequestHandler):
                     res = {"started": True, "output": "paused — " + r.get("why", "")}
                 except Exception as e:
                     res = {"started": False, "output": str(e)[:160]}
+            elif action == "human-done":
+                # The owner did a thing only he could do. arg = node id,
+                # value = an optional note. The goal file's box ticks when the
+                # node is a milestone; whatever waited on it can move.
+                try:
+                    import campaign as _cp
+                    _log_brain_action("human-done", arg)
+                    r = _cp.done(arg, note=str(req.get("value") or "").strip())
+                    res = {"started": bool(r.get("ok")),
+                           "output": ("done — %d step%s can move now" % (len(r.get("unblocked", [])),
+                                      "" if len(r.get("unblocked", [])) == 1 else "s"))
+                           if r.get("ok") else r.get("why", "could not mark done")}
+                except Exception as e:
+                    res = {"started": False, "output": str(e)[:160]}
             elif action == "accept-goal":
                 # A mined goal becomes a goal file; the next plan brings it in.
                 try:
