@@ -576,6 +576,32 @@ def test_continue_RE_ADDS_a_removed_worktree_from_its_branch():
             go.WORKTREE_ROOT, go.HEADLESS_LOG_DIR = old_root, old_logs
 
 
+def test_a_run_the_CLI_refused_shows_the_refusal_verbatim():
+    """Two real ones: "claude: No such file or directory" and "No
+    conversation found with session ID …". The panel read them as
+    'no pid recorded' — a state about the header, not about what happened."""
+    with tempfile.TemporaryDirectory() as t:
+        p = os.path.join(t, "20260903-000002-goal-y.log")
+        open(p, "w").write("# goal-y\n# cwd: /tmp\n# model: sonnet effort: low budget: 1\n# session: s\n"
+                           "# worktree: \n# branch: \n\nclaude: No such file or directory\n")
+        rows = go.live_agents(log_dir=t, alive=lambda pid: False)
+        assert rows and rows[0]["state"].startswith("died: claude: No such file"), rows
+
+
+def test_continue_records_its_PID_too():
+    with tempfile.TemporaryDirectory() as t:
+        logs = os.path.join(t, "logs"); os.makedirs(logs)
+        open(os.path.join(logs, "20260903-010000-goal-z.log"), "w").write(
+            "# goal-z\n# cwd: %s\n# model: sonnet effort: high budget: 1\n# session: sid-z\n# worktree: \n# branch: \n\n" % t)
+        old = go.HEADLESS_LOG_DIR; go.HEADLESS_LOG_DIR = logs
+        try:
+            r = go.continue_agent("goal-z", "more", popen=_Popen)
+        finally:
+            go.HEADLESS_LOG_DIR = old
+        head = [l.rstrip() for l in open(r["log"]).read().splitlines()[:10]]
+        assert "# pid: 4242" in head, head
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

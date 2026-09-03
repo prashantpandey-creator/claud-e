@@ -451,9 +451,17 @@ def live_agents(log_dir: Optional[str] = None, alive=None, now=None,
                         last_tool = b.get("name") or last_tool
         is_alive = bool(pid) and bool(alive(pid))
         stalled = (t - mt) > STALL_AFTER_S
-        state = ("running" if is_alive and not stalled else
-                 "stalled" if is_alive else
-                 "died without reporting" if pid else "no pid recorded")
+        # a body whose first line is not an event is the CLI refusing to
+        # start — "claude: No such file or directory", "No conversation
+        # found with session ID …" — and that line is the state, verbatim
+        body = [ln for ln in text.splitlines() if ln.strip() and not ln.startswith("#")]
+        first = body[0].strip() if body else ""
+        if first and not first.startswith("{"):
+            state = "died: " + first[:80]
+        else:
+            state = ("running" if is_alive and not stalled else
+                     "stalled" if is_alive else
+                     "died without reporting" if pid else "no pid recorded")
         kind = kind_of(name)
         med = medians.get(kind)
         out.append({"name": name, "kind": kind, "log": p, "pid": pid, "alive": is_alive,
@@ -541,10 +549,13 @@ def continue_agent(name: str, message: str, popen=None) -> Dict[str, Any]:
         with open(log, "w") as fh:
             _write_header(fh, name, h.get("cwd", run_cwd), h.get("model", ""),
                           "", "", sid, run_cwd, h.get("branch", ""),
-                          continues=os.path.basename(old))
-            popen(_wrap_awake(argv), cwd=run_cwd, stdout=fh,
-                  stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-                  start_new_session=True)
+                          continues=os.path.basename(old), pid_slot=True)
+            proc = popen(_wrap_awake(argv), cwd=run_cwd, stdout=fh,
+                         stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                         start_new_session=True)
+        pid = int(getattr(proc, "pid", 0) or 0)
+        if pid:
+            _fill_pid(log, pid)
     except (OSError, ValueError) as e:
         return {"started": False, "why": str(e)[:120]}
     return {"started": True, "session": sid, "log": log, "cwd": run_cwd,
