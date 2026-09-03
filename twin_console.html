@@ -752,8 +752,16 @@ function renderCampaign(d){
         </span><button data-act="accept-goal" data-arg="${esc(c.name)}" title="write the goal file; re-plan brings it in">accept goal</button>
         <button data-act="discard-proposed" data-arg="${esc(c.name)}" title="no — its memory moves to .discarded, its store rows go inactive, it never resurfaces; reversible with campaign restore" style="color:var(--dim)">discard</button>
       </div>`; }).join("") : "";
+  // Finished goals: no steps, no row — listed once, small, with their discard.
+  const withRows = new Set(goals);
+  const finished = (d.goals||[]).filter(x => !withRows.has(x.name));
+  const doneRow = finished.length ? `<div style="margin:14px 0 4px;color:var(--faint);font-size:11px;letter-spacing:.12em">FINISHED GOALS</div>` +
+    finished.map(x => `<div class="li" style="padding:2px 0 2px 8px;border-left:2px solid var(--line)">
+        <span class="txt" style="font-size:12px;color:var(--dim)">✓ ${esc(x.title)} <span style="color:var(--faint)">${x.done}/${x.total}</span></span>
+        <button data-act="discard-goal" data-arg="${esc(x.name)}" title="drop this goal: its file and the memories it cites move to .discarded (reversible)" style="color:var(--faint);font-size:11px;padding:1px 8px">discard goal</button>
+      </div>`).join("") : "";
   const notes = (d.notes||[]).map(t => `<div class="basis">note — ${esc(t)}</div>`).join("");
-  box.innerHTML = hands + strip + `<div style="margin-bottom:8px">${ctl}</div>` + rows + proposed + notes;
+  box.innerHTML = hands + strip + `<div style="margin-bottom:8px">${ctl}</div>` + rows + doneRow + proposed + notes;
 }
 
 function renderSwarm(d){

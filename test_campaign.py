@@ -556,6 +556,22 @@ def test_your_hands_is_its_OWN_section_on_the_page():
         assert g["totals"]["human"] == 1
 
 
+def test_every_goal_file_is_LISTED_even_with_no_steps():
+    """A finished goal has no row in the graph; without this it could not be
+    discarded from the page."""
+    with tempfile.TemporaryDirectory() as t:
+        gdir, med = _world(t)
+        open(os.path.join(gdir, "c.md"), "w").write(
+            "---\nname: c-done\ntitle: C done\nproject: c\ncwd: %s\nstatus: active\n---\n"
+            "## Milestones\n- [x] shipped\n" % t)
+        g = cp.build(goals_dir=gdir, meditation_dir=med, elaborator=_elab)
+        names = {x["name"]: x for x in g["goals"]}
+        assert "c-done" in names and names["c-done"]["done"] == 1 and names["c-done"]["total"] == 1
+        assert not any(n["goal"] == "c-done" for n in g["nodes"])
+        cp.save(g, med)
+        assert [x["name"] for x in cp.status(meditation_dir=med)["goals"]] == [x["name"] for x in g["goals"]]
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]
