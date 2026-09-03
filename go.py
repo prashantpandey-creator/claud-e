@@ -17,8 +17,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
+import subprocess
 import sys
 import time
+import uuid
 from typing import Any, Callable, Dict, List, Optional
 
 SKILL_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -151,51 +154,258 @@ def _repair_kickoff(meditation_dir: str, store_dir: str = STORE_DIR,
 
 
 
-
 HEADLESS_LOG_DIR = os.path.join(MEDITATION_DIR, "agents")
+
+# ---------------------------------------------------------------------------
+# the control model: roles, isolation, typed results
+# ---------------------------------------------------------------------------
+#
+# Measured 2026-09-03 before this existed: go.py passed two of the CLI's
+# control flags; every unattended agent ran --dangerously-skip-permissions;
+# every log recorded a session_id nothing read; outcome recorded for 0 of 8
+# runs. The harness this tool imitates passes a role, a tool allowlist, a
+# result schema, and can resume an agent by id. All four are one flag each.
+#
+# Proven live the same day: `--json-schema` output lands in
+# `structured_output`; `--permission-mode dontAsk` with stdin closed returns
+# instead of hanging.
+
+AGENTS_FILE = os.path.join(SKILL_DIR, "agents.json")
+WORKTREE_ROOT = os.path.join(MEDITATION_DIR, "worktrees")
+_ROLES: Dict[str, Any] = {}
+
+
+def roles() -> Dict[str, Any]:
+    """agents.json, read once. Empty on any failure — a missing roles file
+    must not stop a dispatch, it must show up as a run with no --agent."""
+    global _ROLES
+    if _ROLES:
+        return _ROLES
+    try:
+        with open(AGENTS_FILE) as f:
+            _ROLES = json.load(f)
+    except (OSError, ValueError):
+        _ROLES = {}
+    return _ROLES
+
+
+def kind_of(name: str) -> str:
+    """goal-purangpt-mobile-live -> goal. The same split the ledgers use."""
+    return (name or "").split("-")[0]
+
+
+def role_argv(kind: str) -> List[str]:
+    """The role as CLI flags: who it is, what it may touch, what it must
+    return. The role prompt carries the owner's derived rules when they
+    derive, so every spawned agent works the way he works."""
+    r = roles()
+    role = (r.get("roles") or {}).get(kind)
+    out: List[str] = []
+    if role:
+        prompt = role.get("prompt", "")
+        try:
+            import creed
+            block = creed.render("action", budget=2600)
+            if block.strip():
+                prompt += "\n\nHOW THE OWNER WORKS — his standing rules:\n" + block.strip()
+        except Exception:
+            pass
+        out += ["--agents", json.dumps({kind: {"description": role.get("description", ""),
+                                               "prompt": prompt}}),
+                "--agent", kind]
+        if role.get("allowed"):
+            out += ["--allowedTools", " ".join(role["allowed"])]
+        if role.get("disallowed"):
+            out += ["--disallowedTools", " ".join(role["disallowed"])]
+    schema = r.get("result_schema")
+    if schema:
+        out += ["--json-schema", json.dumps(schema)]
+    return out
+
+
+def _repo_top(cwd: str) -> Optional[str]:
+    try:
+        r = subprocess.run(["git", "-C", cwd, "rev-parse", "--show-toplevel"],
+                           capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else None
+
+
+def make_worktree(cwd: str, name: str, stamp: str):
+    """(run_cwd, branch, why). A worktree on its own branch when cwd is a
+    repo; cwd unchanged and a stated reason when it is not.
+
+    Gated on rev-parse, not on isdir: purangpt-mobile-live's cwd is a parent
+    directory, not a repo, and was 100% of open dispatches on the day this
+    was written — a worktree step that aborted there would have dispatched
+    nothing and said nothing.
+
+    A named branch, not --detach: a run that stops early (budget cap,
+    denied push, blocked) leaves commits that --detach + remove would strand.
+    """
+    top = _repo_top(cwd)
+    if not top:
+        return cwd, "", "no worktree: not a repo"
+    branch = "agent/%s-%s" % (name[:40], stamp)
+    path = os.path.join(WORKTREE_ROOT, "%s-%s" % (name[:40], stamp))
+    try:
+        os.makedirs(WORKTREE_ROOT, exist_ok=True)
+        r = subprocess.run(["git", "-C", top, "worktree", "add", "-q", "-b", branch,
+                            path, "HEAD"], capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return cwd, "", "no worktree: %s" % str(e)[:80]
+    if r.returncode != 0:
+        return cwd, "", "no worktree: %s" % (r.stderr.strip() or "git failed")[:80]
+    return path, branch, ""
+
+
+def _write_header(fh, name, cwd, model, effort, budget_usd, sid, wt, branch,
+                  continues=""):
+    fh.write("# %s\n# cwd: %s\n# model: %s effort: %s budget: %s\n"
+             "# session: %s\n# worktree: %s\n# branch: %s\n"
+             % (name, cwd, model or "sonnet", effort or "default",
+                budget_usd or "none", sid, wt if wt != cwd else "", branch))
+    if continues:
+        fh.write("# continues: %s\n" % continues)
+    fh.write("\n")
+    fh.flush()
+
+
+def _wrap_awake(argv: List[str]) -> List[str]:
+    """Do not let the Mac sleep mid-agent. One line, no daemon."""
+    if shutil.which("caffeinate"):
+        return ["caffeinate", "-i"] + argv
+    return argv
+
+
 
 
 def _headless(cwd: str, prompt: str, name: str, model: str = "",
-              effort: str = "", budget_usd: float = 0.0) -> bool:
+              effort: str = "", budget_usd: float = 0.0,
+              popen=None, isolate: bool = True) -> bool:
     """Run the agent with no GUI at all, output to a log.
 
     `claude -p` needs no window, no Terminal and no awake display — verified
     directly with the screen off. It runs the task to completion and exits,
     which is what an unattended dispatch wants anyway.
+
+    What it passes now, and why each one is there:
+      --session-id        chosen here, written in the header, so a later
+                          `go --continue` can --resume it
+      --permission-mode   dontAsk, never bypass: a denied tool lands in the
+                          RESULT's blocked_on instead of in a push
+      --agents/--agent    the role from agents.json — the methodology
+      --allowedTools/--disallowedTools  what the role may touch
+      --json-schema       the RESULT the ledger reads back
+    The log keeps <stamp>-<kind>-<name>.log: kind attribution splits on '-'.
     """
-    import subprocess
+    popen = popen or subprocess.Popen
+    _headless.last = {}
     try:
         os.makedirs(HEADLESS_LOG_DIR, exist_ok=True)
         stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
+        sid = str(uuid.uuid4())
         log = os.path.join(HEADLESS_LOG_DIR, "%s-%s.log" % (stamp, name[:40]))
-        with open(log, "w") as fh:
-            fh.write("# %s\n# cwd: %s\n# model: %s effort: %s budget: %s\n\n"
-                     % (name, cwd, model or "sonnet", effort or "default",
-                        budget_usd or "none"))
-            fh.flush()
-            subprocess.Popen(
+        if isolate:
+            run_cwd, branch, why = make_worktree(cwd, name, stamp)
+        else:
+            run_cwd, branch, why = cwd, "", "isolation off"
+        if not os.path.isdir(run_cwd):
+            run_cwd = os.path.expanduser("~")
+        argv = ["claude", "-p", prompt, "--model", model or "sonnet",
                 # --output-format json so the agent REPORTS ITS OWN SPEND.
                 # Measured 2026-08-30: the result line carries total_cost_usd,
                 # num_turns, duration_ms and per-model usage — real money from
-                # the CLI itself, so no price table has to be guessed at. A
-                # trivial PONG cost $0.052 because 25,953 cache-creation
-                # tokens load on every dispatch; that is the floor for any
-                # agent, and it was invisible before this.
-                ["claude", "-p", prompt, "--model", model or "sonnet",
-                 "--output-format", "json"]
-                # A REAL cap, enforced by the CLI — the turn ceiling never was
-                # (the plan said "up to 12 turns" and one agent ran 14). Set
-                # from what the same kind of task actually cost.
-                + (["--max-budget-usd", str(budget_usd)] if budget_usd else [])
-                + (["--effort", effort] if effort else [])
-                + [
-                 "--dangerously-skip-permissions"],
-                cwd=cwd if os.path.isdir(cwd) else os.path.expanduser("~"),
-                stdout=fh, stderr=subprocess.STDOUT,
-                stdin=subprocess.DEVNULL, start_new_session=True)
+                # the CLI itself, so no price table has to be guessed at.
+                "--output-format", "json",
+                "--session-id", sid,
+                "--permission-mode", "dontAsk"]
+        # A REAL cap, enforced by the CLI — the turn ceiling never was.
+        if budget_usd:
+            argv += ["--max-budget-usd", str(budget_usd)]
+        if effort:
+            argv += ["--effort", effort]
+        argv += role_argv(kind_of(name))
+        with open(log, "w") as fh:
+            _write_header(fh, name, cwd, model, effort, budget_usd, sid,
+                          run_cwd, branch)
+            popen(_wrap_awake(argv), cwd=run_cwd, stdout=fh,
+                  stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                  start_new_session=True)
+        _headless.last = {"session": sid, "worktree": run_cwd if branch else "",
+                          "branch": branch, "why": why, "log": log, "argv": argv}
         return True
     except (OSError, ValueError):
         return False
+
+
+_headless.last = {}
+
+
+def _find_log(name: str) -> Optional[str]:
+    """Newest log for this agent name that carries a session id."""
+    import glob as _g
+    for p in sorted(_g.glob(os.path.join(HEADLESS_LOG_DIR, "*-%s*.log" % name)),
+                    reverse=True):
+        try:
+            head = open(p, errors="replace").read(2000)
+        except OSError:
+            continue
+        if "# session: " in head:
+            return p
+    return None
+
+
+def _head(path: str) -> Dict[str, str]:
+    out: Dict[str, str] = {}
+    try:
+        for ln in open(path, errors="replace").read(4000).splitlines()[:9]:
+            if ln.startswith("# ") and ":" in ln:
+                k, _, v = ln[2:].partition(":")
+                out[k.strip()] = v.strip()
+    except OSError:
+        pass
+    return out
+
+
+def continue_agent(name: str, message: str, popen=None) -> Dict[str, Any]:
+    """SendMessage for the swarm: resume the agent's own session with a new
+    message. The id was in every log since 2026-08-30 and read by nothing.
+
+    Runs in the agent's worktree if it still exists (it is kept until the
+    branch is pushed and no continue is pending), else in its cwd.
+    """
+    popen = popen or subprocess.Popen
+    old = _find_log(name)
+    if not old:
+        return {"started": False, "why": "no log with a session id for %s" % name}
+    h = _head(old)
+    sid = h.get("session", "")
+    if not sid:
+        return {"started": False, "why": "log has no session id: %s" % old}
+    wt = h.get("worktree", "")
+    run_cwd = wt if wt and os.path.isdir(wt) else h.get("cwd", "")
+    if not os.path.isdir(run_cwd):
+        run_cwd = os.path.expanduser("~")
+    stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
+    log = os.path.join(HEADLESS_LOG_DIR, "%s-%s.log" % (stamp, name[:40]))
+    argv = ["claude", "-p", message, "--resume", sid,
+            "--output-format", "json", "--permission-mode", "dontAsk"]
+    argv += role_argv(kind_of(name))
+    try:
+        os.makedirs(HEADLESS_LOG_DIR, exist_ok=True)
+        with open(log, "w") as fh:
+            _write_header(fh, name, h.get("cwd", run_cwd), h.get("model", ""),
+                          "", "", sid, run_cwd, h.get("branch", ""),
+                          continues=os.path.basename(old))
+            popen(_wrap_awake(argv), cwd=run_cwd, stdout=fh,
+                  stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                  start_new_session=True)
+    except (OSError, ValueError) as e:
+        return {"started": False, "why": str(e)[:120]}
+    return {"started": True, "session": sid, "log": log, "cwd": run_cwd,
+            "continues": os.path.basename(old)}
 
 
 def _call_headless(fn, cwd, prompt, name, model, effort, budget_usd=0.0):
@@ -604,9 +814,21 @@ def run(n: Optional[int] = None, repair_only: bool = False,
         meditation_dir: str = MEDITATION_DIR, store_dir: str = STORE_DIR,
         goals_dir: Optional[str] = None, history_path: Optional[str] = None,
         ledger_path: Optional[str] = None,
-        launcher: Optional[Callable[[str, str, str], bool]] = None) -> Dict[str, Any]:
+        launcher: Optional[Callable[[str, str, str], bool]] = None,
+        unattended: bool = False) -> Dict[str, Any]:
     import drive as dv
     import goals as gl
+
+    # Fold finished agents into the spend ledger BEFORE choosing. reconcile()
+    # was reachable from one place — the dashboard's /api/spend — so 8
+    # finished runs sat unrecorded and pick() never saw them. This is the
+    # site both the heartbeat (--auto) and a manual go pass through.
+    folded = {}
+    try:
+        import models as _md
+        folded = _md.reconcile()
+    except Exception as e:
+        folded = {"error": str(e)[:80]}
 
     lp = ledger_path or dv.LEDGER_PATH
     cands = dv.dispatchable(goals_dir, lp, history_path)
@@ -632,6 +854,7 @@ def run(n: Optional[int] = None, repair_only: bool = False,
     would += ["thread: %s" % th["title"] for th in _threads]
 
     result: Dict[str, Any] = {"would": would, "repair_launched": False,
+                              "reconciled": folded.get("added", 0),
                               "goals_launched": 0, "sent": [], "errors": [],
                               "cooling": getattr(dv.dispatchable, "cooling", 0)}
     if blocked:
@@ -705,7 +928,21 @@ def run(n: Optional[int] = None, repair_only: bool = False,
                     {"goal": g["name"], "why": "nothing open to work on"})
                 continue
             here = os.path.realpath(k["cwd"])
-            if here in taken:
+            isolable = _repo_top(k["cwd"]) is not None
+            # Unattended, a goal whose cwd is not a repo cannot be isolated,
+            # and the checkouts under it belong to whoever is typing in them
+            # right now (measured: 55 and 34 uncommitted lines the day this
+            # landed). The owner's rule is STOP, so it stops — and says how
+            # to fix it instead of silently launching nothing.
+            if unattended and not isolable:
+                result.setdefault("skipped", []).append(
+                    {"goal": g["name"], "cwd": k["cwd"],
+                     "why": "cannot isolate: cwd is not a git repo — set cwd "
+                            "to the repo in the goal file"})
+                continue
+            # One agent per checkout ONLY when there is no worktree to give
+            # it: with worktrees, two goals in one repo each get their own.
+            if here in taken and not isolable:
                 result.setdefault("deferred", []).append(
                     {"goal": g["name"], "waiting_on": taken[here],
                      "cwd": k["cwd"],
@@ -820,7 +1057,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--list", action="store_true",
                     help="with --repair-only: numbered repair items")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--continue", dest="cont", nargs=2, metavar=("NAME", "MESSAGE"),
+                    help="resume a finished or stopped agent with a new message")
     args = ap.parse_args(argv)
+
+    if args.cont:
+        r = continue_agent(args.cont[0], args.cont[1])
+        if args.json:
+            print(json.dumps(r))
+        elif r.get("started"):
+            print("continuing %s in %s — log %s" % (args.cont[0], r["cwd"], r["log"]))
+        else:
+            print("could not continue: %s" % r.get("why"))
+        return 0 if r.get("started") else 1
 
     if args.auto:
         # The heartbeat's entry point. Everything unattended in this tool was
@@ -846,7 +1095,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         if not gate["run"]:
             print("holding — %s" % gate["why"])
             return 0
-        res = run(n=gate["budget"])
+        res = run(n=gate["budget"], unattended=True)
         launched = (res.get("goals_launched", 0) + res.get("threads_launched", 0)
                     + (1 if res.get("repair_launched") else 0))
         print("dispatched %d (%s)" % (launched, gate["why"]))

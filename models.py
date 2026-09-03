@@ -140,10 +140,27 @@ def scan(limit: Optional[int] = 40) -> Dict[str, Any]:
                 elif d.get("type") == "user":
                     c = msg.get("content")
                     if isinstance(c, list):
+                        human_text = False
                         for p in c:
                             if isinstance(p, dict) and p.get("type") == "tool_result" \
                                     and p.get("is_error") and driver:
                                 slot(driver)["tool_errors"] += 1
+                            if isinstance(p, dict) and p.get("type") == "text" \
+                                    and (p.get("text") or "").strip():
+                                human_text = True
+                        # `[Request interrupted by user]` arrives HERE — a
+                        # list of blocks, not a string — and only the string
+                        # branch below ever checked `interrupted`. 66 of the
+                        # transcripts carried the marker; the count read 0 of
+                        # 15,185 turns. A list-shaped human message also closes
+                        # bursts, the same as a string one.
+                        if human_text:
+                            if interrupted and driver:
+                                slot(driver)["interrupted"] += 1
+                            for mm, n in streak.items():
+                                if n:
+                                    slot(mm)["bursts"].append(n)
+                            streak = {}
                     elif isinstance(c, str) and c.strip():
                         # a real human message closes every open burst
                         if interrupted and driver:
@@ -312,6 +329,15 @@ _DEFAULTS = {
 }
 
 
+def shipped(row: Dict[str, Any]) -> bool:
+    """Did this run leave something the world can see? Verified commits or
+    a ticked milestone. Exit status and cost are not outcomes."""
+    if row.get("verified_commits"):
+        return True
+    prod = row.get("produced") or {}
+    return bool(isinstance(prod, dict) and prod.get("milestone_ticked"))
+
+
 def evidence_for(kind: str, limit: int = 40) -> Dict[str, Any]:
     """What the record can say about THIS task kind. Usually: nothing yet.
 
@@ -328,8 +354,13 @@ def evidence_for(kind: str, limit: int = 40) -> Dict[str, Any]:
     # times (0%)". A rate computed over a field nobody sets is not evidence,
     # it is an empty column with a percentage sign on it.
     #
-    # spend.jsonl is written by reconcile() from an agent's own result line,
-    # so `ok` there means the run really finished. That is an outcome.
+    # spend.jsonl is written by reconcile() from an agent's own result line.
+    #
+    # `ok ∧ cost>0` was the outcome for a while, and it was 8 of 8 — 100% by
+    # construction, so it could not tell a run that shipped from the $1.41,
+    # two-turn run that left no commit. SHIPPED means: a commit the agent
+    # claimed in its RESULT that `git cat-file -e` confirmed, or a milestone
+    # it ticked. The claim alone is not enough; the check is.
     rows = 0
     seen: Dict[str, Dict[str, int]] = {}
     for r in spend()["rows"]:
@@ -339,7 +370,7 @@ def evidence_for(kind: str, limit: int = 40) -> Dict[str, Any]:
         rows += 1
         s = seen.setdefault(m, {"dispatched": 0, "produced": 0})
         s["dispatched"] += 1
-        if r.get("ok") and (r.get("cost_usd") or 0) > 0:
+        if shipped(r):
             s["produced"] += 1
     return {"kind": kind, "rows": rows, "by_model": seen,
             "enough": rows >= 6}
@@ -399,6 +430,47 @@ def _result_line(text: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+def _settle_worktree(head: Dict[str, str], log_dir: str, key: str) -> str:
+    """Remove the agent's worktree once its branch is pushed and nothing is
+    continuing the session; otherwise keep it and say why.
+
+    Removal happens HERE, not in go.py: dispatch is fire-and-forget, so the
+    only code that ever sees a finished run is this reconcile. A detached
+    worktree removed on exit would have stranded the commits of every run
+    that stopped early — budget cap, denied push, blocked — and broken
+    `--continue`, whose cwd would be gone.
+    """
+    wt, branch, cwd = head.get("worktree", ""), head.get("branch", ""), head.get("cwd", "")
+    if not wt or not branch:
+        return "none"
+    if not os.path.isdir(wt):
+        return "gone"
+    import glob as _g
+    import subprocess as _sp
+    try:
+        for p in _g.glob(os.path.join(log_dir, "*.log")):
+            if os.path.basename(p) == key:
+                continue
+            try:
+                h = open(p, errors="replace").read(1500)
+            except OSError:
+                continue
+            if "# continues: " + key in h and '"total_cost_usd"' not in \
+                    open(p, errors="replace").read():
+                return "kept: continue pending"
+        up = _sp.run(["git", "-C", wt, "rev-list", "--count", "@{u}..HEAD"],
+                     capture_output=True, text=True, timeout=10)
+        if up.returncode != 0:
+            return "kept: unpushed (no upstream)"
+        if up.stdout.strip() != "0":
+            return "kept: unpushed (%s ahead)" % up.stdout.strip()
+        r = _sp.run(["git", "-C", cwd or wt, "worktree", "remove", wt],
+                    capture_output=True, text=True, timeout=30)
+        return "removed" if r.returncode == 0 else "kept: " + (r.stderr.strip()[:60] or "remove failed")
+    except (OSError, _sp.TimeoutExpired) as e:
+        return "kept: " + str(e)[:60]
+
+
 def reconcile(log_dir: Optional[str] = None,
               ledger: Optional[str] = None) -> Dict[str, Any]:
     """Read finished agent logs and record what each one really cost.
@@ -436,11 +508,38 @@ def reconcile(log_dir: Optional[str] = None,
             pending += 1          # still running, or died before reporting
             continue
         head = {}
-        for ln in text.splitlines()[:4]:
+        for ln in text.splitlines()[:9]:
             if ln.startswith("# model:"):
                 bits = ln[8:].split("effort:")
                 head["model"] = bits[0].strip()
                 head["effort"] = bits[1].strip() if len(bits) > 1 else ""
+            elif ln.startswith("# ") and ":" in ln:
+                k, _, v = ln[2:].partition(":")
+                head[k.strip()] = v.strip()
+        # THE OUTCOME. `--json-schema` output lands in `structured_output`
+        # (proven live 2026-09-03). Absent means absent — None, never a
+        # verdict; an older run or a budget-cut run has no RESULT.
+        produced = res.get("structured_output")
+        if not isinstance(produced, dict):
+            produced = None
+        # The agent's commits are a CLAIM. Check each against the repo it
+        # ran in; keep the claim beside the verified list so the ledger shows
+        # both what it said and what was true.
+        where = head.get("worktree") or head.get("cwd") or ""
+        verified: List[str] = []
+        for sha in (produced or {}).get("commits") or []:
+            if not isinstance(sha, str) or not sha.strip() or not where:
+                continue
+            try:
+                import subprocess as _sp
+                ok_sha = _sp.run(["git", "-C", where, "cat-file", "-e",
+                                  sha.strip() + "^{commit}"],
+                                 capture_output=True, timeout=10).returncode == 0
+            except (OSError, _sp.TimeoutExpired):
+                ok_sha = False
+            if ok_sha:
+                verified.append(sha.strip())
+        wt_state = _settle_worktree(head, log_dir, key)
         # modelUsage, NOT usage.
         #
         # `usage` is the LAST TURN only; `modelUsage` is the whole session,
@@ -472,7 +571,15 @@ def reconcile(log_dir: Optional[str] = None,
                "cache_creation": v.get("cacheCreationInputTokens",
                                        u.get("cache_creation_input_tokens")),
                "cache_read": v.get("cacheReadInputTokens",
-                                   u.get("cache_read_input_tokens"))}
+                                   u.get("cache_read_input_tokens")),
+               "subtype": res.get("subtype"),
+               "denials": len(res.get("permission_denials") or []),
+               "session": head.get("session", ""),
+               "worktree": head.get("worktree", ""),
+               "branch": head.get("branch", ""),
+               "produced": produced,
+               "verified_commits": verified,
+               "worktree_state": wt_state}
         added.append(row)
 
     if added:

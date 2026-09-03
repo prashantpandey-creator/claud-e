@@ -427,10 +427,15 @@ def test_outcomes_come_from_a_field_something_actually_WRITES():
 
 
 def test_a_real_producer_DOES_win_on_evidence():
-    """FALSIFIER for the zero guard: it must not mute a genuine result."""
+    """FALSIFIER for the zero guard: it must not mute a genuine result.
+
+    "Genuine" changed on 2026-09-03: a producer is a run whose claimed
+    commit `git cat-file -e` confirmed, or that ticked a milestone — not a
+    run that exited 0 and cost money, which was 8 of 8 by construction."""
     real = models.spend
     models.spend = lambda ledger=None: {"rows": [
-        {"name": "goal-y", "model": "sonnet", "ok": True, "cost_usd": 0.5}
+        {"name": "goal-y", "model": "sonnet", "ok": True, "cost_usd": 0.5,
+         "verified_commits": ["abc1234"], "produced": {"milestone_ticked": None}}
         for _ in range(6)], "runs": 6, "total_usd": 3.0, "per_model": []}
     try:
         p = models.pick("goal")
@@ -438,6 +443,23 @@ def test_a_real_producer_DOES_win_on_evidence():
         models.spend = real
     assert p["basis"] == "evidence" and p["model"] == "sonnet", p
     assert "6 of 6" in p["why"], p["why"]
+
+
+def test_exited_zero_and_paid_is_NOT_a_producer():
+    """The old signal. Six runs that finished cleanly and shipped nothing
+    must fall through to default, with the count said out loud."""
+    real = models.spend
+    models.spend = lambda ledger=None: {"rows": [
+        {"name": "goal-y", "model": "sonnet", "ok": True, "cost_usd": 0.5,
+         "verified_commits": [], "produced": {"milestone_ticked": None,
+                                              "commits": ["claimed-but-unverified"]}}
+        for _ in range(6)], "runs": 6, "total_usd": 3.0, "per_model": []}
+    try:
+        p = models.pick("goal")
+    finally:
+        models.spend = real
+    assert p["basis"] == "default", p
+    assert "6 recorded goal runs" in p["why"], p["why"]
 
 
 

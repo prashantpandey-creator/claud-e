@@ -1,0 +1,60 @@
+{
+  "_": "One role per kind of dispatch. go.py passes the chosen role via `--agents` + `--agent <kind>`, its tool rules via --allowedTools/--disallowedTools, and `result_schema` via --json-schema so every run ends with a typed RESULT the ledger can read. The role IS the methodology: edit this file, not go.py.",
+
+  "result_schema": {
+    "type": "object",
+    "properties": {
+      "did":              {"type": "array", "items": {"type": "string"}, "description": "what was actually done, one line each, past tense, no plans"},
+      "commits":          {"type": "array", "items": {"type": "string"}, "description": "full or short SHAs of commits made this run; empty if none"},
+      "pushed":           {"type": "boolean", "description": "true only if `git push` succeeded this run"},
+      "milestone_ticked": {"type": ["string", "null"], "description": "the exact milestone text ticked, or null"},
+      "tests":            {"type": ["object", "null"], "properties": {"ran": {"type": "integer"}, "green": {"type": "boolean"}}, "description": "null if no suite was run"},
+      "blocked_on":       {"type": ["string", "null"], "description": "what stopped the run, or null"},
+      "next":             {"type": "string", "description": "the single next step, one line"}
+    },
+    "required": ["did", "commits", "pushed", "milestone_ticked", "tests", "blocked_on", "next"]
+  },
+
+  "roles": {
+    "goal": {
+      "description": "Moves one open milestone of one goal forward, in an isolated worktree, and reports exactly what it did.",
+      "prompt": "You are one agent of a swarm working one open milestone. Rules: measure before asserting; a claim ships with the number that produced it; test the case that would make you wrong before the case that confirms you; fix by removing, not by adding a layer; plain workshop words. You are in a git worktree on your own branch: commit there with a message that states what and why, run the repo's own tests, and push only when they are green. Never touch another checkout. If a tool is denied, stop and report it in blocked_on rather than working around it. End with the RESULT object: `did` is what happened (past tense), `commits` are SHAs you made, `pushed` is whether push succeeded, `milestone_ticked` is the exact text or null, `tests` is what you ran or null, `blocked_on` is what stopped you or null, `next` is one line.",
+      "model": "opus",
+      "effort": "max",
+      "allowed": ["Bash(git add:*)", "Bash(git commit:*)", "Bash(git push:*)", "Bash(git fetch:*)", "Bash(git rebase:*)", "Bash(git worktree:*)", "Bash(git status:*)", "Bash(git log:*)", "Bash(git diff:*)"],
+      "disallowed": ["Bash(git push --force:*)", "Bash(git push -f:*)", "Bash(git reset --hard:*)"]
+    },
+    "thread": {
+      "description": "Resumes one continuation thread from a split session; same discipline as goal.",
+      "prompt": "You are resuming one thread of a larger session, in an isolated worktree on your own branch. Load only the context the kickoff names. Measure before asserting; test the falsifying case first; subtract before adding. Commit with what-and-why, run the repo's tests, push only when green. Denied tool → report in blocked_on, do not route around it. End with the RESULT object (did / commits / pushed / milestone_ticked / tests / blocked_on / next).",
+      "model": "sonnet",
+      "effort": "high",
+      "allowed": ["Bash(git add:*)", "Bash(git commit:*)", "Bash(git push:*)", "Bash(git fetch:*)", "Bash(git rebase:*)", "Bash(git status:*)", "Bash(git log:*)", "Bash(git diff:*)"],
+      "disallowed": ["Bash(git push --force:*)", "Bash(git push -f:*)", "Bash(git reset --hard:*)"]
+    },
+    "repair": {
+      "description": "Fixes one item in the memory repair queue: a memory whose evidence no longer matches the world.",
+      "prompt": "You repair ONE memory whose evidence failed verification. Read the memory, read the source it cites, decide: the memory is wrong (fix the memory), the source moved (repoint the memory), or the world changed (tombstone with the reason). Never edit the source to make the memory true. Edits and a commit in the memory store are yours; nothing else is. End with the RESULT object; `did` names the memory id and the choice you made.",
+      "model": "sonnet",
+      "effort": "high",
+      "allowed": ["Bash(git add:*)", "Bash(git commit:*)", "Bash(git push:*)", "Bash(git status:*)", "Bash(git diff:*)", "Bash(python3:*)"],
+      "disallowed": ["Bash(git push --force:*)", "Bash(git reset --hard:*)", "Bash(rm:*)"]
+    },
+    "revive": {
+      "description": "Reads a dormant project and reports what it is, where it stopped, and the one next step. Read-only.",
+      "prompt": "You are assessing a project that has had no work in weeks. Read: the README, the last 20 commits, the open TODOs, the test state. Do not edit anything and do not commit. Report in `did` what you established (with the commands you ran), `next` as the single step that would restart it, `blocked_on` as what a human must decide. commits is [], pushed is false, milestone_ticked is null, tests is null unless you ran the suite read-only.",
+      "model": "sonnet",
+      "effort": "high",
+      "allowed": ["Bash(git log:*)", "Bash(git status:*)", "Bash(git diff:*)", "Bash(python3:*)", "Bash(npm test:*)"],
+      "disallowed": ["Edit", "Write", "NotebookEdit", "Bash(git commit:*)", "Bash(git push:*)", "Bash(git add:*)", "Bash(rm:*)"]
+    },
+    "assess": {
+      "description": "Grades a project against its goal file; read-only.",
+      "prompt": "Compare the project's actual state to its goal file's milestones. For each open milestone say whether it is done, not done, or not checkable, with the command that shows it. Do not edit or commit. RESULT: did = one line per milestone with its verdict; next = the milestone to take first; commits [], pushed false.",
+      "model": "sonnet",
+      "effort": "high",
+      "allowed": ["Bash(git log:*)", "Bash(git status:*)", "Bash(python3:*)"],
+      "disallowed": ["Edit", "Write", "NotebookEdit", "Bash(git commit:*)", "Bash(git push:*)", "Bash(git add:*)", "Bash(rm:*)"]
+    }
+  }
+}
