@@ -239,6 +239,25 @@ def test_live_sessions_separate_working_from_merely_recent():
             assert s["_age_s"] <= WORKING_S, s
 
 
+def test_projects_view_carries_what_a_TILE_needs_and_marks_dormant():
+    """The visual of every project and where it stands. rollup() is 9.5 s
+    over 92 projects, so the view is cached; the test injects the rollup."""
+    import brain
+    rows = [{"project": "shop", "sessions": 12, "last_touched_days": 0.4, "goals": 1,
+             "milestones_done": 2, "milestones_total": 5, "pct": 40.0, "commits_recent": 7,
+             "facts": 9, "open_tasks": [{"goal": "g", "task": "webhook verified", "pct": 40.0}]},
+            {"project": "old-thing", "sessions": 1, "last_touched_days": 61.0, "goals": 0,
+             "milestones_done": 0, "milestones_total": 0, "pct": None, "commits_recent": 0,
+             "facts": 0, "open_tasks": []}]
+    d = brain._projects_cached(rollup_fn=lambda: rows)
+    assert [p["project"] for p in d["projects"]] == ["shop", "old-thing"], d
+    t = d["projects"][0]
+    for k in ("touched_days", "goals", "done", "total", "commits_30d", "open", "dormant", "sessions"):
+        assert k in t, k
+    assert t["open"] == ["webhook verified"]
+    assert d["basis"].startswith("2 projects")
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

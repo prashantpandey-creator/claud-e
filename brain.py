@@ -492,6 +492,44 @@ def _code_stamp() -> float:
 _BOOT_STAMP = _code_stamp()
 
 
+_PROJECTS_CACHE: Dict[str, Any] = {"at": 0.0, "data": None}
+
+
+def _projects_cached(ttl_s: float = 300.0, rollup_fn=None) -> Dict[str, Any]:
+    """Every project and where it stands. rollup() walks 92 projects across
+    sessions, goals, facts and git in ~9.5 s, so it is cached; the data only
+    moves when somebody works. What each tile needs and nothing more."""
+    if rollup_fn is None and time.time() - _PROJECTS_CACHE["at"] < ttl_s and _PROJECTS_CACHE["data"]:
+        return _PROJECTS_CACHE["data"]
+    try:
+        import projects as _pj
+        rows = (rollup_fn or _pj.rollup)()
+        try:
+            dormant = {d.get("project") for d in (_pj.assessment_gaps().get("dormant") or [])
+                       if isinstance(d, dict)}
+        except Exception:
+            dormant = set()
+        out = []
+        for r in rows:
+            age = r.get("last_touched_days")
+            out.append({"project": r.get("project", ""), "sessions": r.get("sessions", 0),
+                        "touched_days": age, "goals": r.get("goals", 0),
+                        "done": r.get("milestones_done", 0), "total": r.get("milestones_total", 0),
+                        "pct": r.get("pct"), "commits_30d": r.get("commits_recent", 0),
+                        "facts": r.get("facts", 0),
+                        "open": [t.get("task", "")[:90] for t in (r.get("open_tasks") or [])[:2]],
+                        "dormant": r.get("project") in dormant})
+        out.sort(key=lambda x: (x["touched_days"] if x["touched_days"] is not None else 9e9,
+                                -x["sessions"]))
+        d = {"projects": out, "dormant": sorted(dormant), "at": time.time(),
+             "basis": "%d projects from sessions, goals, facts and git; dormant = mine, no work in weeks" % len(out)}
+    except Exception as e:
+        d = {"projects": [], "dormant": [], "at": time.time(), "error": str(e)[:160]}
+    if rollup_fn is None:
+        _PROJECTS_CACHE.update({"at": time.time(), "data": d})
+    return d
+
+
 def _fleet_running(ttl_s: float = 8.0) -> int:
     """How many dispatched agents are still open. Cached — it asks Terminal,
     and /api/state is polled by both the page and the mascot."""
@@ -1660,6 +1698,9 @@ class _Handler(BaseHTTPRequestHandler):
                 ctype = "application/json"
             elif self.path == "/api/swarm":
                 body = json.dumps(_swarm_cached()).encode()
+                ctype = "application/json"
+            elif self.path == "/api/projects":
+                body = json.dumps(_projects_cached()).encode()
                 ctype = "application/json"
             elif self.path == "/api/agents":
                 # Every dispatched agent still running, read from its own

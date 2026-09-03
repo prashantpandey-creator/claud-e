@@ -49,6 +49,13 @@ button:active{transform:scale(.97)}
 button.go{border-color:var(--gold);background:rgba(227,177,64,.12);padding:6px 16px;font-size:13px}
 #say{color:var(--gold);font-size:13px;min-height:20px;margin:8px 0 0}
 .feed{font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--faint);max-height:92px;overflow:hidden}
+.tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px}
+.tile{border:1px solid var(--line);border-radius:8px;padding:8px 10px;min-width:0;background:#070604}
+.tile .nm{color:var(--fg);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tile .mt{color:var(--faint);font-size:11px;margin-top:2px;font-variant-numeric:tabular-nums}
+.tile .bar{height:3px;background:#1a1712;border-radius:2px;margin-top:6px;overflow:hidden}
+.tile .bar>div{height:100%;background:var(--gold);opacity:.7}
+.tile .op{color:var(--dim);font-size:11px;margin-top:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .axis text{fill:#57524a;font-size:10px}
 .axis path,.axis line{stroke:#241f18}
 </style>
@@ -107,6 +114,20 @@ void main(){
     <div class="sec" id="sec-all"><h3 title="every open milestone of every goal, elaborated into steps, with who runs each and what it costs at most"><span><svg viewBox="0 0 18 18" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2v4 M9 12v4 M3 9h4 M11 9h4 M9 6a3 3 0 1 0 0 6 3 3 0 0 0 0-6z M4 4l2 2 M12 12l2 2 M14 4l-2 2 M6 12l-2 2"/></svg>ALL GOALS</span><span id="all-n"></span></h3>
       <div class="body"><div id="all">reading the campaign…</div></div></div>
     <div class="grid2" id="now-grid"></div>
+  </div>
+
+  <div class="zone" id="zone-projects"><div class="zone-h">PROJECTS — where everything stands</div>
+    <div class="sec"><h3 title="every project the tool knows from sessions, goals, facts and git — sorted by last touched"><span><svg viewBox="0 0 18 18" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3h5v5H3z M10 3h5v5h-5z M3 10h5v5H3z M10 10h5v5h-5z"/></svg>PROJECTS</span><span id="projects-n"></span></h3>
+      <div class="body">
+        <div class="row" style="gap:6px;margin-bottom:8px;font-size:11px">
+          <button class="pf" data-f="all" style="color:var(--gold)">all</button>
+          <button class="pf" data-f="goal">with a goal</button>
+          <button class="pf" data-f="active">touched this week</button>
+          <button class="pf" data-f="dormant">dormant</button>
+        </div>
+        <div id="projects" class="tiles">reading the projects…</div>
+        <div class="basis" id="projects-basis"></div>
+      </div></div>
   </div>
 
   <div class="zone" id="zone-do"><div class="zone-h">DO</div>
@@ -766,6 +787,35 @@ function renderCampaign(d){
   box.innerHTML = hands + strip + `<div style="margin-bottom:8px">${ctl}</div>` + rows + doneRow + proposed + notes;
 }
 
+let PROJ = null, PROJ_FILTER = "all";
+function renderProjects(d){
+  PROJ = d;
+  const box = document.getElementById("projects"), n = document.getElementById("projects-n"),
+        basis = document.getElementById("projects-basis");
+  if(!box) return;
+  const all = d.projects || [];
+  const rows = all.filter(p =>
+    PROJ_FILTER === "goal" ? p.goals > 0 :
+    PROJ_FILTER === "active" ? (p.touched_days != null && p.touched_days <= 7) :
+    PROJ_FILTER === "dormant" ? p.dormant : true);
+  if(n) n.textContent = `${rows.length} of ${all.length}`;
+  if(basis) basis.textContent = d.basis || d.error || "";
+  if(!rows.length){ box.innerHTML = '<div style="color:var(--faint);font-size:12px">nothing under this filter</div>'; return; }
+  // colour by age: this week gold, this month dim, older faint. A number
+  // per tile, never a mood.
+  const ageCol = p => p.touched_days == null ? "var(--faint)" : p.touched_days <= 7 ? "var(--gold)" : p.touched_days <= 30 ? "var(--dim)" : "var(--faint)";
+  const ageTxt = p => p.touched_days == null ? "never touched" : p.touched_days < 1 ? "today" : `${Math.round(p.touched_days)}d ago`;
+  box.innerHTML = rows.map(p => `<div class="tile" style="border-left:2px solid ${ageCol(p)}">
+      <div class="nm" title="${esc(p.project)}">${esc(p.project)}${p.dormant?' <span style="color:var(--faint);font-size:10px">dormant</span>':''}</div>
+      <div class="mt">${ageTxt(p)} · ${p.sessions} session${p.sessions===1?"":"s"} · ${p.commits_30d} commit${p.commits_30d===1?"":"s"}/30d${p.facts?` · ${p.facts} facts`:""}</div>
+      ${p.total ? `<div class="bar" title="${p.done} of ${p.total} milestones"><div style="width:${Math.round(100*p.done/p.total)}%"></div></div>
+        <div class="mt">${p.done}/${p.total} milestones${p.goals>1?` · ${p.goals} goals`:""}</div>` :
+        `<div class="mt" style="color:var(--faint)">no goal</div>`}
+      ${p.open && p.open.length ? `<div class="op" title="${esc(p.open[0])}">next: ${esc(p.open[0])}</div>` : ""}
+      ${p.dormant ? `<div style="margin-top:6px"><button data-act="revive" data-arg="${esc(p.project)}" title="an agent reads the repo and reports what it is, where it stopped, and the one next step — read-only">open it</button></div>` : ""}
+    </div>`).join("");
+}
+
 function fmtDur(s){ s=Math.max(0,s|0); return s<60? s+"s" : s<3600? Math.floor(s/60)+"m"+(s%60)+"s" : Math.floor(s/3600)+"h"+Math.floor((s%3600)/60)+"m"; }
 
 function renderAgents(d){
@@ -868,6 +918,8 @@ async function load(){
   fetch("/api/spend",{headers:H}).then(r=>r.json()).then(renderSpend)
     .catch(()=>{});
   fetch("/api/agents",{headers:H}).then(r=>r.json()).then(renderAgents).catch(()=>{});
+  fetch("/api/projects",{headers:H}).then(r=>r.json()).then(renderProjects)
+    .catch(()=>{ const b=document.getElementById("projects"); if(b) b.textContent = "couldn't read the projects"; });
   fetch("/api/campaign",{headers:H}).then(r=>r.json()).then(renderCampaign)
     .catch(()=>{ const b=document.getElementById("all"); if(b) b.textContent = "couldn't reach the campaign"; });
   fetch("/api/swarm",{headers:H}).then(r=>r.json())
@@ -881,6 +933,8 @@ document.addEventListener("click", e => {
   if(b){ act(b.dataset.act, b.dataset.arg, b); return; }
   const st = e.target.closest("button.j-still");
   if(st){ act(st.dataset.verb, st.dataset.arg, st); return; }
+  const pf = e.target.closest("button.pf");
+  if(pf){ PROJ_FILTER = pf.dataset.f; document.querySelectorAll("button.pf").forEach(b=>b.style.color = b===pf?"var(--gold)":""); if(PROJ) renderProjects(PROJ); return; }
   const hd = e.target.closest("button.hand-done");
   if(hd){
     const note = (document.querySelector(`input.hand-note[data-node="${hd.dataset.node}"]`)||{}).value || "";
