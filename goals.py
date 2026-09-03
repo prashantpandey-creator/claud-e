@@ -435,6 +435,201 @@ def kickoff(name: str, goals_dir: str = GOALS_DIR,
     return None
 
 
+# ---------------------------------------------------------------------------
+# mined goals: work no goal file carries
+# ---------------------------------------------------------------------------
+#
+# 2026-09-03: 49 sessions touched the Meta ads campaign, two memory files
+# recorded its state and its blockers, and the all-goals run could not see
+# any of it — it builds from goal files alone. A candidate is a `type:
+# project` memory whose words appear in no goal file, ranked by an open
+# marker in its description and by how many recent sessions touch it.
+# Accepting one writes a goal file. Deterministic, no model call.
+
+_STOP = {"the", "and", "for", "are", "was", "not", "but", "you", "all", "can",
+         "has", "had", "its", "our", "out", "new", "one", "two", "use", "via",
+         "per", "now", "see", "set", "get", "run", "did", "who", "how", "why",
+         "with", "from", "that", "this", "into", "live", "project", "memory",
+         "open", "next", "fixed", "done", "working", "shipped", "setup",
+         "system", "goal", "goals", "purangpt", "meditate", "claude", "session",
+         "sessions", "still", "have", "been", "were", "just", "only", "then",
+         "when", "what", "which", "also", "over", "under", "after", "before"}
+_OPEN_MARKERS = ("⚠", "⏳", "blocked", "waiting", "open:", "next:", "todo",
+                 "unbuilt", "dormant", "pending", "not yet", "needs ")
+# A memory whose description says the thing is over is a record, not work.
+# "BOX DEAD", "SUPERSEDED TWICE" and "torn down" all carried an open marker
+# and ranked above live threads the first time this ran.
+_CLOSED_MARKERS = ("dead", "superseded", "torn down", "reverted", "tombstone",
+                   "abandoned", "decommissioned", "retired", "archived")
+# Postmortems and gotchas are lessons, not goals.
+_NOT_A_GOAL = ("bug", "gotcha", "incident", "outage", "postmortem", "trap",
+               "blind-spot", "hijack")
+
+
+def _tokens(text: str) -> set:
+    # three-letter words count: "ads" is the word that names the Meta ads
+    # work, and a four-letter floor made 49 sessions invisible to it
+    return {w for w in re.findall(r"[a-z][a-z0-9]{2,}", (text or "").lower())
+            if w not in _STOP}
+
+
+def _read_memory(path: str) -> Optional[Dict[str, Any]]:
+    try:
+        raw = open(path, errors="replace").read()
+    except OSError:
+        return None
+    if not raw.startswith("---"):
+        return None
+    end = raw.find("\n---", 3)
+    if end < 0:
+        return None
+    fm, body = raw[3:end], raw[end + 4:]
+    name = desc = mtype = ""
+    for ln in fm.splitlines():
+        k, _, v = ln.partition(":")
+        k, v = k.strip(), v.strip().strip('"')
+        if k == "name":
+            name = v
+        elif k == "description":
+            desc = v
+        elif k == "type":
+            mtype = v
+    if not mtype and "type: project" in fm:
+        mtype = "project"
+    return {"name": name or os.path.basename(path)[:-3], "description": desc,
+            "type": mtype, "body": body, "path": path}
+
+
+def mine(memory_dir: Optional[str] = None, goals_dir: str = GOALS_DIR,
+         sessions: Optional[List[Dict[str, Any]]] = None,
+         now: Optional[str] = None, limit: int = 8) -> List[Dict[str, Any]]:
+    """Project memories that no goal file covers, with evidence."""
+    import glob as _g
+    if memory_dir is None:
+        # paths.py is the one file allowed to name a conventional location;
+        # a fallback literal here tripped the packaging gate the same hour
+        memory_dir = paths.memory_root()
+    # every word any goal already uses — name, title, project, milestones
+    covered: set = set()
+    for gp in _g.glob(os.path.join(goals_dir, "*.md")):
+        try:
+            covered |= _tokens(open(gp, errors="replace").read())
+        except OSError:
+            pass
+    # sessions in the last 30 days, by the words in their titles and intents
+    if sessions is None:
+        # the full session scan reads every transcript (~30 s over 360);
+        # callers that cannot afford it pass sessions=[] and lose only the
+        # "N sessions in 30 days" evidence, never a candidate
+        try:
+            import sessions as _s
+            r = _s.scan_all_projects()
+            # the JSON contract: {tool_name, success, data, ...}; rows under data
+            d = r.get("data") if isinstance(r, dict) else r
+            if isinstance(d, dict):
+                d = d.get("sessions") or d.get("rows") or []
+            sessions = [x for x in (d or []) if isinstance(x, dict)]
+        except Exception:
+            sessions = []
+    now_ts = now or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    cutoff = now_ts[:10]
+    try:
+        import datetime as _dt
+        cutoff = (_dt.datetime.strptime(now_ts[:10], "%Y-%m-%d") - _dt.timedelta(days=30)).strftime("%Y-%m-%d")
+    except ValueError:
+        pass
+    recent = []
+    for srow in sessions or []:
+        if (srow.get("ts_end") or "")[:10] >= cutoff:
+            words = _tokens(" ".join([str(srow.get("title") or "")]
+                                     + [str(u) for u in (srow.get("user_messages") or [])[:40]]))
+            recent.append((words, (srow.get("ts_end") or "")[:10]))
+    out: List[Dict[str, Any]] = []
+    # the memory root holds one directory per project slug (276 files under
+    # -Users-badenath-projects-vedic-puran on the day this was written);
+    # a flat dir is what the tests hand in. Read both shapes.
+    paths_ = sorted(_g.glob(os.path.join(memory_dir, "*.md"))
+                    + _g.glob(os.path.join(memory_dir, "*", "*.md")))
+    for mp in paths_:
+        if os.path.basename(mp) == "MEMORY.md":
+            continue
+        m = _read_memory(mp)
+        if not m or m["type"] != "project":
+            continue
+        name_words = _tokens(m["name"].replace("-", " "))
+        if not name_words:
+            continue
+        # covered = most of the memory's NAME words already live in a goal
+        hit = len(name_words & covered) / float(len(name_words))
+        if hit >= 0.5:
+            continue
+        if any(w in m["name"] for w in _NOT_A_GOAL):
+            continue
+        desc_l = m["description"].lower()
+        closed = any(mk in desc_l for mk in _CLOSED_MARKERS)
+        open_signal = (not closed) and any(mk in desc_l for mk in _OPEN_MARKERS)
+        touched = [d for words, d in recent if len(words & name_words) >= max(1, min(2, len(name_words)))]
+        cwd = ""
+        mm = re.search(r"(/Users/[^\s`'\")]+|~/[^\s`'\")]+)", m["body"])
+        if mm:
+            cwd = os.path.expanduser(mm.group(1).rstrip(".,;:"))
+        # milestones: the description's sentences that read as work
+        sugg = []
+        for sent in re.split(r"[.;—]\s+|\s—\s", m["description"]):
+            sent = sent.strip(" \"'✅⚠️⏳⭐")
+            if len(sent) > 12 and any(mk.strip(":") in sent.lower() for mk in _OPEN_MARKERS):
+                sugg.append(sent[:140])
+        if not sugg:
+            sugg = ["Define the milestones for this work (mined from memory, not yet scoped)"]
+        # with session evidence in hand, a closed or untouched memory is not
+        # a proposal — only when there is no evidence at all does open_signal
+        # carry it alone
+        if closed or (sessions and not touched and not open_signal):
+            continue
+        title = re.split(r"[.—]\s", m["description"].strip(" \"'"))[0].strip(" ✅⚠️⏳⭐")[:90] or m["name"]
+        out.append({"name": m["name"], "title": title, "cwd": cwd,
+                    "suggested_milestones": sugg[:5],
+                    "evidence": {"memory": mp, "sessions_30d": len(touched),
+                                 "last_active": max(touched) if touched else "",
+                                 "open_signal": open_signal,
+                                 "goal_word_overlap": round(hit, 2)}})
+    out.sort(key=lambda c: (-int(c["evidence"]["open_signal"]), -c["evidence"]["sessions_30d"],
+                            c["evidence"]["last_active"] and -int(c["evidence"]["last_active"].replace("-", "") or 0)))
+    return out[:limit]
+
+
+def accept_mined(cand: Dict[str, Any], goals_dir: str = GOALS_DIR) -> Dict[str, Any]:
+    """Write the goal file for a mined candidate. Never overwrites: a goal
+    file the owner has touched is his, and a second accept must not clobber
+    it."""
+    name = re.sub(r"[^a-z0-9-]+", "-", (cand.get("name") or "").lower()).strip("-")
+    if not name:
+        return {"ok": False, "why": "candidate has no name"}
+    path = os.path.join(goals_dir, name + ".md")
+    if os.path.exists(path):
+        return {"ok": False, "why": "goal file already exists: %s" % path, "path": path}
+    project = name.split("-")[0]
+    lines = ["---", "name: %s" % name, "title: %s" % (cand.get("title") or name),
+             "project: %s" % project,
+             "cwd: %s" % (cand.get("cwd") or os.path.expanduser("~")),
+             "status: active", "---", "## Milestones"]
+    for m in cand.get("suggested_milestones") or ["Define the milestones"]:
+        lines.append("- [ ] %s" % m)
+    ev = cand.get("evidence") or {}
+    lines += ["", "## Note",
+              "Mined on %s from memory %s — %d sessions touched this in the last 30 days"
+              " and no goal file carried it. Edit freely; the checkboxes are the measurement."
+              % (time.strftime("%Y-%m-%d"), os.path.basename(ev.get("memory", "?")),
+                 int(ev.get("sessions_30d") or 0))]
+    try:
+        os.makedirs(goals_dir, exist_ok=True)
+        with open(path, "w") as f:
+            f.write("\n".join(lines) + "\n")
+    except OSError as e:
+        return {"ok": False, "why": str(e)[:120]}
+    return {"ok": True, "path": path, "name": name}
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(prog="meditate goals", description="Long-term goals, measured")
     ap.add_argument("cmd", nargs="?", default="list",

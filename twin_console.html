@@ -723,8 +723,21 @@ function renderCampaign(d){
           </span><button data-act="accept-idea" data-arg="${esc(x.id)}" title="make it a step">accept</button>
         </div>`).join("");
   }).join("");
+  // PROPOSED GOALS — work the memories carry that no goal file does. Each
+  // one names its evidence; accept writes the goal file, re-plan brings it in.
+  const pg = (d.proposed_goals||[]);
+  const proposed = pg.length ? `<div style="margin:14px 0 4px;color:var(--fg);font-size:13px">Proposed goals
+      <span style="color:var(--faint);font-size:11px;margin-left:8px">from your memories — no goal file carries these</span></div>` +
+    pg.map(c => { const ev = c.evidence||{}; return `<div class="li" style="padding:3px 0 3px 8px;border-left:2px dotted var(--faint)">
+        <span class="txt" style="font-size:12.5px">
+          <span style="color:var(--dim);font-family:ui-monospace,monospace">?</span> ${esc(c.title)}
+          <div style="color:var(--faint);font-size:11px">${esc((ev.memory||"").split("/").pop())} · ${ev.sessions_30d||0} sessions in 30 days${
+            ev.last_active ? " · last " + esc(ev.last_active) : ""}${ev.open_signal ? " · open" : ""}${
+            (c.suggested_milestones||[]).length ? " · " + esc(c.suggested_milestones[0]).slice(0,110) : ""}</div>
+        </span><button data-act="accept-goal" data-arg="${esc(c.name)}" title="write the goal file; re-plan brings it in">accept goal</button>
+      </div>`; }).join("") : "";
   const notes = (d.notes||[]).map(t => `<div class="basis">note — ${esc(t)}</div>`).join("");
-  box.innerHTML = strip + `<div style="margin-bottom:8px">${ctl}</div>` + rows + notes;
+  box.innerHTML = strip + `<div style="margin-bottom:8px">${ctl}</div>` + rows + proposed + notes;
 }
 
 function renderSwarm(d){

@@ -1433,6 +1433,17 @@ class _Handler(BaseHTTPRequestHandler):
                     res = {"started": True, "output": "paused — " + r.get("why", "")}
                 except Exception as e:
                     res = {"started": False, "output": str(e)[:160]}
+            elif action == "accept-goal":
+                # A mined goal becomes a goal file; the next plan brings it in.
+                try:
+                    import campaign as _cp
+                    _log_brain_action("accept-goal", arg)
+                    r = _cp.accept_goal(arg)
+                    res = {"started": bool(r.get("ok")),
+                           "output": ("goal written: %s — re-plan to bring it in" % os.path.basename(r.get("path", "")))
+                           if r.get("ok") else r.get("why", "could not accept")}
+                except Exception as e:
+                    res = {"started": False, "output": str(e)[:160]}
             elif action == "accept-idea":
                 # An idea becomes a step only when the owner takes it.
                 try:

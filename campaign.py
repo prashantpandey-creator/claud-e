@@ -251,6 +251,11 @@ def build(goals_dir: Optional[str] = None, meditation_dir: str = MEDITATION_DIR,
                     notes.append("elaboration failed for %s / %s: %s"
                                  % (g["name"], text[:50], str(e)[:80]))
                     steps = []
+                if not steps and elaborator is elaborate_with_claude:
+                    # a planner that returns nothing is not a planner that
+                    # succeeded — say so, or the milestone reads as atomic
+                    notes.append("planner returned no steps for %s / %s — the milestone "
+                                 "stands as one step" % (g["name"], head[:50]))
             ids: Dict[str, str] = {}
             for s in steps:
                 ids[str(s["id"])] = mid + "." + str(s["id"])
@@ -285,6 +290,8 @@ def build(goals_dir: Optional[str] = None, meditation_dir: str = MEDITATION_DIR,
             except Exception as e:
                 notes.append("ideas failed for %s: %s" % (g["name"], str(e)[:80]))
                 ideas = []
+            if not ideas and ideator is ideate_with_claude:
+                notes.append("planner proposed no ideas for %s" % g["name"])
             for idea in ideas[:3]:
                 t_ = str(idea.get("title") or "").strip()
                 if not t_ or any(n["goal"] == g["name"] and n["title"].lower() == t_.lower() for n in nodes):
@@ -301,10 +308,21 @@ def build(goals_dir: Optional[str] = None, meditation_dir: str = MEDITATION_DIR,
                               "steers": [], "log": "", "session": "", "result": None,
                               "idea": True})
                 n_ideas += 1
+    # PROPOSED GOALS — work the memories carry that no goal file does. Not
+    # nodes; a list the owner accepts from, one goal file each.
+    proposed: List[Dict[str, Any]] = []
+    try:
+        # session evidence costs a full transcript scan; only the real plan
+        # pays it. Fakes and the fast plan still get every candidate.
+        real = elaborator is elaborate_with_claude
+        proposed = gl.mine(goals_dir=goals_dir or gl.GOALS_DIR,
+                           sessions=None if real else [])
+    except Exception as e:
+        notes.append("goal mining failed: %s" % str(e)[:80])
     est = round(sum(n["agent"]["budget_usd"] for n in nodes if n["status"] != "idea"), 2)
     return {"id": time.strftime("%Y%m%d-%H%M%S", time.gmtime()), "created": _now_iso(),
             "armed": False, "armed_at": "", "paused_why": "", "max_parallel": DEFAULT_PARALLEL,
-            "nodes": nodes, "notes": notes,
+            "nodes": nodes, "notes": notes, "proposed_goals": proposed,
             "totals": {"goals": n_goals, "nodes": len([n for n in nodes if n["status"] != "idea"]),
                        "ideas": n_ideas, "est_usd": est},
             "events": [{"ts": _now_iso(), "what": "planned", "nodes": len(nodes)}],
@@ -652,6 +670,27 @@ def accept(node_id: str, meditation_dir: str = MEDITATION_DIR) -> Dict[str, Any]
     return {"ok": True, "node": n["id"]}
 
 
+def accept_goal(name: str, meditation_dir: str = MEDITATION_DIR,
+                goals_dir: Optional[str] = None) -> Dict[str, Any]:
+    """The owner takes a mined goal: its file is written; the next plan
+    picks it up. The campaign records it so the proposal disappears."""
+    import goals as gl
+    g = load(meditation_dir)
+    if not g:
+        return {"ok": False, "why": "no campaign"}
+    cand = next((c for c in g.get("proposed_goals", []) if c["name"] == name), None)
+    if not cand:
+        return {"ok": False, "why": "no proposed goal %s" % name}
+    r = gl.accept_mined(cand, goals_dir=goals_dir or gl.GOALS_DIR)
+    if not r.get("ok"):
+        return r
+    g["proposed_goals"] = [c for c in g["proposed_goals"] if c["name"] != name]
+    g["events"].append({"ts": _now_iso(), "what": "goal accepted", "goal": name, "path": r["path"]})
+    g.setdefault("notes", []).append("goal %s written — re-plan to bring its milestones in" % name)
+    save(g, meditation_dir)
+    return {"ok": True, "path": r["path"], "name": name}
+
+
 def status(meditation_dir: str = MEDITATION_DIR) -> Dict[str, Any]:
     g = load(meditation_dir)
     if not g:
@@ -659,6 +698,7 @@ def status(meditation_dir: str = MEDITATION_DIR) -> Dict[str, Any]:
     return {"id": g["id"], "armed": g.get("armed", False), "paused_why": g.get("paused_why", ""),
             "created": g.get("created"), "armed_at": g.get("armed_at", ""),
             "metrics": _metrics(g, time.time()), "notes": g.get("notes", []),
+            "proposed_goals": g.get("proposed_goals", []),
             "nodes": [{k: n.get(k) for k in ("id", "goal", "goal_title", "title", "kind", "status",
                                               "depends_on", "agent", "blocked_on", "stuck",
                                               "result", "steers", "grown", "name", "log",
@@ -724,6 +764,19 @@ def render(g: Dict[str, Any]) -> str:
                 out.append("      done means: " + n["check"][:100])
             out.append("      not in the plan until you accept it — accept with: campaign accept %s" % n["id"])
         out.append("")
+    if g.get("proposed_goals"):
+        out.append("PROPOSED GOALS — work your memories carry that no goal file does")
+        for c in g["proposed_goals"]:
+            ev = c.get("evidence") or {}
+            out.append("  ? %s" % c["title"][:90])
+            out.append("      from %s · %d sessions in 30 days%s%s" % (
+                os.path.basename(ev.get("memory", "?")), int(ev.get("sessions_30d") or 0),
+                (" · last " + ev["last_active"]) if ev.get("last_active") else "",
+                " · open" if ev.get("open_signal") else ""))
+            for m_ in (c.get("suggested_milestones") or [])[:3]:
+                out.append("      - [ ] " + m_[:100])
+            out.append("      accept with: campaign accept-goal %s" % c["name"])
+        out.append("")
     for note in g.get("notes", []):
         out.append("note — " + note)
     if not g.get("armed"):
@@ -760,7 +813,7 @@ def render_status(s: Dict[str, Any]) -> str:
 
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(prog="meditate campaign", description=__doc__.split("\n")[0])
-    ap.add_argument("verb", choices=["plan", "show", "go", "tick", "status", "pause", "steer", "accept"])
+    ap.add_argument("verb", choices=["plan", "show", "go", "tick", "status", "pause", "steer", "accept", "accept-goal"])
     ap.add_argument("args", nargs="*")
     ap.add_argument("--max", type=int, default=None, help="agents at a time")
     ap.add_argument("--no-elaborate", action="store_true", help="milestones only, no planner calls")
@@ -805,6 +858,13 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 2
         r = accept(a.args[0])
         print(json.dumps(r) if a.json else ("accepted %s" % r["node"] if r.get("ok") else "could not accept: " + r.get("why", "")))
+        return 0 if r.get("ok") else 1
+    if a.verb == "accept-goal":
+        if not a.args:
+            print("usage: campaign accept-goal <name>")
+            return 2
+        r = accept_goal(a.args[0])
+        print(json.dumps(r) if a.json else ("written %s — re-plan to bring it in" % r["path"] if r.get("ok") else "could not accept: " + r.get("why", "")))
         return 0 if r.get("ok") else 1
     if a.verb == "steer":
         if len(a.args) < 2:
