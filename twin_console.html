@@ -103,6 +103,11 @@ void main(){
   <div class="sec collapsed"><h3 title="every agent reports its own bill"><span style="display:flex;align-items:center;gap:9px"><svg viewBox="0 0 18 18" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3v12 M12 5.5C12 4 10.7 3.4 9 3.4S6 4 6 5.5 7.3 8 9 8s3 .6 3 2.3-1.3 2.3-3 2.3-3-.7-3-2.2"/></svg>SPEND</span><span id="spend-n" style="color:var(--faint)"></span></h3>
     <div class="body"><div id="spend">reading the ledger…</div></div></div>
 
+  <!-- The all-goals run. Plan the whole graph, read it, say go once, watch
+       it, steer it. Open by default only while it is armed or blocked. -->
+  <div class="sec collapsed" id="sec-all"><h3 title="every open milestone of every goal, elaborated into steps, with who runs each and what it costs at most"><span style="display:flex;align-items:center;gap:9px"><svg viewBox="0 0 18 18" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2v4 M9 12v4 M3 9h4 M11 9h4 M9 6a3 3 0 1 0 0 6 3 3 0 0 0 0-6z M4 4l2 2 M12 12l2 2 M14 4l-2 2 M6 12l-2 2"/></svg>ALL GOALS</span><span id="all-n" style="color:var(--faint)"></span></h3>
+    <div class="body"><div id="all">reading the campaign…</div></div></div>
+
   <div class="sec collapsed"><h3 title="who would take what, and what it would cost"><span style="display:flex;align-items:center;gap:9px"><svg viewBox="0 0 18 18" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h12 M3 9h8 M3 14h5 M14 11l2 2-2 2"/></svg>PLAN</span><span id="plan-n" style="color:var(--faint)"></span></h3>
     <div class="body"><div id="swarm">reading the dispatcher…</div></div></div>
 
@@ -163,7 +168,7 @@ function stillRow(){
              cursor:pointer">${label}</button>`).join("");
 }
 
-async function act(action, arg, btn){
+async function act(action, arg, btn, value){
   // A click used to fire and say nothing until the answer landed — on a
   // dispatch that is several seconds of a page that looks broken. The button
   // holds its own state now: label -> "working…" -> the first line of what
@@ -175,7 +180,7 @@ async function act(action, arg, btn){
   let line = "";
   try{
     const r = await fetch("/api/act", {method:"POST", headers:{...H,"Content-Type":"application/json"},
-      body: JSON.stringify({action, arg: arg||"", value:""})});
+      body: JSON.stringify({action, arg: arg||"", value: value||""})});
     const d = await r.json();
     line = (d.output || d.speech || "done").split("\n")[0];
     if(d.started === false) line = "refused: " + line;
@@ -605,6 +610,71 @@ function fillTargets(){
   dl.innerHTML = [...opts].map(o => `<option value="${esc(o)}">`).join("");
 }
 
+const AG = {done:"✓", running:"▶", blocked:"■", failed:"✗", pending:"·"};
+const AC = {done:"var(--gold)", running:"#e8b63f", blocked:"#c0392b", failed:"#c0392b", pending:"var(--faint)"};
+
+function renderCampaign(d){
+  const box = document.getElementById("all"), n = document.getElementById("all-n"),
+        sec = document.getElementById("sec-all");
+  if(!box) return;
+  const m = d.metrics || {};
+  if(!d.id){
+    if(n) n.textContent = "not planned";
+    box.innerHTML = `<div style="color:var(--dim);font-size:13px;margin-bottom:10px">
+        Read every goal, break each open milestone into steps, say who runs each and
+        what it costs at most — then one go runs all of it.</div>
+      <button data-act="plan-all" data-arg="">plan every goal</button>
+      <button data-act="plan-all" data-arg="fast" title="from the goal files only — no planner calls, free">plan fast</button>`;
+    return;
+  }
+  const state = d.armed ? "RUNNING" : d.paused_why ? "PAUSED" : "planned — waiting for go";
+  if(n) n.textContent = `${m.done||0}/${m.nodes||0} · ${state}`;
+  if(sec && (d.armed || (m.blocked||0) > 0 || (m.stuck||0) > 0)) sec.classList.remove("collapsed");
+  // the numbers that decide: one strip, tabular
+  const strip = `<div style="display:flex;flex-wrap:wrap;gap:14px;font-size:12px;color:var(--dim);
+      font-variant-numeric:tabular-nums;margin-bottom:10px">
+      <span><b style="color:var(--gold);font-weight:500">${m.done||0}</b> of ${m.nodes||0} done</span>
+      <span>${m.running||0} running</span><span>${m.ready||0} ready</span>
+      <span style="color:${(m.blocked||0)?'#c0392b':'inherit'}">${m.blocked||0} blocked</span>
+      <span style="color:${(m.stuck||0)?'#c0392b':'inherit'}">${m.stuck||0} stuck</span>
+      <span><b style="color:var(--gold);font-weight:500">$${(m.spent_usd||0).toFixed(2)}</b> of up to $${(m.est_usd||0).toFixed(2)}${
+        m.burn_usd_per_h!=null ? ` · $${m.burn_usd_per_h.toFixed(2)}/h` : ""}</span>
+      <span>${m.pushed||0} pushed · ${m.verified_commits||0} commits verified</span>
+      <span>${m.grown||0} steps grown · ${m.steers||0} steers</span></div>`;
+  // controls: exactly the verbs that make sense in this state
+  const ctl = d.armed
+    ? `<button data-act="pause-all" data-arg="paused from the console">pause</button>`
+    : `<button data-act="go-all" data-arg="" style="border-color:var(--gold);background:rgba(227,177,64,.12)">GO — run every goal</button>
+       <button data-act="plan-all" data-arg="">re-plan</button>`;
+  // the graph, per goal, in order; a steer box on anything that can take one
+  const goals = [];
+  (d.nodes||[]).forEach(x => { if(!goals.includes(x.goal)) goals.push(x.goal); });
+  const rows = goals.map(gname => {
+    const ns = (d.nodes||[]).filter(x => x.goal === gname);
+    const pg = (m.per_goal||{})[gname] || {};
+    return `<div style="margin:10px 0 4px;color:var(--fg);font-size:13px">${esc(ns[0].goal_title)}
+        <span style="color:var(--faint);font-size:11px;margin-left:8px">${pg.done||0}/${pg.total||0}</span></div>` +
+      ns.map(x => {
+        const a = x.agent || {};
+        const can = ["running","blocked","failed","done"].includes(x.status);
+        const r = x.result || {};
+        return `<div class="li" style="padding:3px 0 3px 8px;border-left:2px solid ${AC[x.status]||'var(--line)'}">
+          <span class="txt" style="font-size:12.5px">
+            <span style="color:${AC[x.status]};font-family:ui-monospace,monospace">${AG[x.status]||"·"}</span>
+            ${esc(x.title)}${x.grown?'<span style="color:var(--faint);font-size:10px;margin-left:6px">grown</span>':''}
+            <div style="color:var(--faint);font-size:11px">${esc(a.model)} at ${esc(a.effort)} [${esc(a.basis)}] · cap $${(a.budget_usd||0).toFixed(2)} · ${esc(x.kind)}${
+              x.status==="blocked" ? ` · <span style="color:#c0392b">BLOCKED: ${esc(x.blocked_on||"")}</span>` : ""}${
+              x.stuck ? ` · <span style="color:#c0392b">STUCK</span>` : ""}${
+              r.did && r.did.length ? ` · did: ${esc(r.did.slice(0,2).join("; ")).slice(0,120)}` : ""}${
+              r.cost_usd!=null ? ` · $${r.cost_usd.toFixed(2)}` : ""}</div>
+          </span>${can ? `<input class="steer" data-node="${esc(x.id)}" placeholder="steer…" style="background:#0a0906;border:1px solid var(--line);border-radius:6px;color:var(--fg);padding:3px 8px;font:inherit;font-size:11.5px;width:180px">` : ""}
+        </div>`;
+      }).join("");
+  }).join("");
+  const notes = (d.notes||[]).map(t => `<div class="basis">note — ${esc(t)}</div>`).join("");
+  box.innerHTML = strip + `<div style="margin-bottom:8px">${ctl}</div>` + rows + notes;
+}
+
 function renderSwarm(d){
   LAST_PLAN = d;
   const box = document.getElementById("swarm");
@@ -658,6 +728,8 @@ async function load(){
   if(t.series){ LAST_SERIES = t.series; drawChart(t.series); }
   fetch("/api/spend",{headers:H}).then(r=>r.json()).then(renderSpend)
     .catch(()=>{});
+  fetch("/api/campaign",{headers:H}).then(r=>r.json()).then(renderCampaign)
+    .catch(()=>{ const b=document.getElementById("all"); if(b) b.textContent = "couldn't reach the campaign"; });
   fetch("/api/swarm",{headers:H}).then(r=>r.json())
     .then(d => { renderSwarm(d); fillTargets(); })
     .catch(()=>{ const b=document.getElementById("swarm");
@@ -673,6 +745,14 @@ document.addEventListener("click", e => {
   if(mo){ mo.textContent = mo.dataset.full; mo.classList.remove("more"); return; }
   const h = e.target.closest("h3[data-toggle]");
   if(h) h.parentElement.classList.toggle("collapsed");
+});
+
+document.addEventListener("keydown", e => {
+  const st = e.target.closest && e.target.closest("input.steer");
+  if(!st || e.key !== "Enter") return;
+  const msg = st.value.trim(); if(!msg) return;
+  act("steer", st.dataset.node, null, msg);
+  st.value = ""; st.placeholder = "sent";
 });
 
 const cmd = document.getElementById("cmd");

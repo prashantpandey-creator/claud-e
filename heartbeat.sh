@@ -48,6 +48,10 @@ STEPS=(
   "archive.py --apply"
   "dashboard.py"
   "go.py --auto"
+  # The all-goals run advances one step per pass: reads finished results,
+  # grows the graph by each RESULT.next, marks blocked / stuck, and sends
+  # the next ready wave — only while the owner has said go. Idle otherwise.
+  "campaign.py tick"
   "census.py ping"
   # Push the summary-only snapshot to the remote VIEW (a secret gist / your
   # own receiver). Inert unless remote-config.json exists; best-effort by

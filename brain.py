@@ -1393,6 +1393,61 @@ class _Handler(BaseHTTPRequestHandler):
                            if r["ok"] else r["why"]}
                 except Exception as e:
                     res = {"started": False, "output": str(e)[:160]}
+            elif action == "plan-all":
+                # Build the whole-graph plan. Elaboration calls a planner per
+                # open milestone (read-only, ~$0.35 each, minutes) so it runs
+                # detached; the page polls /api/campaign until a plan exists.
+                try:
+                    _log_brain_action("plan-all", arg)
+                    cmd = ["python3", os.path.join(SKILL_DIR, "campaign.py"), "plan"]
+                    if arg == "fast":
+                        cmd.append("--no-elaborate")
+                    subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
+                                     stderr=subprocess.DEVNULL, start_new_session=True)
+                    res = {"started": True,
+                           "output": "planning every goal — a read-only planner per "
+                                     "open milestone; the page fills in as it lands"
+                                     if arg != "fast" else
+                                     "planning from the goal files only — no planner calls"}
+                except Exception as e:
+                    res = {"started": False, "output": str(e)[:160]}
+            elif action == "go-all":
+                # THE go. Arms the campaign and sends the first ready wave.
+                try:
+                    import campaign as _cp
+                    _log_brain_action("go-all", arg)
+                    r = _cp.go(max_parallel=int(arg) if str(arg).isdigit() else None)
+                    m = r.get("metrics") or {}
+                    res = {"started": bool(r.get("armed")),
+                           "output": ("armed — sent %d now; %d ready, %d steps, up to $%.2f"
+                                      % (len(r.get("dispatched", [])), m.get("ready", 0),
+                                         m.get("nodes", 0), m.get("est_usd", 0)))
+                           if r.get("armed") else r.get("why", "not armed")}
+                except Exception as e:
+                    res = {"started": False, "output": str(e)[:160]}
+            elif action == "pause-all":
+                try:
+                    import campaign as _cp
+                    _log_brain_action("pause-all", arg)
+                    r = _cp.pause(why=arg or "paused from the console")
+                    res = {"started": True, "output": "paused — " + r.get("why", "")}
+                except Exception as e:
+                    res = {"started": False, "output": str(e)[:160]}
+            elif action == "steer":
+                # A correction mid-flight: arg = node id, value = the message.
+                try:
+                    import campaign as _cp
+                    msg = str(req.get("value") or "").strip()
+                    if not msg:
+                        res = {"started": False, "output": "say what to change"}
+                    else:
+                        _log_brain_action("steer", arg)
+                        r = _cp.steer(arg, msg)
+                        res = {"started": bool(r.get("ok")),
+                               "output": ("steering %s" % r.get("node")) if r.get("ok")
+                               else r.get("why", "could not steer")}
+                except Exception as e:
+                    res = {"started": False, "output": str(e)[:160]}
             elif action == "tick":
                 # Close the milestone you were just told about, from wherever
                 # you are. Being told about work you cannot act on is nagging.
@@ -1509,6 +1564,16 @@ class _Handler(BaseHTTPRequestHandler):
                 ctype = "application/json"
             elif self.path == "/api/swarm":
                 body = json.dumps(_swarm_cached()).encode()
+                ctype = "application/json"
+            elif self.path == "/api/campaign":
+                # The all-goals run: the graph, its numbers, and whether it
+                # is armed. Read every time — it changes every tick.
+                try:
+                    import campaign as _cp
+                    body = json.dumps(_cp.status()).encode()
+                except Exception as e:
+                    body = json.dumps({"id": "", "armed": False, "metrics": {},
+                                       "nodes": [], "why": str(e)[:160]}).encode()
                 ctype = "application/json"
             elif self.path == "/api/twin":
                 body = json.dumps(_twin_cached()).encode()

@@ -487,8 +487,12 @@ def test_dispatch_falls_back_to_HEADLESS_when_the_window_fails():
         calls.append(("headless", name))
         return True
 
+    # prefer_headless pinned: unpinned, this read the owner's idle clock and
+    # went red the moment he had been away 20 minutes (measured: idle 1426 s
+    # against the 1200 s gate) — a test about fallback order, failing on the
+    # time of day.
     ok = go.dispatch_one("/tmp", "do the thing", "probe",
-                         gui=gui_fails, headless=headless)
+                         gui=gui_fails, headless=headless, prefer_headless=False)
     assert ok is True, "fell back to nothing"
     assert [c[0] for c in calls] == ["gui", "headless"], calls
 
@@ -498,7 +502,8 @@ def test_headless_is_not_used_when_the_window_opens():
     calls = []
     ok = go.dispatch_one("/tmp", "p", "probe",
                          gui=lambda *a, **k: calls.append("gui") or True,
-                         headless=lambda *a, **k: calls.append("headless") or True)
+                         headless=lambda *a, **k: calls.append("headless") or True,
+                         prefer_headless=False)
     assert ok is True and calls == ["gui"], calls
 
 
