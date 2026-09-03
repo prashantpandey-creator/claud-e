@@ -168,48 +168,35 @@ def test_every_command_the_README_lists_is_one_the_CLI_HANDLES():
 
 
 def test_the_README_and_the_LICENSE_say_the_SAME_thing():
-    """A README that says MIT over a PolyForm LICENSE is not a typo, it is a
-    grant the author did not make. The licence changed on 2026-09-03 and the
-    README's own '## Licence' section is generated in release.py — two files,
-    one fact, and nothing was making them agree."""
+    """A README that names one licence over a LICENSE file holding another
+    is a grant the author did not make. The README's '## Licence' section is
+    generated in release.py — two files, one fact, and this makes them agree.
+
+    History: on 2026-09-03 this shipped as PolyForm Noncommercial for a few
+    hours on the reading that "sell it" meant lock the source. The owner's
+    intent for the public repo was advertising and sharing; MIT is that."""
     rep, dest = _staged()
     try:
         lic = open(os.path.join(dest, "LICENSE")).read()
         readme = open(os.path.join(dest, "README.md")).read()
-        name = lic.strip().splitlines()[0].lstrip("# ").strip()
-        assert "PolyForm" in name, name
-        assert name.replace(" 1.0.0", "") in readme, \
-            "README does not name the licence in LICENSE (%s)" % name
-        assert "MIT" not in readme.split("## Licence")[-1] or \
-               "before 2026-09-03" in readme, "README still offers MIT terms"
-        # the LICENSE points at COMMERCIAL.md by name; it has to be there
-        if "COMMERCIAL.md" in lic:
-            assert os.path.exists(os.path.join(dest, "COMMERCIAL.md")), \
-                "LICENSE references COMMERCIAL.md and the build omits it"
+        tail = readme.split("## Licence")[-1]
+        assert lic.strip().startswith("MIT License"), lic[:40]
+        assert "MIT" in tail, "README does not say MIT over an MIT LICENSE"
+        assert "PolyForm" not in readme and "COMMERCIAL" not in readme, \
+            "README still carries the noncommercial wording"
+        assert not os.path.exists(os.path.join(dest, "COMMERCIAL.md"))
     finally:
         shutil.rmtree(os.path.dirname(dest), ignore_errors=True)
 
 
-def test_the_LICENSE_is_the_REAL_polyform_text():
-    """Fetched verbatim from polyformproject.org, not written from memory. A
-    licence paraphrased by a language model is not a licence."""
+def test_the_LICENSE_is_the_REAL_mit_text():
+    """Not paraphrased. The two sentences that make MIT MIT."""
     rep, dest = _staged()
     try:
-        # normalise the wrap: the text is line-broken at 79 columns, so a
-        # phrase check against the raw file compares across a newline and
-        # reports the real licence as a paraphrase
         lic = " ".join(open(os.path.join(dest, "LICENSE")).read().split())
-        raw = open(os.path.join(dest, "LICENSE")).read()
-        for clause in ("Acceptance", "Copyright License", "Distribution License",
-                       "Notices", "Changes and New Works License",
-                       "Patent License", "Noncommercial Purposes",
-                       "Personal Uses", "Noncommercial Organizations",
-                       "Fair Use", "No Other Rights", "Patent Defense",
-                       "Violations", "No Liability", "Definitions"):
-            assert "## " + clause in raw, "missing clause: %s" % clause
-        assert "polyformproject.org/licenses/noncommercial/1.0.0" in lic
-        assert "within 32 days of receiving notice" in lic, \
-            "the Violations clause has been paraphrased"
+        assert "Permission is hereby granted, free of charge" in lic
+        assert "THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND" in lic
+        assert "Copyright (c)" in lic and "Prashant Pandey" in lic
     finally:
         shutil.rmtree(os.path.dirname(dest), ignore_errors=True)
 
