@@ -72,6 +72,59 @@ STEPS_SCHEMA = {
 }
 
 
+IDEAS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "ideas": {"type": "array", "items": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string"},
+                "why": {"type": "string"},
+                "check": {"type": "string"},
+                "kind": {"type": "string", "enum": ["goal", "thread", "repair", "revive", "assess"]},
+            },
+            "required": ["title", "why", "check", "kind"]}}},
+    "required": ["ideas"],
+}
+
+
+def ideate_with_claude(goal: str, done: List[str], opens: List[str], cwd: str = "",
+                       title: str = "", note: str = "") -> List[Dict[str, Any]]:
+    """Ask a read-only planner what the goal file does NOT yet say.
+
+    The first plan only expanded what was written — "it's not generating new
+    ideas". This proposes up to three milestones the goal would need next,
+    each with a why and a check. They land as ideas: shown, never run until
+    the owner accepts one.
+    """
+    prompt = (
+        "You are proposing, not doing. Goal: %s.\nMilestones already done: %s.\n"
+        "Milestones still open: %s.\nLook at the repo in the current directory "
+        "(read-only) and propose up to 3 NEW milestones that are not in either list "
+        "and would move this goal furthest — concrete, one sentence each, with a "
+        "`why` (what it unlocks or what breaks without it) and a `check` (how "
+        "you would prove it done). Skip anything already listed. Return the "
+        "ideas object.%s"
+        % (title or goal, "; ".join(done[:12]) or "none", "; ".join(opens[:12]) or "none",
+           ("\nContext: " + note[:600]) if note else ""))
+    argv = ["claude", "-p", prompt, "--model", "sonnet", "--output-format", "json",
+            "--permission-mode", "dontAsk", "--max-budget-usd", str(ELABORATE_BUDGET_USD),
+            "--json-schema", json.dumps(IDEAS_SCHEMA),
+            "--disallowedTools", "Edit Write NotebookEdit Bash(git commit:*) Bash(git push:*) Bash(rm:*)"]
+    r = subprocess.run(argv, cwd=cwd if cwd and os.path.isdir(cwd) else os.path.expanduser("~"),
+                       capture_output=True, text=True, timeout=ELABORATE_TIMEOUT_S,
+                       stdin=subprocess.DEVNULL)
+    for ln in reversed(r.stdout.strip().splitlines()):
+        if ln.startswith("{") and '"type"' in ln:
+            try:
+                d = json.loads(ln)
+            except ValueError:
+                continue
+            so = d.get("structured_output") or {}
+            return [x for x in (so.get("ideas") or []) if isinstance(x, dict) and x.get("title")]
+    raise RuntimeError("planner returned no ideas object")
+
+
 def _now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime())
 
@@ -148,20 +201,30 @@ def elaborate_with_claude(goal: str, milestone: str, cwd: str = "",
 def build(goals_dir: Optional[str] = None, meditation_dir: str = MEDITATION_DIR,
           elaborator: Optional[Callable[..., List[Dict[str, Any]]]] = None,
           goals_rows: Optional[List[Dict[str, Any]]] = None,
-          elaborate: bool = True) -> Dict[str, Any]:
-    """The graph, from the goal files and the elaborator. Never typed."""
+          elaborate: bool = True,
+          ideator: Optional[Callable[..., List[Dict[str, Any]]]] = None) -> Dict[str, Any]:
+    """The graph, from the goal files, the elaborator and the ideator. Never
+    typed. Ideas are proposed for EVERY goal — a goal at 100% is exactly
+    where the next milestones are missing — and run only once accepted."""
     import goals as gl
     rows = goals_rows if goals_rows is not None else (
         gl.scan(goals_dir) if goals_dir else gl.scan())
     if elaborator is None and elaborate:
         elaborator = elaborate_with_claude
+    # The real ideator rides ONLY with the real elaborator. Defaulting it on
+    # `elaborate` alone made every test that injected a fake elaborator call
+    # the real planner — 13 tests, real money, a five-minute hang.
+    if ideator is None and elaborator is elaborate_with_claude:
+        ideator = ideate_with_claude
     nodes: List[Dict[str, Any]] = []
     notes: List[str] = []
     n_goals = 0
+    n_ideas = 0
     for g in rows:
-        opens = [m for m in (g.get("milestones") or []) if not m.get("done")]
-        if not opens or (g.get("status") or "") in ("done", "archived", "paused"):
+        if (g.get("status") or "") in ("archived", "paused"):
             continue
+        opens = [m for m in (g.get("milestones") or []) if not m.get("done")]
+        dones = [m for m in (g.get("milestones") or []) if m.get("done")]
         n_goals += 1
         prev_id: Optional[str] = None
         for m in opens:
@@ -209,11 +272,41 @@ def build(goals_dir: Optional[str] = None, meditation_dir: str = MEDITATION_DIR,
             nodes.extend(subs)
             nodes.append(node)
             prev_id = node["id"]
-    est = round(sum(n["agent"]["budget_usd"] for n in nodes), 2)
+        # IDEAS — what the file does not say yet. Proposed, shown, and run
+        # only once the owner accepts one; an accepted idea runs after the
+        # goal's last open milestone.
+        if ideator is not None:
+            try:
+                dn = [(m.get("headline") or m.get("text") or "").strip() for m in dones]
+                op = [(m.get("headline") or m.get("text") or "").strip() for m in opens]
+                ideas = ideator(g["name"], dn, op) if ideator is not ideate_with_claude \
+                    else ideator(g["name"], dn, op, cwd=g.get("cwd") or "",
+                                 title=g.get("title") or "", note=g.get("note") or "")
+            except Exception as e:
+                notes.append("ideas failed for %s: %s" % (g["name"], str(e)[:80]))
+                ideas = []
+            for idea in ideas[:3]:
+                t_ = str(idea.get("title") or "").strip()
+                if not t_ or any(n["goal"] == g["name"] and n["title"].lower() == t_.lower() for n in nodes):
+                    continue
+                kind = idea.get("kind") if idea.get("kind") in ("goal", "thread", "repair", "revive", "assess") else "goal"
+                iid = _nid(g["name"], "idea", t_)
+                nodes.append({"id": iid, "goal": g["name"], "goal_title": g.get("title") or g["name"],
+                              "cwd": g.get("cwd") or "", "milestone": t_, "title": t_,
+                              "why": str(idea.get("why") or "").strip(), "kind": kind,
+                              "check": str(idea.get("check") or "").strip(),
+                              "depends_on": [prev_id] if prev_id else [],
+                              "status": "idea", "agent": agent_for(kind),
+                              "name": "%s-%s-%s" % (kind, g["name"][:16], iid),
+                              "steers": [], "log": "", "session": "", "result": None,
+                              "idea": True})
+                n_ideas += 1
+    est = round(sum(n["agent"]["budget_usd"] for n in nodes if n["status"] != "idea"), 2)
     return {"id": time.strftime("%Y%m%d-%H%M%S", time.gmtime()), "created": _now_iso(),
             "armed": False, "armed_at": "", "paused_why": "", "max_parallel": DEFAULT_PARALLEL,
             "nodes": nodes, "notes": notes,
-            "totals": {"goals": n_goals, "nodes": len(nodes), "est_usd": est},
+            "totals": {"goals": n_goals, "nodes": len([n for n in nodes if n["status"] != "idea"]),
+                       "ideas": n_ideas, "est_usd": est},
             "events": [{"ts": _now_iso(), "what": "planned", "nodes": len(nodes)}],
             "metrics": {}}
 
@@ -440,7 +533,11 @@ def _absorb(n: Dict[str, Any], res: Dict[str, Any], g: Dict[str, Any]) -> None:
 
 
 def _metrics(g: Dict[str, Any], now: float) -> Dict[str, Any]:
-    ns = g["nodes"]
+    # ideas are proposals, not steps: they do not count as nodes, pending
+    # or per-goal totals until accepted. The status line read "0 of 25
+    # done" over 13 steps the day ideas landed.
+    ideas = [n for n in g["nodes"] if n["status"] == "idea"]
+    ns = [n for n in g["nodes"] if n["status"] != "idea"]
     by = {}
     for n in ns:
         by[n["status"]] = by.get(n["status"], 0) + 1
@@ -471,6 +568,7 @@ def _metrics(g: Dict[str, Any], now: float) -> Dict[str, Any]:
             "denials": sum(n["result"]["denials"] for n in fin),
             "grown": sum(1 for n in ns if n.get("grown")),
             "steers": sum(len(n.get("steers") or []) for n in ns),
+            "ideas": len(ideas),
             "per_goal": per_goal, "hours": round(hours, 2)}
 
 
@@ -532,6 +630,28 @@ def steer(node_id: str, message: str, meditation_dir: str = MEDITATION_DIR,
     return {"ok": True, "node": n["id"], "log": n["log"]}
 
 
+def accept(node_id: str, meditation_dir: str = MEDITATION_DIR) -> Dict[str, Any]:
+    """The owner takes an idea: it becomes a pending node and runs after the
+    goal's last open milestone. Nothing else in the graph changes."""
+    g = load(meditation_dir)
+    if not g:
+        return {"ok": False, "why": "no campaign"}
+    n = next((m for m in g["nodes"] if m["id"] == node_id), None)
+    if not n:
+        return {"ok": False, "why": "no node %s" % node_id}
+    if n["status"] != "idea":
+        return {"ok": False, "why": "%s is not an idea (status %s)" % (node_id, n["status"])}
+    n["status"] = "pending"
+    n["accepted"] = _now_iso()
+    g["totals"]["nodes"] = len([m for m in g["nodes"] if m["status"] != "idea"])
+    g["totals"]["ideas"] = len([m for m in g["nodes"] if m["status"] == "idea"])
+    g["totals"]["est_usd"] = round(sum(m["agent"]["budget_usd"] for m in g["nodes"]
+                                       if m["status"] != "idea"), 2)
+    g["events"].append({"ts": _now_iso(), "what": "accepted", "node": n["id"], "title": n["title"][:60]})
+    save(g, meditation_dir)
+    return {"ok": True, "node": n["id"]}
+
+
 def status(meditation_dir: str = MEDITATION_DIR) -> Dict[str, Any]:
     g = load(meditation_dir)
     if not g:
@@ -541,7 +661,8 @@ def status(meditation_dir: str = MEDITATION_DIR) -> Dict[str, Any]:
             "metrics": _metrics(g, time.time()), "notes": g.get("notes", []),
             "nodes": [{k: n.get(k) for k in ("id", "goal", "goal_title", "title", "kind", "status",
                                               "depends_on", "agent", "blocked_on", "stuck",
-                                              "result", "steers", "grown", "name", "log")}
+                                              "result", "steers", "grown", "name", "log",
+                                              "idea", "accepted", "why", "check")}
                       for n in g["nodes"]],
             "events": g.get("events", [])[-30:]}
 
@@ -550,7 +671,7 @@ def status(meditation_dir: str = MEDITATION_DIR) -> Dict[str, Any]:
 # the pages
 # ---------------------------------------------------------------------------
 
-_GLYPH = {"done": "✓", "running": "▶", "blocked": "■", "failed": "✗", "pending": "·"}
+_GLYPH = {"done": "✓", "running": "▶", "blocked": "■", "failed": "✗", "pending": "·", "idea": "?"}
 
 
 def render(g: Dict[str, Any]) -> str:
@@ -558,8 +679,9 @@ def render(g: Dict[str, Any]) -> str:
     who runs it, what it costs at most."""
     out = ["ALL GOALS — the plan", ""]
     t = g["totals"]
-    out.append("%d steps across %d goals · up to $%.2f · %d at a time"
-               % (t["nodes"], t["goals"], t["est_usd"], g.get("max_parallel") or DEFAULT_PARALLEL))
+    out.append("%d steps across %d goals · up to $%.2f · %d at a time · %d ideas proposed"
+               % (t["nodes"], t["goals"], t["est_usd"], g.get("max_parallel") or DEFAULT_PARALLEL,
+                  t.get("ideas", 0)))
     if g.get("armed"):
         m = g.get("metrics") or {}
         out.append("RUNNING since %s · %d done · %d running · %d blocked · $%.2f spent"
@@ -573,8 +695,9 @@ def render(g: Dict[str, Any]) -> str:
         if n["goal"] not in goals_seen:
             goals_seen.append(n["goal"])
     for goal in goals_seen:
-        ns = [n for n in g["nodes"] if n["goal"] == goal]
-        out.append(ns[0]["goal_title"])
+        ns = [n for n in g["nodes"] if n["goal"] == goal and n["status"] != "idea"]
+        ideas = [n for n in g["nodes"] if n["goal"] == goal and n["status"] == "idea"]
+        out.append((ns or ideas)[0]["goal_title"] + ("" if ns else "  (every milestone done)"))
         for n in ns:
             a = n["agent"]
             dep = ""
@@ -593,6 +716,13 @@ def render(g: Dict[str, Any]) -> str:
                 out.append("      STUCK: no result and the log has not moved in %d minutes" % (STALL_S // 60))
             if n.get("result") and n["result"].get("did"):
                 out.append("      did: " + "; ".join(str(x)[:60] for x in n["result"]["did"][:3]))
+        for n in ideas:
+            out.append("  ? IDEA: %s" % n["title"][:90])
+            if n.get("why"):
+                out.append("      why: " + n["why"][:110])
+            if n.get("check"):
+                out.append("      done means: " + n["check"][:100])
+            out.append("      not in the plan until you accept it — accept with: campaign accept %s" % n["id"])
         out.append("")
     for note in g.get("notes", []):
         out.append("note — " + note)
@@ -615,8 +745,8 @@ def render_status(s: Dict[str, Any]) -> str:
              % (m["spent_usd"], m["est_usd"],
                 (" · $%.2f/h" % m["burn_usd_per_h"]) if m.get("burn_usd_per_h") is not None else "",
                 m["pushed"], m["verified_commits"], m["claimed_commits"], m["milestones_ticked"]),
-             "%d steps grown from results · %d steers · %d denials"
-             % (m["grown"], m["steers"], m["denials"])]
+             "%d steps grown from results · %d steers · %d denials · %d ideas waiting for you"
+             % (m["grown"], m["steers"], m["denials"], m.get("ideas", 0))]
     for gname, pg in (m.get("per_goal") or {}).items():
         lines.append("  %-40s %d/%d%s%s" % (pg["title"][:40], pg["done"], pg["total"],
                                             (" · %d blocked" % pg["blocked"]) if pg["blocked"] else "",
@@ -630,7 +760,7 @@ def render_status(s: Dict[str, Any]) -> str:
 
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(prog="meditate campaign", description=__doc__.split("\n")[0])
-    ap.add_argument("verb", choices=["plan", "show", "go", "tick", "status", "pause", "steer"])
+    ap.add_argument("verb", choices=["plan", "show", "go", "tick", "status", "pause", "steer", "accept"])
     ap.add_argument("args", nargs="*")
     ap.add_argument("--max", type=int, default=None, help="agents at a time")
     ap.add_argument("--no-elaborate", action="store_true", help="milestones only, no planner calls")
@@ -669,6 +799,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         r = pause(why=" ".join(a.args) or "paused by owner")
         print(json.dumps(r) if a.json else "paused — " + r.get("why", ""))
         return 0
+    if a.verb == "accept":
+        if not a.args:
+            print("usage: campaign accept <node-id>")
+            return 2
+        r = accept(a.args[0])
+        print(json.dumps(r) if a.json else ("accepted %s" % r["node"] if r.get("ok") else "could not accept: " + r.get("why", "")))
+        return 0 if r.get("ok") else 1
     if a.verb == "steer":
         if len(a.args) < 2:
             print("usage: campaign steer <node-id> \"message\"")

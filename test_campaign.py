@@ -363,6 +363,81 @@ def test_status_is_ONE_screen_with_the_numbers_that_decide():
         assert "0 of 5" in text or "0/5" in text, text
 
 
+# ---------------------------------------------------------------------------
+# ideas: the plan proposes, the owner accepts, only then does it run
+# ---------------------------------------------------------------------------
+
+def _ideas(goal, done, opens):
+    if goal == "b-ship":
+        return [{"title": "add a smoke test on deploy", "why": "no deploy is checked",
+                 "check": "curl / returns 200 after deploy", "kind": "goal"}]
+    return []
+
+
+def test_the_plan_PROPOSES_new_milestones_per_goal():
+    """The first cut only expanded what was already written — "it's not
+    generating new ideas". An idea is a proposed milestone the goal file
+    does not have, with a why and a check, marked as an idea."""
+    with tempfile.TemporaryDirectory() as t:
+        gdir, med = _world(t)
+        g = cp.build(goals_dir=gdir, meditation_dir=med, elaborator=_elab, ideator=_ideas)
+        ideas = [n for n in g["nodes"] if n["status"] == "idea"]
+        assert len(ideas) == 1 and ideas[0]["goal"] == "b-ship", ideas
+        assert ideas[0]["title"] == "add a smoke test on deploy"
+        assert g["totals"]["ideas"] == 1
+        assert "smoke test" in cp.render(g) and "idea" in cp.render(g).lower()
+
+
+def test_an_idea_is_NEVER_dispatched_until_accepted():
+    with tempfile.TemporaryDirectory() as t:
+        gdir, med = _world(t)
+        g = cp.build(goals_dir=gdir, meditation_dir=med, elaborator=_elab, ideator=_ideas)
+        cp.save(g, med)
+        sent = []
+        cp.go(meditation_dir=med, max_parallel=9,
+              dispatch=lambda n: sent.append(n["title"]) or {"log": "l-" + n["id"], "session": "s"})
+        assert "add a smoke test on deploy" not in sent, sent
+        idea = [n for n in cp.load(med)["nodes"] if n["status"] == "idea"][0]
+        r = cp.accept(idea["id"], meditation_dir=med)
+        assert r["ok"], r
+        g2 = cp.load(med)
+        n = [x for x in g2["nodes"] if x["id"] == idea["id"]][0]
+        assert n["status"] == "pending" and n.get("accepted"), n
+        # it depends on the goal's last open milestone, so it runs after it
+        last = [x for x in g2["nodes"] if x["goal"] == "b-ship" and x["title"] == "only open"][0]
+        assert last["id"] in n["depends_on"]
+
+
+def test_the_ideator_failing_costs_NOTHING_but_a_note():
+    with tempfile.TemporaryDirectory() as t:
+        gdir, med = _world(t)
+
+        def boom(goal, done, opens):
+            raise RuntimeError("no ideas today")
+        g = cp.build(goals_dir=gdir, meditation_dir=med, elaborator=_elab, ideator=boom)
+        assert not [n for n in g["nodes"] if n["status"] == "idea"]
+        assert any("idea" in n.lower() for n in g["notes"]), g["notes"]
+
+
+def test_ideas_are_proposed_for_DONE_goals_too():
+    """A goal at 100% is exactly where the next milestones are missing."""
+    with tempfile.TemporaryDirectory() as t:
+        gdir, med = _world(t)
+        open(os.path.join(gdir, "c.md"), "w").write(
+            "---\nname: c-done\ntitle: C done\nproject: c\ncwd: %s\nstatus: active\n---\n"
+            "## Milestones\n- [x] shipped\n" % t)
+        seen = []
+
+        def ideator(goal, done, opens):
+            seen.append(goal)
+            return [{"title": "next thing for " + goal, "why": "w", "check": "c", "kind": "goal"}]
+        g = cp.build(goals_dir=gdir, meditation_dir=med, elaborator=_elab, ideator=ideator)
+        assert "c-done" in seen, seen
+        c = [n for n in g["nodes"] if n["goal"] == "c-done"]
+        assert len(c) == 1 and c[0]["status"] == "idea" and not c[0]["depends_on"]
+        assert g["totals"]["goals"] == 3
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

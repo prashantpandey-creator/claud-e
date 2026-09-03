@@ -1,44 +1,54 @@
 <!doctype html><meta charset="utf-8">
 <title>CLAUD-E — your digital twin</title>
 <style>
-:root{--gold:#E3B140;--amber:#e8b63f;--bg:#000;--fg:#d8d4cc;--dim:#8a8578;--faint:#57524a;--line:#241f18}
+:root{--gold:#E3B140;--amber:#e8b63f;--bg:#000;--fg:#d8d4cc;--dim:#8a8578;--faint:#57524a;--line:#241f18;--red:#c0392b}
 *{box-sizing:border-box}
 body{background:var(--bg);color:var(--fg);font:14px/1.6 -apple-system,BlinkMacSystemFont,Helvetica,sans-serif;margin:0;padding:0}
-a{color:var(--gold);text-decoration:none}
-.wrap{max-width:1080px;margin:0 auto;padding:28px 32px 80px}
-.mark{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--gold);white-space:pre;font-size:10px;line-height:1.2}
-.row{display:flex;align-items:center;gap:14px}
-.pill{border:1px solid var(--line);border-radius:999px;padding:3px 11px;font-size:12px;color:var(--dim)}
-.pill b{color:var(--gold);font-weight:500}
-#core{width:100%;height:132px;display:block}
+a{color:var(--gold);text-decoration:none;margin-left:14px}
+.wrap{max-width:1080px;margin:0 auto;padding:22px 28px 80px}
+/* header: identity + one line of state, no taller than it needs */
+.mark{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--gold);white-space:pre;font-size:7px;line-height:1.15;opacity:.9}
+.state{display:flex;align-items:center;gap:14px;margin-top:6px}
+#core{width:64px;height:64px;display:block;flex:none}
+.words{font-size:13px;color:var(--dim);display:flex;flex-wrap:wrap;gap:0 8px;align-items:center}
+.words b{color:var(--gold);font-weight:500}
+.words .dot{color:var(--faint)}
+.pill{border:1px solid var(--line);border-radius:999px;padding:1px 9px;font-size:11px;color:var(--dim)}
+/* zones */
+.zone{margin-top:22px}
+.zone-h{font-size:10px;letter-spacing:.24em;color:var(--faint);padding-bottom:4px;border-bottom:1px solid var(--line)}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:0 32px}
+@media (max-width:780px){.grid2{grid-template-columns:1fr}}
+/* sections */
+.sec{border-top:1px solid var(--line);padding:10px 0 2px;min-width:0}
+.grid2 > .sec:nth-child(-n+2){border-top:0}
+.sec h3{letter-spacing:.16em;font-size:11px;color:var(--dim);font-weight:400;margin:0 0 8px;cursor:pointer;
+        display:flex;justify-content:space-between;align-items:center;gap:10px}
+.sec h3>span:first-child{flex:1;display:flex;align-items:center;gap:9px}
+.sec h3>span:last-of-type{letter-spacing:0;font-variant-numeric:tabular-nums;color:var(--faint)}
+.sec h3:hover{color:var(--gold)}
+.sec h3::after{content:"";width:5px;height:5px;border-right:1px solid var(--faint);border-bottom:1px solid var(--faint);
+  transform:rotate(45deg);margin-left:4px;transition:transform .15s;flex:none}
+.collapsed h3::after{transform:rotate(-45deg)}
+.collapsed .body{display:none}
+.li{font-size:13px;padding:4px 0;display:flex;gap:10px;align-items:flex-start}
+.li .txt{flex:1;min-width:0}
+.txt.more{cursor:pointer;border-bottom:1px dotted var(--faint)}
+.txt.more:hover{color:var(--gold);border-bottom-color:var(--gold)}
+.basis{color:var(--faint);font-size:11px;margin-top:8px}
+/* the one input */
 .cmd{width:100%;background:#0a0906;border:1px solid var(--line);border-radius:10px;color:var(--fg);
-     padding:11px 14px;font:13px/1.4 ui-monospace,Menlo,monospace;outline:none}
+     padding:10px 14px;font:13px/1.4 ui-monospace,Menlo,monospace;outline:none;margin-top:10px}
 .cmd:focus{border-color:var(--gold)}
 .hint{color:var(--faint);font-size:11px;margin-top:6px}
-.sec{border-top:1px solid var(--line);padding:18px 0 4px}
-.sec h3{letter-spacing:.18em;font-size:11px;color:var(--dim);font-weight:400;margin:0 0 10px;cursor:pointer;
-        display:flex;justify-content:space-between;align-items:center}
-.sec h3:hover{color:var(--gold)}
-.li{font-size:13px;padding:5px 0;display:flex;gap:10px;align-items:flex-start}
-.li .txt{flex:1;min-width:0}
-.basis{color:var(--faint);font-size:11px;margin-top:8px}
+.row{display:flex;align-items:center;gap:14px}
 button{background:none;border:1px solid var(--line);border-radius:6px;color:var(--gold);
        padding:3px 10px;font-size:12px;cursor:pointer;white-space:nowrap;font-family:inherit}
 button:hover{border-color:var(--gold);background:rgba(227,177,64,.07)}
 button:active{transform:scale(.97)}
-#say{color:var(--gold);font-size:13px;min-height:20px;margin:10px 0}
+button.go{border-color:var(--gold);background:rgba(227,177,64,.12);padding:6px 16px;font-size:13px}
+#say{color:var(--gold);font-size:13px;min-height:20px;margin:8px 0 0}
 .feed{font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--faint);max-height:92px;overflow:hidden}
-.collapsed .body{display:none}
-.sec h3::after{content:"";width:5px;height:5px;border-right:1px solid var(--faint);
-  border-bottom:1px solid var(--faint);transform:rotate(45deg);margin-left:10px;
-  transition:transform .15s}
-.collapsed h3::after{transform:rotate(-45deg)}
-.sec h3>span:first-child{flex:1}
-.sec h3>span:last-of-type{letter-spacing:0;font-variant-numeric:tabular-nums}
-.txt.more{cursor:pointer;border-bottom:1px dotted var(--faint)}
-.txt.more:hover{color:var(--gold);border-bottom-color:var(--gold)}
-.sec{padding:11px 0 2px}
-.li{padding:4px 0}
 .axis text{fill:#57524a;font-size:10px}
 .axis path,.axis line{stroke:#241f18}
 </style>
@@ -74,44 +84,57 @@ void main(){
 }
 </script>
 <div class="wrap">
-  <div class="mark" id="mark"></div>
-  <div class="row" style="margin-top:10px">
-    <span class="pill" id="p-face">…</span>
-    <span class="pill" id="p-moving">…</span>
-    <span class="pill" id="p-gate">…</span>
-    <span style="flex:1"></span>
-    <a href="/">pulse</a><a href="/report">agenda</a>
+  <!-- Zones by how often he looks: NOW (the run, the open goals, the gaps),
+       DO (the one input and its verbs), RECORD (what it spent, who did it,
+       the trajectory, the hourly plan, the feed), WHO (his rules and the
+       wiring). Measured before this: the run he was waiting to say go to
+       sat at y=1097 under nine headers on a 3.9-screen page. -->
+  <div class="head">
+    <div class="mark" id="mark"></div>
+    <div class="state">
+      <canvas id="core"></canvas>
+      <div class="words">
+        <span id="p-face">…</span><span class="dot">·</span>
+        <span id="p-moving">…</span><span class="dot">·</span>
+        <span id="p-gate">…</span>
+      </div>
+      <span style="flex:1"></span>
+      <a href="/">pulse</a><a href="/report">agenda</a>
+    </div>
   </div>
 
-  <canvas id="core"></canvas>
+  <div class="zone" id="zone-now"><div class="zone-h">NOW</div>
+    <div class="sec" id="sec-all"><h3 title="every open milestone of every goal, elaborated into steps, with who runs each and what it costs at most"><span><svg viewBox="0 0 18 18" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2v4 M9 12v4 M3 9h4 M11 9h4 M9 6a3 3 0 1 0 0 6 3 3 0 0 0 0-6z M4 4l2 2 M12 12l2 2 M14 4l-2 2 M6 12l-2 2"/></svg>ALL GOALS</span><span id="all-n"></span></h3>
+      <div class="body"><div id="all">reading the campaign…</div></div></div>
+    <div class="grid2" id="now-grid"></div>
+  </div>
 
-  <input class="cmd" id="cmd" autocomplete="off" spellcheck="false" list="targets"
-         placeholder="ask CLAUD-E anything — or a verb: go, fix, still, revive &lt;project&gt;">
-  <datalist id="targets"></datalist>
-  <div class="hint"><b>/</b> focus · <b>g</b> fleet · <b>f</b> repair · <b>r</b> re-check · <b>s</b> still</div>
-  <!-- The stilling row. These four are meditate, which is now its own product
-       and no longer something he types: the console is the only door to it. -->
-  <div class="row" id="stillrow" style="margin-top:8px;gap:6px;flex-wrap:wrap"></div>
-  <div id="say"></div>
+  <div class="zone" id="zone-do"><div class="zone-h">DO</div>
+    <input class="cmd" id="cmd" autocomplete="off" spellcheck="false" list="targets"
+           placeholder="ask CLAUD-E anything — or a verb: go, fix, still, revive &lt;project&gt;">
+    <datalist id="targets"></datalist>
+    <div class="row" id="stillrow" style="margin-top:8px;gap:6px;flex-wrap:wrap"></div>
+    <div class="hint"><b>/</b> focus · <b>g</b> fleet · <b>f</b> repair · <b>r</b> re-check · <b>s</b> still</div>
+    <div id="say"></div>
+  </div>
 
-  <div id="sections"></div>
+  <div class="zone" id="zone-record"><div class="zone-h">RECORD</div>
+    <div class="grid2" id="record-grid">
+      <div class="sec collapsed"><h3 title="every agent reports its own bill"><span><svg viewBox="0 0 18 18" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3v12 M12 5.5C12 4 10.7 3.4 9 3.4S6 4 6 5.5 7.3 8 9 8s3 .6 3 2.3-1.3 2.3-3 2.3-3-.7-3-2.2"/></svg>SPEND</span><span id="spend-n"></span></h3>
+        <div class="body"><div id="spend">reading the ledger…</div></div></div>
+    </div>
+    <div class="sec collapsed"><h3 title="every stamped snapshot of every goal"><span><svg viewBox="0 0 18 18" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M3 13l4-5 3 3 5-7"/></svg>TRAJECTORY</span></h3>
+      <div class="body"><svg id="chart" style="width:100%"></svg>
+      <div class="basis" id="chart-basis"></div></div></div>
+    <div class="sec collapsed"><h3 title="who the hourly pass would send, and what it would cost"><span><svg viewBox="0 0 18 18" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h12 M3 9h8 M3 14h5 M14 11l2 2-2 2"/></svg>HOURLY PLAN</span><span id="plan-n"></span></h3>
+      <div class="body"><div id="swarm">reading the dispatcher…</div></div></div>
+    <div class="sec collapsed"><h3 title="what the fleet is doing right now"><span><svg viewBox="0 0 18 18" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M2 9h3l2-5 3 10 2-5h4"/></svg>LIVE</span></h3><div class="body feed" id="feed"></div></div>
+  </div>
 
-  <div class="sec collapsed"><h3 title="every stamped snapshot of every goal"><span style="display:flex;align-items:center;gap:9px"><svg viewBox="0 0 18 18" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M3 13l4-5 3 3 5-7"/></svg>TRAJECTORY</span></h3>
-    <div class="body"><svg id="chart" style="width:100%"></svg>
-    <div class="basis" id="chart-basis"></div></div></div>
-
-  <div class="sec collapsed"><h3 title="every agent reports its own bill"><span style="display:flex;align-items:center;gap:9px"><svg viewBox="0 0 18 18" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3v12 M12 5.5C12 4 10.7 3.4 9 3.4S6 4 6 5.5 7.3 8 9 8s3 .6 3 2.3-1.3 2.3-3 2.3-3-.7-3-2.2"/></svg>SPEND</span><span id="spend-n" style="color:var(--faint)"></span></h3>
-    <div class="body"><div id="spend">reading the ledger…</div></div></div>
-
-  <!-- The all-goals run. Plan the whole graph, read it, say go once, watch
-       it, steer it. Open by default only while it is armed or blocked. -->
-  <div class="sec collapsed" id="sec-all"><h3 title="every open milestone of every goal, elaborated into steps, with who runs each and what it costs at most"><span style="display:flex;align-items:center;gap:9px"><svg viewBox="0 0 18 18" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2v4 M9 12v4 M3 9h4 M11 9h4 M9 6a3 3 0 1 0 0 6 3 3 0 0 0 0-6z M4 4l2 2 M12 12l2 2 M14 4l-2 2 M6 12l-2 2"/></svg>ALL GOALS</span><span id="all-n" style="color:var(--faint)"></span></h3>
-    <div class="body"><div id="all">reading the campaign…</div></div></div>
-
-  <div class="sec collapsed"><h3 title="who would take what, and what it would cost"><span style="display:flex;align-items:center;gap:9px"><svg viewBox="0 0 18 18" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h12 M3 9h8 M3 14h5 M14 11l2 2-2 2"/></svg>PLAN</span><span id="plan-n" style="color:var(--faint)"></span></h3>
-    <div class="body"><div id="swarm">reading the dispatcher…</div></div></div>
-
-  <div class="sec collapsed"><h3 title="what the fleet is doing right now"><span style="display:flex;align-items:center;gap:9px"><svg viewBox="0 0 18 18" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M2 9h3l2-5 3 10 2-5h4"/></svg>LIVE</span></h3><div class="body feed" id="feed"></div></div>
+  <div class="zone" id="zone-who"><div class="zone-h">WHO YOU ARE</div>
+    <div class="grid2" id="who-grid"></div>
+  </div>
+  <div id="sections" hidden></div>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -264,18 +287,26 @@ function rowActions(secTitle, line){
     `<button data-act="${esc(a)}" data-arg="${esc(g)}">${esc(l)}</button>`).join("");
 }
 
+// Where each server section lives. GOALS and GAPS are NOW; MODELS sits
+// beside SPEND in RECORD; the rest is WHO. A section this table does not
+// know goes to WHO, not nowhere.
+const ZONE = {GOALS: "now-grid", GAPS: "now-grid", MODELS: "record-grid",
+              RULES: "who-grid", METHOD: "who-grid", SCALE: "who-grid", WIRING: "who-grid"};
+
 function renderSections(){
-  // Closed by default. Open only what is asking for something — GOALS and
-  // GAPS — because a page where everything is open is a page with no
-  // emphasis, and 4.4 screens of it is a page nobody reads twice.
-  document.getElementById("sections").innerHTML = SECTIONS.map((s,i) => {
+  for(const id of ["now-grid", "who-grid"]){
+    const el = document.getElementById(id); if(el) el.innerHTML = "";
+  }
+  const rec = document.getElementById("record-grid");
+  if(rec) [...rec.querySelectorAll(".sec[data-server]")].forEach(e => e.remove());
+  SECTIONS.forEach((s, i) => {
     const m = secMeta(s.title);
     const shut = m.open && s.lines.length ? "" : " collapsed";
-    return `
-    <div class="sec${shut}" id="sec${i}">
+    const html = `
+    <div class="sec${shut}" id="sec${i}" data-server="1">
       <h3 data-toggle="${i}" title="${esc(s.title)} · basis: ${esc(s.basis)}">
-        <span style="display:flex;align-items:center;gap:9px">${ico(m.icon)}${esc(m.name)}</span>
-        <span style="color:var(--faint);font-variant-numeric:tabular-nums">${s.lines.length}</span>
+        <span>${ico(m.icon)}${esc(m.name)}</span>
+        <span>${s.lines.length}</span>
       </h3>
       <div class="body">
         ${s.lines.map(l => {
@@ -286,7 +317,10 @@ function renderSections(){
           return `<div class="li">${txt}${rowActions(s.title,l)}</div>`;
         }).join("")}
       </div>
-    </div>`;}).join("");
+    </div>`;
+    const target = document.getElementById(ZONE[m.name] || "who-grid") || document.getElementById("sections");
+    if(target) target.insertAdjacentHTML("beforeend", html);
+  });
 }
 
 function drawChart(series){
@@ -514,8 +548,12 @@ function applyState(s){
   document.getElementById("p-face").innerHTML = awake
     ? "<b>◉ ◉</b> awake" : "── ── watching";
   document.getElementById("p-moving").innerHTML =
-    `<b>${moving}</b> moving of ${rows.length} open`;
-  document.getElementById("p-gate").textContent = gate ? `gate: ${gate}` : "gate: —";
+    `<b>${moving}</b> working · ${rows.length} sessions open`;
+  // "gate: flow" meant nothing to a reader. Say what the gate does.
+  const gateWords = {flow: "auto-dispatch on", pause: "auto-dispatch paused",
+                     hold: "holding — you are here"};
+  document.getElementById("p-gate").textContent = gate ? (gateWords[gate] || "auto-dispatch: " + gate)
+                                                       : "auto-dispatch: unknown";
   // STALE CODE, said out loud. The server holds the code it booted with, so
   // after an edit it can serve confident numbers from a version that no
   // longer exists — it happened twice in one afternoon while I read the page
@@ -525,7 +563,7 @@ function applyState(s){
   if(s.server_stale){
     if(!warn){
       warn = document.createElement("span");
-      warn.id = "p-stale"; warn.className = "pill";
+      warn.id = "p-stale"; warn.className = "pill"; warn.style.marginLeft = "8px";
       warn.style.cssText = "border-color:#7a5a1a;color:#E3B140;cursor:pointer";
       warn.title = "the running server predates the code on disk";
       warn.textContent = "⚠ running old code — restart";
@@ -627,8 +665,9 @@ function renderCampaign(d){
       <button data-act="plan-all" data-arg="fast" title="from the goal files only — no planner calls, free">plan fast</button>`;
     return;
   }
+  const ideas = (d.nodes||[]).filter(x => x.status === "idea");
   const state = d.armed ? "RUNNING" : d.paused_why ? "PAUSED" : "planned — waiting for go";
-  if(n) n.textContent = `${m.done||0}/${m.nodes||0} · ${state}`;
+  if(n) n.textContent = `${m.done||0}/${m.nodes||0} · ${state}${ideas.length ? ` · ${ideas.length} ideas` : ""}`;
   if(sec && (d.armed || (m.blocked||0) > 0 || (m.stuck||0) > 0)) sec.classList.remove("collapsed");
   // the numbers that decide: one strip, tabular
   const strip = `<div style="display:flex;flex-wrap:wrap;gap:14px;font-size:12px;color:var(--dim);
@@ -644,16 +683,18 @@ function renderCampaign(d){
   // controls: exactly the verbs that make sense in this state
   const ctl = d.armed
     ? `<button data-act="pause-all" data-arg="paused from the console">pause</button>`
-    : `<button data-act="go-all" data-arg="" style="border-color:var(--gold);background:rgba(227,177,64,.12)">GO — run every goal</button>
+    : `<button class="go" data-act="go-all" data-arg="">GO — run every goal</button>
        <button data-act="plan-all" data-arg="">re-plan</button>`;
   // the graph, per goal, in order; a steer box on anything that can take one
   const goals = [];
   (d.nodes||[]).forEach(x => { if(!goals.includes(x.goal)) goals.push(x.goal); });
   const rows = goals.map(gname => {
-    const ns = (d.nodes||[]).filter(x => x.goal === gname);
+    const all = (d.nodes||[]).filter(x => x.goal === gname);
+    const ns = all.filter(x => x.status !== "idea");
+    const gi = all.filter(x => x.status === "idea");
     const pg = (m.per_goal||{})[gname] || {};
-    return `<div style="margin:10px 0 4px;color:var(--fg);font-size:13px">${esc(ns[0].goal_title)}
-        <span style="color:var(--faint);font-size:11px;margin-left:8px">${pg.done||0}/${pg.total||0}</span></div>` +
+    return `<div style="margin:12px 0 4px;color:var(--fg);font-size:13px">${esc(all[0].goal_title)}
+        <span style="color:var(--faint);font-size:11px;margin-left:8px">${ns.length ? `${pg.done||0}/${ns.length}` : "every milestone done"}</span></div>` +
       ns.map(x => {
         const a = x.agent || {};
         const can = ["running","blocked","failed","done"].includes(x.status);
@@ -669,7 +710,18 @@ function renderCampaign(d){
               r.cost_usd!=null ? ` · $${r.cost_usd.toFixed(2)}` : ""}</div>
           </span>${can ? `<input class="steer" data-node="${esc(x.id)}" placeholder="steer…" style="background:#0a0906;border:1px solid var(--line);border-radius:6px;color:var(--fg);padding:3px 8px;font:inherit;font-size:11.5px;width:180px">` : ""}
         </div>`;
-      }).join("");
+      }).join("") +
+      // IDEAS — proposed by the planner, not in the plan until accepted.
+      // A question mark, a why, a check, one button. The cost is not counted
+      // until it is a step.
+      gi.map(x => `<div class="li" style="padding:3px 0 3px 8px;border-left:2px dotted var(--faint)">
+          <span class="txt" style="font-size:12.5px">
+            <span style="color:var(--dim);font-family:ui-monospace,monospace">?</span>
+            <span style="color:var(--dim)">${esc(x.title)}</span>
+            <div style="color:var(--faint);font-size:11px">${x.why ? "why: " + esc(x.why).slice(0,140) : ""}${
+              x.check ? " · done means: " + esc(x.check).slice(0,100) : ""} · would run after the goal's last open step, cap $${(x.agent&&x.agent.budget_usd||0).toFixed(2)}</div>
+          </span><button data-act="accept-idea" data-arg="${esc(x.id)}" title="make it a step">accept</button>
+        </div>`).join("");
   }).join("");
   const notes = (d.notes||[]).map(t => `<div class="basis">note — ${esc(t)}</div>`).join("");
   box.innerHTML = strip + `<div style="margin-bottom:8px">${ctl}</div>` + rows + notes;
