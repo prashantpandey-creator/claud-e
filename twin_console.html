@@ -706,8 +706,10 @@ function renderCampaign(d){
     const ns = all.filter(x => x.status !== "idea");
     const gi = all.filter(x => x.status === "idea");
     const pg = (m.per_goal||{})[gname] || {};
-    return `<div style="margin:12px 0 4px;color:var(--fg);font-size:13px">${esc(all[0].goal_title)}
-        <span style="color:var(--faint);font-size:11px;margin-left:8px">${ns.length ? `${pg.done||0}/${ns.length}` : "every milestone done"}</span></div>` +
+    return `<div style="margin:12px 0 4px;color:var(--fg);font-size:13px;display:flex;align-items:center;gap:8px">${esc(all[0].goal_title)}
+        <span style="color:var(--faint);font-size:11px">${ns.length ? `${pg.done||0}/${ns.length}` : "every milestone done"}</span>
+        <span style="flex:1"></span>
+        <button data-act="discard-goal" data-arg="${esc(gname)}" title="drop this goal: its file and the memories it cites move to .discarded (reversible); its steps leave the plan" style="color:var(--faint);font-size:11px;padding:1px 8px">discard goal</button></div>` +
       ns.map(x => {
         const a = x.agent || {};
         const can = ["running","blocked","failed","done"].includes(x.status);
@@ -748,6 +750,7 @@ function renderCampaign(d){
             ev.last_active ? " · last " + esc(ev.last_active) : ""}${ev.open_signal ? " · open" : ""}${
             (c.suggested_milestones||[]).length ? " · " + esc(c.suggested_milestones[0]).slice(0,110) : ""}</div>
         </span><button data-act="accept-goal" data-arg="${esc(c.name)}" title="write the goal file; re-plan brings it in">accept goal</button>
+        <button data-act="discard-proposed" data-arg="${esc(c.name)}" title="no — its memory moves to .discarded, its store rows go inactive, it never resurfaces; reversible with campaign restore" style="color:var(--dim)">discard</button>
       </div>`; }).join("") : "";
   const notes = (d.notes||[]).map(t => `<div class="basis">note — ${esc(t)}</div>`).join("");
   box.innerHTML = hands + strip + `<div style="margin-bottom:8px">${ctl}</div>` + rows + proposed + notes;

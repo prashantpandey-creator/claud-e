@@ -180,6 +180,100 @@ def test_a_single_session_is_NOT_a_thread():
         assert not any("random" in x["name"] for x in c), [x["name"] for x in c]
 
 
+# ---------------------------------------------------------------------------
+# discard: the owner says no, and it never comes back
+# ---------------------------------------------------------------------------
+
+def test_discarding_a_mined_goal_MOVES_its_memory_and_it_never_resurfaces():
+    """Not deleted — moved to .discarded so it can be put back — and written
+    to a ledger the miner reads first, so no session or memory can bring
+    it up again."""
+    with tempfile.TemporaryDirectory() as t:
+        mem, gdir, sessions = _world(t)
+        led = os.path.join(t, "discarded.jsonl")
+        c = [x for x in gl.mine(memory_dir=mem, goals_dir=gdir, sessions=sessions,
+                                now="2026-09-03T00:00:00Z", ledger=led)
+             if x["name"] == "meta-ads-campaign-setup"][0]
+        r = gl.discard_mined(c, memory_dir=mem, ledger=led, store_dir=None, reason="not now")
+        assert r["ok"], r
+        assert not os.path.exists(os.path.join(mem, "meta-ads-campaign-setup.md"))
+        assert os.path.exists(os.path.join(mem, ".discarded", "meta-ads-campaign-setup.md"))
+        again = gl.mine(memory_dir=mem, goals_dir=gdir, sessions=sessions,
+                        now="2026-09-03T00:00:00Z", ledger=led)
+        assert "meta-ads-campaign-setup" not in [x["name"] for x in again]
+        row = json.loads(open(led).read().splitlines()[-1])
+        assert row["name"] == "meta-ads-campaign-setup" and row["reason"] == "not now"
+
+
+def test_discarding_TOMBSTONES_the_store_rows_that_cite_the_memory():
+    """The graded store keeps serving a memory the owner discarded unless
+    its rows go inactive. Rows are found by the evidence source path."""
+    with tempfile.TemporaryDirectory() as t:
+        mem, gdir, sessions = _world(t)
+        store = os.path.join(t, "store"); os.makedirs(store)
+        src = os.path.join(mem, "meta-ads-campaign-setup.md")
+        rows = [{"id": "mem_1", "statement": "x", "active": True, "flags": [],
+                 "evidence": [{"source": src, "locator": "wikilink:x"}]},
+                {"id": "mem_2", "statement": "y", "active": True, "flags": [],
+                 "evidence": [{"source": os.path.join(mem, "other.md")}]}]
+        open(os.path.join(store, "memories.jsonl"), "w").write(
+            "".join(json.dumps(r) + "\n" for r in rows))
+        c = {"name": "meta-ads-campaign-setup", "evidence": {"memory": src}}
+        r = gl.discard_mined(c, memory_dir=mem, ledger=os.path.join(t, "d.jsonl"),
+                             store_dir=store, reason="")
+        assert r["ok"] and r["tombstoned"] == 1, r
+        back = [json.loads(l) for l in open(os.path.join(store, "memories.jsonl"))]
+        by = {x["id"]: x for x in back}
+        assert by["mem_1"]["active"] is False and "discarded" in by["mem_1"]["flags"]
+        assert by["mem_2"]["active"] is True
+
+
+def test_a_session_thread_can_be_discarded_too():
+    """No memory to move — the ledger alone keeps it from coming back."""
+    with tempfile.TemporaryDirectory() as t:
+        mem, gdir, sessions = _world(t)
+        led = os.path.join(t, "d.jsonl")
+        sessions = sessions + [
+            {"title": "linkedin outreach tool scraper", "ts_end": "2026-09-02T10:00:00Z", "user_messages": []},
+            {"title": "linkedin outreach followups", "ts_end": "2026-08-28T10:00:00Z", "user_messages": []}]
+        c = [x for x in gl.mine(memory_dir=mem, goals_dir=gdir, sessions=sessions,
+                                now="2026-09-03T00:00:00Z", ledger=led) if "linkedin" in x["name"]][0]
+        r = gl.discard_mined(c, memory_dir=mem, ledger=led, store_dir=None)
+        assert r["ok"] and r["moved"] == "", r
+        again = gl.mine(memory_dir=mem, goals_dir=gdir, sessions=sessions,
+                        now="2026-09-03T00:00:00Z", ledger=led)
+        assert not any("linkedin" in x["name"] for x in again)
+
+
+def test_discarding_a_GOAL_moves_its_file_and_the_memories_it_cites():
+    with tempfile.TemporaryDirectory() as t:
+        mem, gdir, sessions = _world(t)
+        gp = os.path.join(gdir, "meta-ads-india.md")
+        open(gp, "w").write("---\nname: meta-ads-india\ntitle: Meta\nproject: p\ncwd: /tmp\nstatus: active\n---\n"
+                            "## Milestones\n- [ ] x\n\n## Note\nSeeded from the memory index (meta-ads-campaign-setup).\n")
+        r = gl.discard_goal("meta-ads-india", goals_dir=gdir, memory_dir=mem,
+                            ledger=os.path.join(t, "d.jsonl"), store_dir=None, reason="done with it")
+        assert r["ok"], r
+        assert not os.path.exists(gp) and os.path.exists(os.path.join(gdir, ".discarded", "meta-ads-india.md"))
+        assert "meta-ads-campaign-setup.md" in " ".join(r["memories_moved"]), r
+        assert not os.path.exists(os.path.join(mem, "meta-ads-campaign-setup.md"))
+        assert "meta-ads-india" not in [g["name"] for g in gl.scan(gdir, history_path=os.path.join(t, "h.jsonl"))]
+
+
+def test_restore_puts_it_BACK():
+    with tempfile.TemporaryDirectory() as t:
+        mem, gdir, sessions = _world(t)
+        led = os.path.join(t, "d.jsonl")
+        c = [x for x in gl.mine(memory_dir=mem, goals_dir=gdir, sessions=sessions,
+                                now="2026-09-03T00:00:00Z", ledger=led) if x["name"] == "meta-ads-campaign-setup"][0]
+        gl.discard_mined(c, memory_dir=mem, ledger=led, store_dir=None)
+        r = gl.restore_discarded("meta-ads-campaign-setup", memory_dir=mem, goals_dir=gdir, ledger=led)
+        assert r["ok"], r
+        assert os.path.exists(os.path.join(mem, "meta-ads-campaign-setup.md"))
+        again = gl.mine(memory_dir=mem, goals_dir=gdir, sessions=sessions, now="2026-09-03T00:00:00Z", ledger=led)
+        assert "meta-ads-campaign-setup" in [x["name"] for x in again]
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

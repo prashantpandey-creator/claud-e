@@ -500,11 +500,35 @@ def _read_memory(path: str) -> Optional[Dict[str, Any]]:
             "type": mtype, "body": body, "path": path}
 
 
+DISCARD_LEDGER = os.path.expanduser("~/.claude/meditation/discarded.jsonl")
+
+
+def discarded_names(ledger: Optional[str] = None) -> set:
+    """Everything the owner said no to. Read first, so nothing resurfaces."""
+    out: set = set()
+    try:
+        with open(ledger or DISCARD_LEDGER) as f:
+            for ln in f:
+                try:
+                    r = json.loads(ln)
+                except ValueError:
+                    continue
+                if r.get("restored"):
+                    out.discard(r.get("name"))
+                elif r.get("name"):
+                    out.add(r["name"])
+    except OSError:
+        pass
+    return out
+
+
 def mine(memory_dir: Optional[str] = None, goals_dir: str = GOALS_DIR,
          sessions: Optional[List[Dict[str, Any]]] = None,
-         now: Optional[str] = None, limit: int = 8) -> List[Dict[str, Any]]:
+         now: Optional[str] = None, limit: int = 8,
+         ledger: Optional[str] = None) -> List[Dict[str, Any]]:
     """Project memories that no goal file covers, with evidence."""
     import glob as _g
+    gone = discarded_names(ledger)
     if memory_dir is None:
         # paths.py is the one file allowed to name a conventional location;
         # a fallback literal here tripped the packaging gate the same hour
@@ -553,8 +577,10 @@ def mine(memory_dir: Optional[str] = None, goals_dir: str = GOALS_DIR,
     for mp in paths_:
         if os.path.basename(mp) == "MEMORY.md":
             continue
+        if ".discarded" in mp.split(os.sep):
+            continue
         m = _read_memory(mp)
-        if not m or m["type"] != "project":
+        if not m or m["type"] != "project" or m["name"] in gone:
             continue
         name_words = _tokens(m["name"].replace("-", " "))
         if not name_words:
@@ -617,6 +643,8 @@ def mine(memory_dir: Optional[str] = None, goals_dir: str = GOALS_DIR,
             continue
         seen_pairs |= {a, b}
         name = "%s-%s" % (a, b)
+        if name in gone:
+            continue
         threads.append({"name": name, "title": "%s %s — a thread across %d sessions, no goal and no memory yet"
                         % (a, b, len(days)), "cwd": "",
                         "suggested_milestones": ["Define the milestones for this thread (mined from sessions)"],
@@ -631,6 +659,151 @@ def mine(memory_dir: Optional[str] = None, goals_dir: str = GOALS_DIR,
     out.sort(key=lambda c: (-int(c["evidence"]["open_signal"]), -c["evidence"]["sessions_30d"],
                             c["evidence"]["last_active"] and -int(c["evidence"]["last_active"].replace("-", "") or 0)))
     return out[:limit]
+
+
+def _ledger_write(ledger: Optional[str], row: Dict[str, Any]) -> None:
+    p = ledger or DISCARD_LEDGER
+    os.makedirs(os.path.dirname(p) or ".", exist_ok=True)
+    with open(p, "a") as f:
+        f.write(json.dumps(row) + "\n")
+
+
+def _tombstone_store(store_dir: Optional[str], sources: List[str]) -> int:
+    """Rows in the graded store whose evidence cites a discarded memory go
+    inactive with a `discarded` flag. The store never hard-deletes; neither
+    does this."""
+    if not store_dir or not sources:
+        return 0
+    path = os.path.join(store_dir, "memories.jsonl")
+    if not os.path.exists(path):
+        return 0
+    names = {os.path.basename(x) for x in sources}
+    rows, n = [], 0
+    with open(path, errors="replace") as f:
+        for ln in f:
+            try:
+                r = json.loads(ln)
+            except ValueError:
+                continue
+            hit = any(os.path.basename(str(e.get("source") or "")) in names
+                      for e in (r.get("evidence") or []) if isinstance(e, dict))
+            if hit and r.get("active"):
+                r["active"] = False
+                r.setdefault("flags", [])
+                if "discarded" not in r["flags"]:
+                    r["flags"].append("discarded")
+                n += 1
+            rows.append(r)
+    if n:
+        tmp = path + ".tmp"
+        with open(tmp, "w") as f:
+            for r in rows:
+                f.write(json.dumps(r) + "\n")
+        os.replace(tmp, path)
+    return n
+
+
+def _move_memory(src: str, memory_dir: str) -> str:
+    """Move a memory file under .discarded (reversible) and drop its line
+    from the MEMORY.md index beside it."""
+    if not src or not os.path.exists(src):
+        return ""
+    dst_dir = os.path.join(memory_dir, ".discarded")
+    os.makedirs(dst_dir, exist_ok=True)
+    dst = os.path.join(dst_dir, os.path.basename(src))
+    os.replace(src, dst)
+    idx = os.path.join(os.path.dirname(src), "MEMORY.md")
+    if os.path.exists(idx):
+        try:
+            base = os.path.basename(src)
+            lines = open(idx, errors="replace").read().splitlines(True)
+            keep = [l for l in lines if base not in l]
+            if len(keep) != len(lines):
+                open(idx, "w").write("".join(keep))
+        except OSError:
+            pass
+    return dst
+
+
+def discard_mined(cand: Dict[str, Any], memory_dir: Optional[str] = None,
+                  ledger: Optional[str] = None, store_dir: Optional[str] = "",
+                  reason: str = "") -> Dict[str, Any]:
+    """The owner says no to a proposed goal. Its memory moves to .discarded
+    (never deleted), the store rows citing it go inactive, and the ledger
+    keeps it from coming back — by name, so a session thread with no memory
+    is discarded the same way."""
+    name = cand.get("name") or ""
+    if not name:
+        return {"ok": False, "why": "no name"}
+    if memory_dir is None:
+        memory_dir = paths.memory_root()
+    if store_dir == "":
+        store_dir = paths.store_dir()
+    src = (cand.get("evidence") or {}).get("memory") or ""
+    moved = _move_memory(src, memory_dir) if src else ""
+    tomb = _tombstone_store(store_dir, [src] if src else [])
+    _ledger_write(ledger, {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                           "name": name, "kind": "mined", "memory": src, "moved": moved,
+                           "tombstoned": tomb, "reason": reason})
+    return {"ok": True, "name": name, "moved": moved, "tombstoned": tomb}
+
+
+def discard_goal(name: str, goals_dir: str = GOALS_DIR, memory_dir: Optional[str] = None,
+                 ledger: Optional[str] = None, store_dir: Optional[str] = "",
+                 reason: str = "") -> Dict[str, Any]:
+    """The owner drops a goal. Its file moves to goals/.discarded; the
+    memories its Note cites by name (and any memory named like the goal)
+    move with it and their store rows go inactive."""
+    gp = os.path.join(goals_dir, name + ".md")
+    if not os.path.exists(gp):
+        return {"ok": False, "why": "no goal file %s" % gp}
+    if memory_dir is None:
+        memory_dir = paths.memory_root()
+    if store_dir == "":
+        store_dir = paths.store_dir()
+    text = open(gp, errors="replace").read()
+    cited = set(re.findall(r"\b([a-z0-9]+(?:-[a-z0-9]+){1,6})\b", text.split("## Note")[-1])) if "## Note" in text else set()
+    cited.add(name)
+    import glob as _g
+    moved: List[str] = []
+    for mp in _g.glob(os.path.join(memory_dir, "*.md")) + _g.glob(os.path.join(memory_dir, "*", "*.md")):
+        if ".discarded" in mp.split(os.sep) or os.path.basename(mp) == "MEMORY.md":
+            continue
+        if os.path.basename(mp)[:-3] in cited:
+            d = _move_memory(mp, memory_dir)
+            if d:
+                moved.append(d)
+    tomb = _tombstone_store(store_dir, moved)
+    dst_dir = os.path.join(goals_dir, ".discarded")
+    os.makedirs(dst_dir, exist_ok=True)
+    os.replace(gp, os.path.join(dst_dir, name + ".md"))
+    _ledger_write(ledger, {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                           "name": name, "kind": "goal", "memories_moved": moved,
+                           "tombstoned": tomb, "reason": reason})
+    return {"ok": True, "name": name, "memories_moved": moved, "tombstoned": tomb,
+            "goal_moved_to": os.path.join(dst_dir, name + ".md")}
+
+
+def restore_discarded(name: str, memory_dir: Optional[str] = None, goals_dir: str = GOALS_DIR,
+                      ledger: Optional[str] = None) -> Dict[str, Any]:
+    """Put a discarded memory or goal back. The store rows stay flagged
+    until the next grade pass re-imports the file."""
+    if memory_dir is None:
+        memory_dir = paths.memory_root()
+    back: List[str] = []
+    import glob as _g
+    for src in _g.glob(os.path.join(memory_dir, ".discarded", "*.md")):
+        if os.path.basename(src)[:-3] == name:
+            dst = os.path.join(memory_dir, os.path.basename(src))
+            os.replace(src, dst)
+            back.append(dst)
+    gsrc = os.path.join(goals_dir, ".discarded", name + ".md")
+    if os.path.exists(gsrc):
+        os.replace(gsrc, os.path.join(goals_dir, name + ".md"))
+        back.append(os.path.join(goals_dir, name + ".md"))
+    _ledger_write(ledger, {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                           "name": name, "restored": True, "back": back})
+    return {"ok": True, "name": name, "back": back}
 
 
 def accept_mined(cand: Dict[str, Any], goals_dir: str = GOALS_DIR) -> Dict[str, Any]:

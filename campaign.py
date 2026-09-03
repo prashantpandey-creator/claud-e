@@ -797,6 +797,53 @@ def accept_goal(name: str, meditation_dir: str = MEDITATION_DIR,
     return {"ok": True, "path": r["path"], "name": name}
 
 
+def discard_proposed(name: str, meditation_dir: str = MEDITATION_DIR, reason: str = "") -> Dict[str, Any]:
+    """No to a proposed goal: goals.discard_mined moves its memory aside and
+    ledgers the name; it leaves the plan and never comes back."""
+    import goals as gl
+    g = load(meditation_dir)
+    if not g:
+        return {"ok": False, "why": "no campaign"}
+    cand = next((c for c in g.get("proposed_goals", []) if c["name"] == name), None)
+    if not cand:
+        return {"ok": False, "why": "no proposed goal %s" % name}
+    r = gl.discard_mined(cand, reason=reason)
+    if not r.get("ok"):
+        return r
+    g["proposed_goals"] = [c for c in g["proposed_goals"] if c["name"] != name]
+    g["events"].append({"ts": _now_iso(), "what": "proposed goal discarded", "goal": name,
+                        "moved": r.get("moved", ""), "tombstoned": r.get("tombstoned", 0)})
+    save(g, meditation_dir)
+    return r
+
+
+def discard_goal(name: str, meditation_dir: str = MEDITATION_DIR, reason: str = "",
+                 goals_dir: Optional[str] = None) -> Dict[str, Any]:
+    """No to a goal: its file and the memories it cites move aside; every
+    node, idea and human item of that goal leaves the plan."""
+    import goals as gl
+    r = gl.discard_goal(name, goals_dir=goals_dir or gl.GOALS_DIR, reason=reason)
+    if not r.get("ok"):
+        return r
+    g = load(meditation_dir)
+    if g:
+        before = len(g["nodes"])
+        g["nodes"] = [n for n in g["nodes"] if n["goal"] != name]
+        g["totals"]["nodes"] = len([n for n in g["nodes"] if n["status"] != "idea"])
+        g["totals"]["ideas"] = len([n for n in g["nodes"] if n["status"] == "idea"])
+        g["totals"]["human"] = len([n for n in g["nodes"] if n.get("kind") == "human"])
+        g["totals"]["goals"] = len({n["goal"] for n in g["nodes"]})
+        g["totals"]["est_usd"] = round(sum(n["agent"]["budget_usd"] for n in g["nodes"]
+                                           if n["status"] not in ("idea", "waiting")), 2)
+        g["events"].append({"ts": _now_iso(), "what": "goal discarded", "goal": name,
+                            "nodes_removed": before - len(g["nodes"]),
+                            "memories_moved": len(r.get("memories_moved", []))})
+        g["metrics"] = _metrics(g, time.time())
+        save(g, meditation_dir)
+        r["nodes_removed"] = before - len(g["nodes"])
+    return r
+
+
 def status(meditation_dir: str = MEDITATION_DIR) -> Dict[str, Any]:
     g = load(meditation_dir)
     if not g:
@@ -931,7 +978,8 @@ def render_status(s: Dict[str, Any]) -> str:
 
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(prog="meditate campaign", description=__doc__.split("\n")[0])
-    ap.add_argument("verb", choices=["plan", "show", "go", "tick", "status", "pause", "steer", "accept", "accept-goal", "done"])
+    ap.add_argument("verb", choices=["plan", "show", "go", "tick", "status", "pause", "steer", "accept",
+                                     "accept-goal", "done", "discard", "discard-goal", "restore"])
     ap.add_argument("args", nargs="*")
     ap.add_argument("--max", type=int, default=None, help="agents at a time")
     ap.add_argument("--no-elaborate", action="store_true", help="milestones only, no planner calls")
@@ -976,6 +1024,19 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 2
         r = accept(a.args[0])
         print(json.dumps(r) if a.json else ("accepted %s" % r["node"] if r.get("ok") else "could not accept: " + r.get("why", "")))
+        return 0 if r.get("ok") else 1
+    if a.verb in ("discard", "discard-goal", "restore"):
+        if not a.args:
+            print("usage: campaign %s <name> [reason]" % a.verb)
+            return 2
+        if a.verb == "discard":
+            r = discard_proposed(a.args[0], reason=" ".join(a.args[1:]))
+        elif a.verb == "discard-goal":
+            r = discard_goal(a.args[0], reason=" ".join(a.args[1:]))
+        else:
+            import goals as gl
+            r = gl.restore_discarded(a.args[0])
+        print(json.dumps(r) if a.json else (("ok — " + json.dumps({k: v for k, v in r.items() if k != "ok"})) if r.get("ok") else "could not: " + r.get("why", "")))
         return 0 if r.get("ok") else 1
     if a.verb == "done":
         if not a.args:

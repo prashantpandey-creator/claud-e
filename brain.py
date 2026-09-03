@@ -1433,6 +1433,25 @@ class _Handler(BaseHTTPRequestHandler):
                     res = {"started": True, "output": "paused — " + r.get("why", "")}
                 except Exception as e:
                     res = {"started": False, "output": str(e)[:160]}
+            elif action in ("discard-proposed", "discard-goal"):
+                # The owner says no. Reversible: files move under .discarded,
+                # store rows go inactive, the ledger keeps it from resurfacing.
+                try:
+                    import campaign as _cp
+                    _log_brain_action(action, arg)
+                    why = str(req.get("value") or "").strip()
+                    r = (_cp.discard_proposed(arg, reason=why) if action == "discard-proposed"
+                         else _cp.discard_goal(arg, reason=why))
+                    if r.get("ok"):
+                        moved = r.get("moved") or ", ".join(os.path.basename(x) for x in r.get("memories_moved", []))
+                        res = {"started": True,
+                               "output": "discarded %s — %s; %d store row%s set inactive; reversible: campaign restore %s"
+                                         % (arg, ("memory moved: " + os.path.basename(moved)) if moved else "no memory to move",
+                                            r.get("tombstoned", 0), "" if r.get("tombstoned", 0) == 1 else "s", arg)}
+                    else:
+                        res = {"started": False, "output": r.get("why", "could not discard")}
+                except Exception as e:
+                    res = {"started": False, "output": str(e)[:160]}
             elif action == "human-done":
                 # The owner did a thing only he could do. arg = node id,
                 # value = an optional note. The goal file's box ticks when the
