@@ -461,7 +461,40 @@ def _settle_worktree(head: Dict[str, str], log_dir: str, key: str) -> str:
         up = _sp.run(["git", "-C", wt, "rev-list", "--count", "@{u}..HEAD"],
                      capture_output=True, text=True, timeout=10)
         if up.returncode != 0:
-            return "kept: unpushed (no upstream)"
+            # No upstream. A read-only run (revive, assess) never pushes and
+            # never commits, so "kept: unpushed" would keep its worktree
+            # forever — the first live probe did exactly that. Nothing unique
+            # on the branch and a clean tree means nothing to lose: remove.
+            # --branches/--remotes/--tags, NOT --all: --all includes HEAD,
+            # and HEAD is this very branch, so every commit was "reachable
+            # elsewhere" and a branch with real work counted as empty — the
+            # test caught a committed worktree being removed.
+            # Every other ref, listed by name and negated explicitly. Two
+            # tries with --exclude got the glob rules wrong both ways
+            # (--all includes HEAD; --branches wants the pattern without
+            # refs/heads) and each time a branch with real work read as
+            # empty and was removed — the test caught both.
+            refs = _sp.run(["git", "-C", wt, "for-each-ref", "--format=%(refname)",
+                            "refs/heads", "refs/remotes", "refs/tags"],
+                           capture_output=True, text=True, timeout=10).stdout.split()
+            others = [r for r in refs if r != "refs/heads/" + branch]
+            uniq = _sp.run(["git", "-C", wt, "rev-list", "--count", "HEAD", "--not"] + others,
+                           capture_output=True, text=True, timeout=10)
+            dirty = _sp.run(["git", "-C", wt, "status", "--porcelain"],
+                            capture_output=True, text=True, timeout=10).stdout.strip()
+            if uniq.returncode == 0 and uniq.stdout.strip() == "0" and not dirty:
+                r = _sp.run(["git", "-C", cwd or wt, "worktree", "remove", wt],
+                            capture_output=True, text=True, timeout=30)
+                if r.returncode == 0:
+                    # the BRANCH stays: a Claude session is bound to the
+                    # directory it ran in, and `go --continue` re-adds the
+                    # worktree at the same path from this branch. Deleting
+                    # it made every finished agent un-continuable.
+                    return "removed (nothing on the branch; branch kept for continue)"
+                return "kept: " + (r.stderr.strip()[:60] or "remove failed")
+            return "kept: unpushed (no upstream, %s unique commit%s%s)" % (
+                uniq.stdout.strip() or "?", "" if uniq.stdout.strip() == "1" else "s",
+                ", dirty" if dirty else "")
         if up.stdout.strip() != "0":
             return "kept: unpushed (%s ahead)" % up.stdout.strip()
         r = _sp.run(["git", "-C", cwd or wt, "worktree", "remove", wt],
@@ -629,7 +662,7 @@ def spend(ledger: Optional[str] = None) -> Dict[str, Any]:
     kinds = []
     for k, s in by_kind.items():
         cap = budget_for(k, rows=rows)
-        kinds.append({"kind": k, "runs": s["runs"],
+        kinds.append({"kind": k, "runs": s["runs"], "turns": s["turns"],
                       "usd": round(s["usd"], 4),
                       "avg": round(s["usd"] / s["runs"], 4) if s["runs"] else 0,
                       "lo": round(min(s["costs"]), 4) if s["costs"] else 0,

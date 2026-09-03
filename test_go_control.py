@@ -24,6 +24,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 
 SKILL = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SKILL)
@@ -53,14 +54,23 @@ def _git_repo(t):
 
 
 def _launch(cwd, name="goal-x", **kw):
+    """Always into a scratch log dir. The first cut wrote fake logs — pid
+    4242, no result line — into the owner's real agents/ dir, where the
+    live AGENTS panel then listed them as 'died without reporting'."""
     _Popen.calls = []
     old = go.WORKTREE_ROOT
+    old_logs = go.HEADLESS_LOG_DIR
     go.WORKTREE_ROOT = kw.pop("worktree_root", go.WORKTREE_ROOT)
+    if not os.path.commonpath([go.HEADLESS_LOG_DIR, tempfile.gettempdir()]) == tempfile.gettempdir():
+        go.HEADLESS_LOG_DIR = tempfile.mkdtemp(prefix="agents-")
     try:
         ok = go._headless(cwd, "do the thing", name, "sonnet", "high", 1.0,
                           popen=_Popen, **kw)
     finally:
         go.WORKTREE_ROOT = old
+        if go.HEADLESS_LOG_DIR != old_logs:
+            _launch.last_logs = go.HEADLESS_LOG_DIR
+            go.HEADLESS_LOG_DIR = old_logs
     assert ok and _Popen.calls, "nothing launched"
     return _Popen.calls[-1]
 
@@ -390,6 +400,180 @@ def test_interrupts_are_counted_when_the_message_is_a_LIST():
             models.PROJECTS = old
         m = [r for r in out["models"] if r["model"] == "claude-test-1"][0]
         assert m["interrupted"] == 1, m
+
+
+# ---------------------------------------------------------------------------
+# progress you can SEE: the run is a stream, the card reads it
+# ---------------------------------------------------------------------------
+#
+# Verified live 2026-09-03: `--output-format stream-json --verbose` emits one
+# event per turn (assistant messages with usage and tool_use blocks, user
+# tool results, and the same final `result` object — structured_output and
+# total_cost_usd included — so the ledger reads it unchanged). Before this,
+# a running agent was a log with a four-line header and nothing else until
+# it finished: "running in the background" was a guess, and there was no
+# number to put a bar against.
+
+STREAM = "\n".join([
+    '{"type":"system","subtype":"init","session_id":"s1"}',
+    '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"looking"}],"usage":{"output_tokens":40}}}',
+    '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Read","input":{}}],"usage":{"output_tokens":20}}}',
+    '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"x"}]}}',
+    '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{"command":"git log"}}],"usage":{"output_tokens":30}}}',
+])
+
+
+def _stream_log(d, name="goal-x", pid=4242, result=False):
+    p = os.path.join(d, "20260903-090000-%s.log" % name)
+    body = ("# %s\n# cwd: /tmp\n# model: opus effort: max budget: 2\n# session: abc\n"
+            "# worktree: /tmp/wt\n# branch: agent/x\n# pid: %d\n\n" % (name, pid)) + STREAM + "\n"
+    if result:
+        body += json.dumps({"type": "result", "subtype": "success", "is_error": False,
+                            "total_cost_usd": 0.5, "num_turns": 3, "structured_output": {"ok": True}}) + "\n"
+    open(p, "w").write(body)
+    return p
+
+
+def test_a_dispatch_STREAMS_and_records_its_pid():
+    with tempfile.TemporaryDirectory() as t:
+        old = go.HEADLESS_LOG_DIR
+        go.HEADLESS_LOG_DIR = os.path.join(t, "logs")
+        try:
+            c = _launch(_git_repo(t), worktree_root=os.path.join(t, "wt"))
+            assert _flag(c["argv"], "--output-format") == "stream-json", c["argv"]
+            assert "--verbose" in c["argv"], "stream-json needs --verbose or the events are not printed"
+            head = [l.rstrip() for l in open(go._headless.last["log"]).read().splitlines()[:9]]
+            assert "# pid: 4242" in head, head      # the slot is padded; the value is exact
+        finally:
+            go.HEADLESS_LOG_DIR = old
+
+
+def test_live_agents_READ_progress_from_the_stream():
+    with tempfile.TemporaryDirectory() as t:
+        _stream_log(t)
+        rows = go.live_agents(log_dir=t, alive=lambda pid: pid == 4242, now=lambda: time.time())
+        assert len(rows) == 1, rows
+        a = rows[0]
+        assert a["turns"] == 3 and a["tool_calls"] == 2 and a["last_tool"] == "Bash", a
+        assert a["alive"] is True and a["name"] == "goal-x" and a["kind"] == "goal"
+        assert a["session"] == "abc" and a["worktree"] == "/tmp/wt"
+        assert a["out_tokens"] == 90, a
+
+
+def test_a_FINISHED_agent_is_not_live_and_a_DEAD_one_says_so():
+    with tempfile.TemporaryDirectory() as t:
+        _stream_log(t, name="goal-done", result=True)
+        _stream_log(t, name="goal-dead", pid=1)
+        rows = {a["name"]: a for a in go.live_agents(log_dir=t, alive=lambda pid: False)}
+        assert "goal-done" not in rows, rows
+        assert rows["goal-dead"]["alive"] is False, rows
+        assert "died" in rows["goal-dead"]["state"], rows["goal-dead"]
+
+
+def test_the_bar_is_against_the_KINDS_median_and_overflows_instead_of_lying():
+    """A bar pinned at 100% while the run is alive is a lie. Past the median
+    it keeps counting, and says so."""
+    with tempfile.TemporaryDirectory() as t:
+        _stream_log(t)
+        rows = go.live_agents(log_dir=t, alive=lambda pid: True, medians={"goal": 2})
+        a = rows[0]
+        assert a["median_turns"] == 2 and a["progress"] > 1.0, a
+        rows = go.live_agents(log_dir=t, alive=lambda pid: True, medians={"goal": 9})
+        assert abs(rows[0]["progress"] - 3 / 9) < 1e-9
+        rows = go.live_agents(log_dir=t, alive=lambda pid: True, medians={})
+        assert rows[0]["median_turns"] is None and rows[0]["progress"] is None
+
+
+def test_a_log_that_stopped_moving_is_STALLED_not_running():
+    with tempfile.TemporaryDirectory() as t:
+        p = _stream_log(t)
+        old = os.path.getmtime(p)
+        rows = go.live_agents(log_dir=t, alive=lambda pid: True, now=lambda: old + go.STALL_AFTER_S + 5)
+        assert rows[0]["state"] == "stalled", rows[0]
+        rows = go.live_agents(log_dir=t, alive=lambda pid: True, now=lambda: old + 10)
+        assert rows[0]["state"] == "running", rows[0]
+
+
+def test_a_worktree_with_NOTHING_on_it_is_removed_after_the_run():
+    """The first live probe — a read-only revive — left its worktree
+    forever as 'kept: unpushed (no upstream)'. No commits, clean tree:
+    nothing to lose, so it goes; one commit on the branch and it stays."""
+    with tempfile.TemporaryDirectory() as t:
+        repo = _git_repo(t)
+        logs = os.path.join(t, "logs"); os.makedirs(logs)
+        old_root = go.WORKTREE_ROOT
+        go.WORKTREE_ROOT = os.path.join(t, "wt")    # never the owner's real worktrees dir
+        try:
+            _worktree_case(repo, logs, t)
+        finally:
+            go.WORKTREE_ROOT = old_root
+
+
+def _worktree_case(repo, logs, t):
+    if True:
+        for name in ("revive-clean", "goal-committed"):
+            wt, branch, why = go.make_worktree(repo, name, "20260903-000000")
+            assert branch, why
+            if name == "goal-committed":
+                open(os.path.join(wt, "b.txt"), "w").write("b\n")
+                subprocess.run(["git", "-C", wt, "add", "b.txt"], check=True)
+                subprocess.run(["git", "-C", wt, "-c", "user.email=t@t", "-c", "user.name=t",
+                                "commit", "-qm", "work"], check=True)
+            open(os.path.join(logs, "20260903-000000-%s.log" % name), "w").write(
+                "# %s\n# cwd: %s\n# model: sonnet effort: low budget: 1\n# session: s\n"
+                "# worktree: %s\n# branch: %s\n\n%s\n" % (name, repo, wt, branch, json.dumps(_res())))
+        rows = {r["name"]: r for r in models.reconcile(log_dir=logs, ledger=os.path.join(t, "s.jsonl"))["rows"]}
+        assert rows["revive-clean"]["worktree_state"].startswith("removed"), rows["revive-clean"]
+        assert not os.path.isdir(rows["revive-clean"]["worktree"])
+        assert rows["goal-committed"]["worktree_state"].startswith("kept"), rows["goal-committed"]
+        assert os.path.isdir(rows["goal-committed"]["worktree"])
+
+
+def test_the_claude_binary_is_resolved_to_a_PATH_that_exists():
+    """The brain runs under launchd with PATH=/opt/homebrew/bin:/usr/bin:/bin.
+    `claude` lives in ~/.local/bin. Every console-driven dispatch died with
+    "claude: No such file or directory" — including the one real GO the
+    campaign ever got (2026-09-03 06:38 UTC), which nobody saw because the
+    log held one line and $0. The argv carries an absolute path now."""
+    b = go.claude_bin()
+    assert os.path.isabs(b) or b == "claude", b
+    if b != "claude":
+        assert os.access(b, os.X_OK), b
+    with tempfile.TemporaryDirectory() as t:
+        c = _launch(_git_repo(t), worktree_root=os.path.join(t, "wt"))
+        argv = c["argv"]
+        exe = argv[2] if argv[0] == "caffeinate" else argv[0]
+        assert exe == b, (exe, b)
+
+
+def test_continue_RE_ADDS_a_removed_worktree_from_its_branch():
+    """Live 2026-09-03: the first console `continue` reached the binary and
+    got "No conversation found with session ID" — the probe's worktree had
+    been removed, and a session is bound to the directory it ran in."""
+    with tempfile.TemporaryDirectory() as t:
+        repo = _git_repo(t)
+        old_root, old_logs = go.WORKTREE_ROOT, go.HEADLESS_LOG_DIR
+        go.WORKTREE_ROOT = os.path.join(t, "wt"); go.HEADLESS_LOG_DIR = os.path.join(t, "logs")
+        os.makedirs(go.HEADLESS_LOG_DIR)
+        try:
+            wt, branch, why = go.make_worktree(repo, "goal-x", "20260903-000001")
+            assert branch, why
+            open(os.path.join(go.HEADLESS_LOG_DIR, "20260903-000001-goal-x.log"), "w").write(
+                "# goal-x\n# cwd: %s\n# model: sonnet effort: high budget: 1\n# session: sid-1\n"
+                "# worktree: %s\n# branch: %s\n\n" % (repo, wt, branch))
+            subprocess.run(["git", "-C", repo, "worktree", "remove", wt], check=True)
+            assert not os.path.isdir(wt)
+            _Popen.calls = []
+            r = go.continue_agent("goal-x", "carry on", popen=_Popen)
+            assert r["started"], r
+            assert os.path.isdir(wt) and _Popen.calls[-1]["cwd"] == wt, (r, _Popen.calls)
+            # branch gone too -> honest refusal, not a resume from the wrong dir
+            subprocess.run(["git", "-C", repo, "worktree", "remove", "--force", wt], check=True)
+            subprocess.run(["git", "-C", repo, "branch", "-D", branch], check=True)
+            r2 = go.continue_agent("goal-x", "carry on", popen=_Popen)
+            assert r2["started"] is False and "cannot be resumed" in r2["why"], r2
+        finally:
+            go.WORKTREE_ROOT, go.HEADLESS_LOG_DIR = old_root, old_logs
 
 
 def _main():

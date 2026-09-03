@@ -572,6 +572,27 @@ def test_every_goal_file_is_LISTED_even_with_no_steps():
         assert [x["name"] for x in cp.status(meditation_dir=med)["goals"]] == [x["name"] for x in g["goals"]]
 
 
+def test_a_RE_PLAN_refuses_to_archive_an_ARMED_campaign():
+    """It happened: armed 06:38, re-planned 06:55, the go vanished with
+    the archive and nothing said so."""
+    with tempfile.TemporaryDirectory() as t:
+        gdir, med = _world(t)
+        g = cp.build(goals_dir=gdir, meditation_dir=med, elaborator=_elab)
+        cp.save(g, med)
+        cp.go(meditation_dir=med, max_parallel=1, dispatch=lambda n: {"log": "l", "session": "s"})
+        old = cp.MEDITATION_DIR
+        cp.MEDITATION_DIR = med
+        try:
+            import io, contextlib
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                rc = cp.main(["plan", "--no-elaborate"])
+        finally:
+            cp.MEDITATION_DIR = old
+        assert rc == 1 and "ARMED" in buf.getvalue(), buf.getvalue()
+        assert cp.load(med)["id"] == g["id"], "the armed campaign was replaced"
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

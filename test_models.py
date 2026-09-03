@@ -550,6 +550,7 @@ def test_spend_rolls_up_PER_KIND_not_only_per_model():
     assert set(kinds) == {"goal", "repair"}, kinds
     g = kinds["goal"]
     assert g["runs"] == 3 and g["usd"] == 6.0, g
+    assert g["turns"] == 8, "the per-kind TURNS are what the live bar stands against"
     assert g["avg"] == 2.0 and g["lo"] == 1.0 and g["hi"] == 3.0, g
     # cache-read against output is THE cost ratio: 160k read / 4k out = 40x
     assert g["read_per_out"] == 40.0, g

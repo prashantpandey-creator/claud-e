@@ -125,7 +125,7 @@ def ideate_with_claude(goal: str, done: List[str], opens: List[str], cwd: str = 
         "ideas object.%s"
         % (title or goal, "; ".join(done[:12]) or "none", "; ".join(opens[:12]) or "none",
            ("\nContext: " + note[:600]) if note else ""))
-    argv = ["claude", "-p", prompt, "--model", "sonnet", "--output-format", "json",
+    argv = [_claude(), "-p", prompt, "--model", "sonnet", "--output-format", "json",
             "--permission-mode", "dontAsk", "--max-budget-usd", str(ELABORATE_BUDGET_USD),
             "--json-schema", json.dumps(IDEAS_SCHEMA),
             "--disallowedTools", "Edit Write NotebookEdit Bash(git commit:*) Bash(git push:*) Bash(rm:*)"]
@@ -141,6 +141,14 @@ def ideate_with_claude(goal: str, done: List[str], opens: List[str], cwd: str = 
             so = d.get("structured_output") or {}
             return [x for x in (so.get("ideas") or []) if isinstance(x, dict) and x.get("title")]
     raise RuntimeError("planner returned no ideas object")
+
+
+def _claude() -> str:
+    try:
+        import go as _go
+        return _go.claude_bin()
+    except Exception:
+        return "claude"
 
 
 def _now_iso() -> str:
@@ -193,7 +201,7 @@ def elaborate_with_claude(goal: str, milestone: str, cwd: str = "",
         "change code, 'assess' for steps that only look. Do not do any of "
         "the steps. Return the steps object.%s"
         % (title or goal, milestone, ("\nContext: " + note[:600]) if note else ""))
-    argv = ["claude", "-p", prompt, "--model", "sonnet", "--output-format", "json",
+    argv = [_claude(), "-p", prompt, "--model", "sonnet", "--output-format", "json",
             "--permission-mode", "dontAsk", "--max-budget-usd", str(ELABORATE_BUDGET_USD),
             "--json-schema", json.dumps(STEPS_SCHEMA),
             "--disallowedTools", "Edit Write NotebookEdit Bash(git commit:*) Bash(git push:*) Bash(rm:*)"]
@@ -989,46 +997,59 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("args", nargs="*")
     ap.add_argument("--max", type=int, default=None, help="agents at a time")
     ap.add_argument("--no-elaborate", action="store_true", help="milestones only, no planner calls")
+    ap.add_argument("--force", action="store_true", help="re-plan even if the current campaign is armed")
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
 
+    md = MEDITATION_DIR       # read at call time: defaults bind at def time,
+                              # and a test that reassigned the global still
+                              # wrote a plan built from its fixture goals into
+                              # the owner's real campaign.json (2026-09-04)
     if a.verb == "plan":
-        g = build(elaborate=not a.no_elaborate)
-        save(g)
+        cur = load(md)
+        if cur and cur.get("armed") and not a.force:
+            # A re-plan archives the current campaign. Done to an ARMED one
+            # it silently threw away the owner's go — it happened on
+            # 2026-09-03: armed 06:38, re-planned 06:55, nobody told.
+            print("refusing: the current campaign is ARMED (go given %s). "
+                  "pause it first, or --force to archive it." % cur.get("armed_at", "?"))
+            return 1
+        g = build(elaborate=not a.no_elaborate, meditation_dir=md)
+        save(g, md)
         if a.json:
             print(json.dumps({"ok": True, "data": {"id": g["id"], "totals": g["totals"],
                                                    "notes": g["notes"]}}))
         else:
             print(render(g))
-            print("\nwritten: %s" % os.path.join(MEDITATION_DIR, PAGE_NAME))
+            print("\nwritten: %s" % os.path.join(md, PAGE_NAME))
         return 0
     if a.verb == "show":
-        g = load()
+        g = load(md)
         print(render(g) if g else "no campaign planned — run: meditate campaign plan")
         return 0 if g else 1
     if a.verb == "go":
-        r = go(max_parallel=a.max)
+        r = go(meditation_dir=md, max_parallel=a.max)
         print(json.dumps(r) if a.json else
               ("armed — dispatched %d: %s" % (len(r.get("dispatched", [])), ", ".join(r.get("dispatched", [])))
                if r.get("armed") else "not armed: %s" % r.get("why")))
         return 0 if r.get("armed") else 1
     if a.verb == "tick":
-        r = tick(max_parallel=a.max)
-        print(json.dumps(r) if a.json else render_status(status()))
+        r = tick(meditation_dir=md, max_parallel=a.max)
+        print(json.dumps(r) if a.json else render_status(status(md)))
         return 0
     if a.verb == "status":
-        s = status()
+        s = status(md)
         print(json.dumps({"ok": True, "data": s}) if a.json else render_status(s))
         return 0
     if a.verb == "pause":
-        r = pause(why=" ".join(a.args) or "paused by owner")
+        r = pause(meditation_dir=md, why=" ".join(a.args) or "paused by owner")
         print(json.dumps(r) if a.json else "paused — " + r.get("why", ""))
         return 0
     if a.verb == "accept":
         if not a.args:
             print("usage: campaign accept <node-id>")
             return 2
-        r = accept(a.args[0])
+        r = accept(a.args[0], meditation_dir=md)
         print(json.dumps(r) if a.json else ("accepted %s" % r["node"] if r.get("ok") else "could not accept: " + r.get("why", "")))
         return 0 if r.get("ok") else 1
     if a.verb in ("discard", "discard-goal", "restore"):
@@ -1036,9 +1057,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             print("usage: campaign %s <name> [reason]" % a.verb)
             return 2
         if a.verb == "discard":
-            r = discard_proposed(a.args[0], reason=" ".join(a.args[1:]))
+            r = discard_proposed(a.args[0], meditation_dir=md, reason=" ".join(a.args[1:]))
         elif a.verb == "discard-goal":
-            r = discard_goal(a.args[0], reason=" ".join(a.args[1:]))
+            r = discard_goal(a.args[0], meditation_dir=md, reason=" ".join(a.args[1:]))
         else:
             import goals as gl
             r = gl.restore_discarded(a.args[0])
@@ -1048,21 +1069,21 @@ def main(argv: Optional[List[str]] = None) -> int:
         if not a.args:
             print("usage: campaign done <node-id> [note]")
             return 2
-        r = done(a.args[0], note=" ".join(a.args[1:]))
+        r = done(a.args[0], meditation_dir=md, note=" ".join(a.args[1:]))
         print(json.dumps(r) if a.json else ("done — %d step(s) can move" % len(r.get("unblocked", [])) if r.get("ok") else "could not: " + r.get("why", "")))
         return 0 if r.get("ok") else 1
     if a.verb == "accept-goal":
         if not a.args:
             print("usage: campaign accept-goal <name>")
             return 2
-        r = accept_goal(a.args[0])
+        r = accept_goal(a.args[0], meditation_dir=md)
         print(json.dumps(r) if a.json else ("written %s — re-plan to bring it in" % r["path"] if r.get("ok") else "could not accept: " + r.get("why", "")))
         return 0 if r.get("ok") else 1
     if a.verb == "steer":
         if len(a.args) < 2:
             print("usage: campaign steer <node-id> \"message\"")
             return 2
-        r = steer(a.args[0], " ".join(a.args[1:]))
+        r = steer(a.args[0], " ".join(a.args[1:]), meditation_dir=md)
         print(json.dumps(r) if a.json else
               ("steering %s — log %s" % (r["node"], r["log"]) if r.get("ok") else "could not steer: " + r.get("why", "")))
         return 0 if r.get("ok") else 1

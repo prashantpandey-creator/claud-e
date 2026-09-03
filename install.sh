@@ -443,7 +443,11 @@ d = {"Label": label, "ProgramArguments": sys.argv[4:],
      "RunAtLoad": True,
      "KeepAlive": True if keep == "always" else {"SuccessfulExit": False},
      "ProcessType": "Interactive", "Nice": -5,
-     "EnvironmentVariables": {"PATH": "/opt/homebrew/bin:/usr/bin:/bin"},
+     # ~/.local/bin is where `claude` lives. Without it every console
+     # dispatch died with "claude: No such file or directory" — one line in
+     # the log, $0, unseen. go.py resolves the binary by absolute path now
+     # as well; this keeps the server's own PATH honest.
+     "EnvironmentVariables": {"PATH": __import__("os").path.expanduser("~/.local/bin") + ":/opt/homebrew/bin:/usr/bin:/bin"},
      "StandardOutPath": "/tmp/%s.log" % label,
      "StandardErrorPath": "/tmp/%s.log" % label}
 with open(plist, "wb") as f:

@@ -261,15 +261,32 @@ def make_worktree(cwd: str, name: str, stamp: str):
 
 
 def _write_header(fh, name, cwd, model, effort, budget_usd, sid, wt, branch,
-                  continues=""):
+                  continues="", pid_slot=False):
     fh.write("# %s\n# cwd: %s\n# model: %s effort: %s budget: %s\n"
              "# session: %s\n# worktree: %s\n# branch: %s\n"
              % (name, cwd, model or "sonnet", effort or "default",
                 budget_usd or "none", sid, wt if wt != cwd else "", branch))
     if continues:
         fh.write("# continues: %s\n" % continues)
+    if pid_slot:
+        # a fixed-width slot the pid is written into after Popen returns —
+        # the header is complete before the process starts writing below it
+        fh.write("# pid: " + " " * 10 + "\n")
     fh.write("\n")
     fh.flush()
+
+
+def _fill_pid(log: str, pid: int) -> None:
+    try:
+        with open(log, "r+") as fh:
+            head = fh.read(2000)
+            i = head.find("# pid: ")
+            if i < 0:
+                return
+            fh.seek(i)
+            fh.write(("# pid: %d" % pid).ljust(len("# pid: ") + 10))
+    except OSError:
+        pass
 
 
 def _wrap_awake(argv: List[str]) -> List[str]:
@@ -313,12 +330,15 @@ def _headless(cwd: str, prompt: str, name: str, model: str = "",
             run_cwd, branch, why = cwd, "", "isolation off"
         if not os.path.isdir(run_cwd):
             run_cwd = os.path.expanduser("~")
-        argv = ["claude", "-p", prompt, "--model", model or "sonnet",
-                # --output-format json so the agent REPORTS ITS OWN SPEND.
-                # Measured 2026-08-30: the result line carries total_cost_usd,
-                # num_turns, duration_ms and per-model usage — real money from
-                # the CLI itself, so no price table has to be guessed at.
-                "--output-format", "json",
+        argv = [claude_bin(), "-p", prompt, "--model", model or "sonnet",
+                # stream-json so the run can be WATCHED: one event per turn
+                # (assistant messages with usage and tool_use, tool results)
+                # and the same final `result` object json mode gave — the
+                # ledger reads it unchanged (verified live 2026-09-03:
+                # structured_output and total_cost_usd both present). Before
+                # this the log held a header and nothing else until the end,
+                # and "running in the background" was a guess.
+                "--output-format", "stream-json", "--verbose",
                 "--session-id", sid,
                 "--permission-mode", "dontAsk"]
         # A REAL cap, enforced by the CLI — the turn ceiling never was.
@@ -329,18 +349,122 @@ def _headless(cwd: str, prompt: str, name: str, model: str = "",
         argv += role_argv(kind_of(name))
         with open(log, "w") as fh:
             _write_header(fh, name, cwd, model, effort, budget_usd, sid,
-                          run_cwd, branch)
-            popen(_wrap_awake(argv), cwd=run_cwd, stdout=fh,
-                  stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-                  start_new_session=True)
+                          run_cwd, branch, pid_slot=True)
+            proc = popen(_wrap_awake(argv), cwd=run_cwd, stdout=fh,
+                         stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                         start_new_session=True)
+        pid = int(getattr(proc, "pid", 0) or 0)
+        if pid:
+            _fill_pid(log, pid)
         _headless.last = {"session": sid, "worktree": run_cwd if branch else "",
-                          "branch": branch, "why": why, "log": log, "argv": argv}
+                          "branch": branch, "why": why, "log": log, "argv": argv, "pid": pid}
         return True
     except (OSError, ValueError):
         return False
 
 
 _headless.last = {}
+
+
+def claude_bin() -> str:
+    """The claude binary by absolute path. The brain runs under launchd
+    with PATH=/opt/homebrew/bin:/usr/bin:/bin and the binary is in
+    ~/.local/bin, so a bare "claude" died on every console dispatch —
+    silently, one line in the log, $0 — including the one real GO the
+    campaign ever received. Resolved once, the same answer from any PATH."""
+    found = shutil.which("claude")
+    if found:
+        return found
+    for cand in (os.path.expanduser("~/.local/bin/claude"), "/opt/homebrew/bin/claude",
+                 "/usr/local/bin/claude"):
+        if os.access(cand, os.X_OK):
+            return cand
+    return "claude"
+
+
+STALL_AFTER_S = 20 * 60
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except (OSError, ProcessLookupError):
+        return False
+
+
+def live_agents(log_dir: Optional[str] = None, alive=None, now=None,
+                medians: Optional[Dict[str, float]] = None,
+                max_age_h: float = 24.0) -> List[Dict[str, Any]]:
+    """Every dispatched agent that has not reported a result, read from its
+    own stream: turns so far, tool calls, the last tool, output tokens,
+    elapsed, whether the process is alive, whether the log still moves.
+
+    `progress` is turns over the KIND's median turns from the spend ledger —
+    and it goes past 1.0 rather than sitting at 100% while the run is
+    alive. None when there is no median to stand it against.
+    """
+    import glob as _g
+    log_dir = log_dir or HEADLESS_LOG_DIR
+    alive = alive or _pid_alive
+    now_f = now or time.time
+    t = now_f()
+    if medians is None:
+        medians = {}
+        try:
+            import models as _md
+            for k in _md.spend().get("per_kind") or []:
+                if k.get("runs") and k.get("turns"):
+                    medians[k["kind"]] = k["turns"] / float(k["runs"])
+        except Exception:
+            medians = {}
+    out: List[Dict[str, Any]] = []
+    for p in sorted(_g.glob(os.path.join(log_dir, "*.log")), reverse=True):
+        try:
+            mt = os.path.getmtime(p)
+            if t - mt > max_age_h * 3600:
+                continue
+            text = open(p, errors="replace").read()
+        except OSError:
+            continue
+        if '"total_cost_usd"' in text and '"type": "result"' in text.replace('"type":"result"', '"type": "result"'):
+            continue                      # finished: the ledger's, not ours
+        h = _head(p)
+        name = os.path.basename(p)[16:-4] if os.path.basename(p)[:15].replace("-", "").isdigit() else os.path.basename(p)[:-4]
+        pid = int((h.get("pid") or "0").strip() or 0)
+        turns = tools = out_tok = 0
+        last_tool = ""
+        for ln in text.splitlines():
+            if not ln.startswith("{"):
+                continue
+            try:
+                e = json.loads(ln)
+            except ValueError:
+                continue
+            if e.get("type") == "assistant":
+                turns += 1
+                msg = e.get("message") or {}
+                out_tok += int((msg.get("usage") or {}).get("output_tokens") or 0)
+                for b in msg.get("content") or []:
+                    if isinstance(b, dict) and b.get("type") == "tool_use":
+                        tools += 1
+                        last_tool = b.get("name") or last_tool
+        is_alive = bool(pid) and bool(alive(pid))
+        stalled = (t - mt) > STALL_AFTER_S
+        state = ("running" if is_alive and not stalled else
+                 "stalled" if is_alive else
+                 "died without reporting" if pid else "no pid recorded")
+        kind = kind_of(name)
+        med = medians.get(kind)
+        out.append({"name": name, "kind": kind, "log": p, "pid": pid, "alive": is_alive,
+                    "state": state, "turns": turns, "tool_calls": tools, "last_tool": last_tool,
+                    "out_tokens": out_tok, "elapsed_s": int(t - os.path.getctime(p)),
+                    "since_move_s": int(t - mt), "session": h.get("session", ""),
+                    "worktree": h.get("worktree", ""), "branch": h.get("branch", ""),
+                    "cwd": h.get("cwd", ""), "model": h.get("model", ""),
+                    "median_turns": med,
+                    "progress": (turns / med) if med else None})
+    return out
 
 
 def _find_log(name: str) -> Optional[str]:
@@ -385,12 +509,31 @@ def continue_agent(name: str, message: str, popen=None) -> Dict[str, Any]:
     if not sid:
         return {"started": False, "why": "log has no session id: %s" % old}
     wt = h.get("worktree", "")
+    branch = h.get("branch", "")
+    # A Claude session is bound to the directory it ran in: resuming from
+    # anywhere else answers "No conversation found with session ID". The
+    # worktree dir is disposable (reconcile removes clean ones) but its
+    # branch is kept, so the same path is re-added from it here.
+    if wt and not os.path.isdir(wt) and branch:
+        top = _repo_top(h.get("cwd", "")) or ""
+        if top:
+            try:
+                os.makedirs(os.path.dirname(wt), exist_ok=True)
+                subprocess.run(["git", "-C", top, "worktree", "add", "-q", wt, branch],
+                               capture_output=True, text=True, timeout=60)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+    if wt and not os.path.isdir(wt):
+        return {"started": False,
+                "why": "the session ran in %s, which is gone and could not be re-added "
+                       "(branch %s missing?) — a session cannot be resumed from another directory"
+                       % (wt, branch or "?")}
     run_cwd = wt if wt and os.path.isdir(wt) else h.get("cwd", "")
     if not os.path.isdir(run_cwd):
         run_cwd = os.path.expanduser("~")
     stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
     log = os.path.join(HEADLESS_LOG_DIR, "%s-%s.log" % (stamp, name[:40]))
-    argv = ["claude", "-p", message, "--resume", sid,
+    argv = [claude_bin(), "-p", message, "--resume", sid,
             "--output-format", "json", "--permission-mode", "dontAsk"]
     argv += role_argv(kind_of(name))
     try:

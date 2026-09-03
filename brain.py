@@ -19,6 +19,7 @@ import os
 import sys
 import threading
 import time
+import shutil
 import subprocess
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, List, Optional
@@ -1398,6 +1399,11 @@ class _Handler(BaseHTTPRequestHandler):
                 # open milestone (read-only, ~$0.35 each, minutes) so it runs
                 # detached; the page polls /api/campaign until a plan exists.
                 try:
+                    import campaign as _cp
+                    cur = _cp.load()
+                    if cur and cur.get("armed"):
+                        raise RuntimeError("the current campaign is armed (go given %s) — pause it before re-planning"
+                                           % cur.get("armed_at", "?"))
                     _log_brain_action("plan-all", arg)
                     cmd = ["python3", os.path.join(SKILL_DIR, "campaign.py"), "plan"]
                     if arg == "fast":
@@ -1431,6 +1437,41 @@ class _Handler(BaseHTTPRequestHandler):
                     _log_brain_action("pause-all", arg)
                     r = _cp.pause(why=arg or "paused from the console")
                     res = {"started": True, "output": "paused — " + r.get("why", "")}
+                except Exception as e:
+                    res = {"started": False, "output": str(e)[:160]}
+            elif action == "tail":
+                # "See it in the terminal": a Terminal window tailing the
+                # agent's own log. macOS only; elsewhere the reply names the
+                # file so the owner can tail it himself.
+                try:
+                    import go as _go
+                    _log_brain_action("tail", arg)
+                    lg = _go._find_log(arg) or ""
+                    if not lg:
+                        res = {"started": False, "output": "no log for %s" % arg}
+                    elif shutil.which("osascript"):
+                        subprocess.Popen(["osascript", "-e",
+                                          'tell application "Terminal" to do script "tail -f %s"' % lg.replace('"', '\\"'),
+                                          "-e", 'tell application "Terminal" to activate'],
+                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        res = {"started": True, "output": "opened a Terminal tailing " + os.path.basename(lg)}
+                    else:
+                        res = {"started": True, "output": "tail -f " + lg}
+                except Exception as e:
+                    res = {"started": False, "output": str(e)[:160]}
+            elif action == "continue":
+                # SendMessage for an ad-hoc agent: arg = name, value = message.
+                try:
+                    import go as _go
+                    msg = str(req.get("value") or "").strip()
+                    if not msg:
+                        res = {"started": False, "output": "say what to tell it"}
+                    else:
+                        _log_brain_action("continue", arg)
+                        r = _go.continue_agent(arg, msg)
+                        res = {"started": bool(r.get("started")),
+                               "output": ("continuing %s in its own session" % arg) if r.get("started")
+                               else r.get("why", "could not continue")}
                 except Exception as e:
                     res = {"started": False, "output": str(e)[:160]}
             elif action in ("discard-proposed", "discard-goal"):
@@ -1619,6 +1660,17 @@ class _Handler(BaseHTTPRequestHandler):
                 ctype = "application/json"
             elif self.path == "/api/swarm":
                 body = json.dumps(_swarm_cached()).encode()
+                ctype = "application/json"
+            elif self.path == "/api/agents":
+                # Every dispatched agent still running, read from its own
+                # stream: turns, tool calls, last tool, elapsed, alive,
+                # stalled, and a bar against its kind's median turns.
+                try:
+                    import go as _go
+                    body = json.dumps({"agents": _go.live_agents(),
+                                       "stall_after_s": _go.STALL_AFTER_S}).encode()
+                except Exception as e:
+                    body = json.dumps({"agents": [], "error": str(e)[:160]}).encode()
                 ctype = "application/json"
             elif self.path == "/api/campaign":
                 # The all-goals run: the graph, its numbers, and whether it
