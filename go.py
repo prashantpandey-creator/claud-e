@@ -568,7 +568,8 @@ def _head(path: str) -> Dict[str, str]:
     return out
 
 
-def continue_agent(name: str, message: str, popen=None) -> Dict[str, Any]:
+def continue_agent(name: str, message: str, popen=None,
+                   budget_usd: float = 0.0) -> Dict[str, Any]:
     """SendMessage for the swarm: resume the agent's own session with a new
     message. The id was in every log since 2026-08-30 and read by nothing.
 
@@ -615,6 +616,10 @@ def continue_agent(name: str, message: str, popen=None) -> Dict[str, Any]:
     log = os.path.join(HEADLESS_LOG_DIR, "%s-%s.log" % (stamp, name[:40]))
     argv = [claude_bin(), "-p", message, "--resume", sid,
             "--output-format", "json", "--permission-mode", role_mode(kind_of(name))]
+    # A resume without a cap is an unbounded run — the first three resumes
+    # had none. The cap is the caller's (the node's, or what the owner set).
+    if budget_usd:
+        argv += ["--max-budget-usd", str(budget_usd)]
     argv += role_argv(kind_of(name))
     try:
         os.makedirs(HEADLESS_LOG_DIR, exist_ok=True)

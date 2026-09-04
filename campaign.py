@@ -751,7 +751,8 @@ def dispatch_real(n: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         # the wall the agent hit has been cleared by the owner: the SAME
         # session continues with that fact, instead of a fresh agent
         # rediscovering everything up to the wall
-        r = go.continue_agent(n["name"], n["resume_message"])
+        r = go.continue_agent(n["name"], n["resume_message"],
+                              budget_usd=float(a.get("budget_usd") or 0))
         if r.get("started"):
             return {"log": r.get("log", ""), "session": r.get("session", n["session"]),
                     "worktree": n.get("worktree", ""), "why": "resumed"}
@@ -1022,7 +1023,8 @@ def steer(node_id: str, message: str, meditation_dir: str = MEDITATION_DIR,
         return {"ok": False, "why": "no node %s" % node_id}
     if continue_fn is None:
         import go as _go
-        continue_fn = _go.continue_agent
+        cap = float((n.get("agent") or {}).get("budget_usd") or 0)
+        continue_fn = lambda name, msg: _go.continue_agent(name, msg, budget_usd=cap)
     r = continue_fn(n["name"], message) or {}
     if not r.get("started"):
         return {"ok": False, "why": r.get("why", "could not continue")}

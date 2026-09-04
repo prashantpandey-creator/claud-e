@@ -193,6 +193,14 @@ def test_continue_RESUMES_the_same_session():
         assert _flag(argv, "--resume") == sid, argv
         assert "also fix the tests" in argv
         assert _flag(argv, "--permission-mode") == "acceptEdits"
+        assert "--max-budget-usd" not in argv, "no cap asked for, none invented"
+        _Popen.calls = []
+        go.HEADLESS_LOG_DIR = logs
+        try:
+            go.continue_agent("goal-x", "more", popen=_Popen, budget_usd=6.0)
+        finally:
+            go.HEADLESS_LOG_DIR = old
+        assert _flag(_Popen.calls[-1]["argv"], "--max-budget-usd") == "6.0", "a resume must carry its cap"
         head = open(r["log"]).read().splitlines()[:8]
         assert "# session: " + sid in head, head
         assert any(l.startswith("# continues: ") for l in head), head
