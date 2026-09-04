@@ -29,6 +29,7 @@ import argparse
 import glob
 import json
 import os
+import time
 import sys
 from typing import Any, Dict, List, Optional
 
@@ -538,7 +539,34 @@ def reconcile(log_dir: Optional[str] = None,
             continue
         res = _result_line(text)
         if res is None:
-            pending += 1          # still running, or died before reporting
+            # A run the CLI refused — "claude: No such file or directory",
+            # "No conversation found with session ID …" — is a FAILED run,
+            # not a pending one. Its body is one non-event line and it is
+            # older than any start-up takes. Recorded at cost 0 so it leaves
+            # the live panel and counts against nothing but honesty.
+            body = [ln for ln in text.splitlines() if ln.strip() and not ln.startswith("#")]
+            first = body[0].strip() if body else ""
+            try:
+                age = time.time() - os.path.getmtime(path)
+            except OSError:
+                age = 0
+            if first and not first.startswith("{") and age > 600:
+                head = {}
+                for ln in text.splitlines()[:9]:
+                    if ln.startswith("# ") and ":" in ln:
+                        k, _, v = ln[2:].partition(":")
+                        head[k.strip()] = v.strip()
+                added.append({"log": key, "name": key.split("-", 2)[-1].replace(".log", ""),
+                              "model": (head.get("model", "") or "").split(" effort")[0].strip(),
+                              "alias": (head.get("model", "") or "").split(" effort")[0].strip(),
+                              "effort": "", "ok": False, "cost_usd": 0.0, "turns": 0,
+                              "duration_ms": 0, "out_tokens": 0, "cache_creation": 0, "cache_read": 0,
+                              "subtype": "died", "died": first[:160], "denials": 0,
+                              "session": head.get("session", ""), "worktree": head.get("worktree", ""),
+                              "branch": head.get("branch", ""), "produced": None,
+                              "verified_commits": [], "worktree_state": "none"})
+                continue
+            pending += 1          # still running, or too young to call
             continue
         head = {}
         for ln in text.splitlines()[:9]:

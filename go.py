@@ -411,9 +411,19 @@ def _pid_alive(pid: int) -> bool:
         return False
 
 
+def _stamp_epoch(path: str) -> Optional[float]:
+    """The dispatch time from the log's own name (UTC stamp)."""
+    import calendar
+    b = os.path.basename(path)
+    try:
+        return float(calendar.timegm(time.strptime(b[:15], "%Y%m%d-%H%M%S")))
+    except (ValueError, IndexError):
+        return None
+
+
 def live_agents(log_dir: Optional[str] = None, alive=None, now=None,
                 medians: Optional[Dict[str, float]] = None,
-                max_age_h: float = 24.0) -> List[Dict[str, Any]]:
+                max_age_h: float = 24.0, ledger: Optional[str] = None) -> List[Dict[str, Any]]:
     """Every dispatched agent that has not reported a result, read from its
     own stream: turns so far, tool calls, the last tool, output tokens,
     elapsed, whether the process is alive, whether the log still moves.
@@ -436,8 +446,22 @@ def live_agents(log_dir: Optional[str] = None, alive=None, now=None,
                     medians[k["kind"]] = k["turns"] / float(k["runs"])
         except Exception:
             medians = {}
+    # what the ledger already holds is finished — done, or died and recorded
+    seen: set = set()
+    try:
+        import models as _md
+        with open(ledger or _md.SPEND_LEDGER) as f:
+            for ln in f:
+                try:
+                    seen.add(json.loads(ln).get("log"))
+                except ValueError:
+                    continue
+    except (OSError, ImportError):
+        pass
     out: List[Dict[str, Any]] = []
     for p in sorted(_g.glob(os.path.join(log_dir, "*.log")), reverse=True):
+        if os.path.basename(p) in seen:
+            continue
         try:
             mt = os.path.getmtime(p)
             if t - mt > max_age_h * 3600:
@@ -484,7 +508,11 @@ def live_agents(log_dir: Optional[str] = None, alive=None, now=None,
         med = medians.get(kind)
         out.append({"name": name, "kind": kind, "log": p, "pid": pid, "alive": is_alive,
                     "state": state, "turns": turns, "tool_calls": tools, "last_tool": last_tool,
-                    "out_tokens": out_tok, "elapsed_s": int(t - os.path.getctime(p)),
+                    "out_tokens": out_tok,
+                    # from the dispatch stamp in the name: ctime moves on
+                    # every write on macOS, and a busy agent read "1s" for
+                    # its whole life
+                    "elapsed_s": int(t - (_stamp_epoch(p) or mt)),
                     "since_move_s": int(t - mt), "session": h.get("session", ""),
                     "worktree": h.get("worktree", ""), "branch": h.get("branch", ""),
                     "cwd": h.get("cwd", ""), "model": h.get("model", ""),

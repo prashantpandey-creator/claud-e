@@ -631,6 +631,56 @@ def test_a_worktree_is_cut_from_ORIGIN_when_the_checkout_is_stale():
             go.WORKTREE_ROOT = old_root
 
 
+def test_elapsed_counts_from_the_DISPATCH_not_the_last_write():
+    """ctime on macOS moves on every write, so a busy agent read 'elapsed
+    1s' for its whole life. The filename carries the dispatch stamp."""
+    with tempfile.TemporaryDirectory() as t:
+        _stream_log(t)      # 20260903-090000
+        import calendar
+        t0 = calendar.timegm(time.strptime("20260903-090000", "%Y%m%d-%H%M%S"))
+        rows = go.live_agents(log_dir=t, alive=lambda pid: True, now=lambda: t0 + 125, max_age_h=1e9)
+        assert rows[0]["elapsed_s"] == 125, rows[0]["elapsed_s"]
+
+
+def test_a_DEAD_log_is_ledgered_as_a_failure_and_leaves_the_live_list():
+    """'died: claude: No such file or directory' sat on the panel for a day.
+    A run the CLI refused is a failed run: reconcile records it (cost 0,
+    subtype died) and the live list skips what the ledger holds."""
+    with tempfile.TemporaryDirectory() as t:
+        logs = os.path.join(t, "logs"); os.makedirs(logs)
+        p = os.path.join(logs, "20260903-000002-goal-y.log")
+        open(p, "w").write("# goal-y\n# cwd: /tmp\n# model: sonnet effort: low budget: 1\n# session: s\n"
+                           "# worktree: \n# branch: \n\nclaude: No such file or directory\n")
+        old = os.path.getmtime(p); os.utime(p, (old - 3600, old - 3600))
+        led = os.path.join(t, "s.jsonl")
+        r = models.reconcile(log_dir=logs, ledger=led)
+        row = [x for x in r["rows"] if x["name"] == "goal-y"]
+        assert row and row[0]["ok"] is False and row[0]["subtype"] == "died" and row[0]["cost_usd"] == 0, r
+        assert "No such file" in row[0]["died"], row[0]
+        assert go.live_agents(log_dir=logs, alive=lambda pid: False, ledger=led) == []
+        # a young log that has not started yet is NOT a death
+        p2 = os.path.join(logs, "20260903-000003-goal-z.log")
+        open(p2, "w").write("# goal-z\n# cwd: /tmp\n# model: sonnet effort: low budget: 1\n# session: s\n# worktree: \n# branch: \n\n")
+        r2 = models.reconcile(log_dir=logs, ledger=led)
+        assert not [x for x in r2["rows"] if x["name"] == "goal-z"], r2
+
+
+def test_a_goal_agent_can_actually_WORK_under_dontAsk():
+    """The first real campaign agent (2026-09-04, opus, $1.16, 10 turns, 4
+    denials): 'Bash tool is denied session-wide'. The allowlist named git
+    subcommands one by one, so `git status --short` and every `cd … && …`
+    were refused, and npm/tsc/gradlew were not there at all. Programs are
+    allowed; the dangerous forms are denied by name; deny wins."""
+    with tempfile.TemporaryDirectory() as t:
+        c = _launch(_git_repo(t), worktree_root=os.path.join(t, "wt"))
+        allowed = c["argv"][c["argv"].index("--allowedTools") + 1]
+        denied = c["argv"][c["argv"].index("--disallowedTools") + 1]
+        for need in ("Bash(git:*)", "Bash(cd:*)", "Bash(npm:*)", "Bash(python3:*)", "Bash(./gradlew:*)"):
+            assert need in allowed, need
+        for bad in ("Bash(git push --force:*)", "Bash(rm -rf:*)", "Bash(sudo:*)", "Bash(git reset --hard:*)"):
+            assert bad in denied, bad
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]
