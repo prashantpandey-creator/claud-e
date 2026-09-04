@@ -779,6 +779,17 @@ def test_a_node_whose_session_is_in_a_GUARDED_worktree_is_handed_to_a_fresh_agen
         assert "designed the fix" in seen["prompt"] and "cleared by the owner" in seen["prompt"]
 
 
+def test_an_EMPTY_prediction_is_not_a_cache_hit():
+    with tempfile.TemporaryDirectory() as t:
+        repo, gdir, med = _projects_world(t)
+        calls = []
+        def empty(project, path, sha, goal):
+            calls.append(1); return []
+        cp.predict(repos={"shop": repo}, goals_dir=gdir, meditation_dir=med, predictor=empty)
+        cp.predict(repos={"shop": repo}, goals_dir=gdir, meditation_dir=med, predictor=empty)
+        assert len(calls) == 2, "an empty result was cached as an answer"
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

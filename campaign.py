@@ -314,7 +314,9 @@ def predict(repos: Optional[Dict[str, str]] = None, goals_dir: Optional[str] = N
             continue
         sha = _head_sha(path)
         cur = pr.get(project) or {}
-        if not fresh and cur.get("sha") == sha and cur.get("milestones") is not None:
+        # a cached EMPTY result is not a result — the broken first pass left
+        # 12 repos at 0 milestones and the second pass "cached" all 12
+        if not fresh and cur.get("sha") == sha and cur.get("milestones"):
             out["cached"].append(project)
             continue
         goal = _goal_for_project(project, path, goals_dir)
