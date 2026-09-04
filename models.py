@@ -517,6 +517,28 @@ def reconcile(log_dir: Optional[str] = None,
     import glob as _g
     log_dir = log_dir or AGENT_LOGS
     ledger = ledger or SPEND_LEDGER
+    # One pass at a time. Two reconcilers ran together on 2026-09-04 (the
+    # brain's tick and a manual pass): both read `seen` before either wrote,
+    # and one $3.83 run was ledgered twice. The lock spans read-through-
+    # append, so the second pass sees the first pass's rows.
+    import fcntl
+    try:
+        os.makedirs(os.path.dirname(ledger) or ".", exist_ok=True)
+        lock = open(ledger + ".lock", "w")
+    except OSError:
+        lock = None
+    if lock is not None:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+    try:
+        return _reconcile_locked(log_dir, ledger)
+    finally:
+        if lock is not None:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+            lock.close()
+
+
+def _reconcile_locked(log_dir: str, ledger: str) -> Dict[str, Any]:
+    import glob as _g
     seen = set()
     try:
         with open(ledger) as f:

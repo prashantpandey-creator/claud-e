@@ -258,6 +258,24 @@ def test_projects_view_carries_what_a_TILE_needs_and_marks_dormant():
     assert d["basis"].startswith("2 projects")
 
 
+def test_server_REPLACES_ITSELF_when_the_code_on_disk_is_newer():
+    """A launchd server keeps the code it booted with: two commits landed
+    after the brain started on 2026-09-04 and the shipped sum-of-runs fix
+    never ran in it. The rule: newer code on disk, quiet for a minute (not
+    mid-edit), and the server execs itself. Same pid slot, same argv."""
+    boot = 1000.0
+    assert not br._reexec_due(boot, newest=boot, now=boot + 500)
+    assert not br._reexec_due(boot, newest=boot + 10, now=boot + 30), "still being edited"
+    assert br._reexec_due(boot, newest=boot + 10, now=boot + 10 + 61)
+    assert not br._reexec_due(boot, newest=boot + 0.5, now=boot + 500), "same code, mtime jitter"
+    # the stamp covers every module the server imports, not five of them
+    import inspect
+    assert "*.py" in inspect.getsource(br._code_stamp)
+    # tests never arm the watcher: make_server must not start it
+    assert "_watch_code" not in inspect.getsource(br.make_server)
+    assert "_watch_code" in inspect.getsource(br.main)
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

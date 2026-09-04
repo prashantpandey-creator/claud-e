@@ -480,16 +480,43 @@ def _code_stamp() -> float:
     because `alive` did not exist in THIS process, only on disk. Reporting the
     stamp makes that visible instead of mysterious.
     """
+    import glob as _g
     newest = 0.0
-    for f in ("brain.py", "drive.py", "voice.py", "status.py", "projects.py"):
+    for f in _g.glob(os.path.join(SKILL_DIR, "*.py")):
         try:
-            newest = max(newest, os.path.getmtime(os.path.join(SKILL_DIR, f)))
+            newest = max(newest, os.path.getmtime(f))
         except OSError:
             pass
     return newest
 
 
 _BOOT_STAMP = _code_stamp()
+_REEXEC_QUIET_S = 60.0
+_REEXEC_POLL_S = 30.0
+_REEXEC = {"due": False}
+
+
+def _reexec_due(boot: float, newest: float, now: float, quiet_s: float = _REEXEC_QUIET_S) -> bool:
+    """Newer code on disk, and quiet for a minute — not mid-edit."""
+    return newest > boot + 1 and (now - newest) > quiet_s
+
+
+def _watch_code(srv) -> None:
+    """Two commits landed after the brain booted on 2026-09-04 and the
+    sum-of-runs fix never ran in it: a launchd server keeps the code it
+    started with. Reporting `server_stale` made that visible; this makes it
+    end. When the rule fires, serve_forever is stopped and main() execs the
+    same command in the same pid — launchd sees nothing, the port is freed
+    before it is re-bound, dispatched agents (their own session) live on."""
+    while True:
+        time.sleep(_REEXEC_POLL_S)
+        if _reexec_due(_BOOT_STAMP, _code_stamp(), time.time()):
+            _REEXEC["due"] = True
+            try:
+                srv.shutdown()
+            except Exception:
+                pass
+            return
 
 
 _PROJECTS_CACHE: Dict[str, Any] = {"at": 0.0, "data": None}
@@ -1898,10 +1925,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     print("brain live at %s  (localhost only — Ctrl-C to stop)" % url)
     if not args.no_open:
         os.system("open '%s' 2>/dev/null" % url)
+    threading.Thread(target=_watch_code, args=(srv,), daemon=True).start()
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
         print("\nstilled.")
+        return 0
+    if _REEXEC["due"]:
+        srv.server_close()
+        print("code on disk is newer than this process — replacing myself", flush=True)
+        os.execv(sys.executable, [sys.executable] + sys.argv)
     return 0
 
 

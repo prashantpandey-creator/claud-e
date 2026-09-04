@@ -794,8 +794,11 @@ def test_a_nodes_spend_is_the_SUM_of_its_runs_not_the_last_result():
     """Live 2026-09-04: five runs on one node — three fresh sessions ($1.16,
     $3.31, $2.95) and a fourth session resumed once ($2.86 then $3.83, the
     CLI's total for that session) — and the status line read '$3.83 spent'.
-    A resumed session reports its own cumulative total, so per session the
-    max counts; across sessions they add."""
+    Every run's total is ITS OWN, not the session's cumulative: a resumed
+    run's out_tokens (18,841) and cache_read were smaller than the run it
+    continued (33,538) — per-invocation figures, and total_cost_usd is
+    computed from the same modelUsage. So runs ADD, same session or not.
+    The earlier 'max per session' rule read a $14.10 node as $3.83."""
     with tempfile.TemporaryDirectory() as t:
         gdir, med = _world(t)
         g = cp.build(goals_dir=gdir, meditation_dir=med, elaborator=_elab)
@@ -811,8 +814,8 @@ def test_a_nodes_spend_is_the_SUM_of_its_runs_not_the_last_result():
         res2 = _finished(); res2["total_cost_usd"] = 3.83
         out = cp.tick(meditation_dir=med, dispatch=lambda n: None, read_result=lambda log: res2 if log == "l2" else None)
         n2 = [n for n in cp.load(med)["nodes"] if n["id"] == node["id"]][0]
-        assert abs(n2["spent_usd"] - 3.83) < 1e-9, n2.get("spent_usd")      # same session: max, not sum
-        assert abs(out["metrics"]["spent_usd"] - 3.83) < 1e-9, out["metrics"]
+        assert abs(n2["spent_usd"] - 4.99) < 1e-9, n2.get("spent_usd")      # same session: runs add
+        assert abs(out["metrics"]["spent_usd"] - 4.99) < 1e-9, out["metrics"]
         # a FRESH session on the same node adds
         n2["status"] = "pending"; n2["session"] = ""
         g3 = cp.load(med); [x for x in g3["nodes"] if x["id"] == node["id"]][0].update(status="pending", session="")
@@ -821,8 +824,37 @@ def test_a_nodes_spend_is_the_SUM_of_its_runs_not_the_last_result():
         res3 = _finished(); res3["total_cost_usd"] = 2.00
         out = cp.tick(meditation_dir=med, dispatch=lambda n: None, read_result=lambda log: res3 if log == "l3" else None)
         n3 = [n for n in cp.load(med)["nodes"] if n["id"] == node["id"]][0]
-        assert abs(n3["spent_usd"] - 5.83) < 1e-9, n3.get("spent_usd")
-        assert abs(out["metrics"]["spent_usd"] - 5.83) < 1e-9, out["metrics"]
+        assert abs(n3["spent_usd"] - 6.99) < 1e-9, n3.get("spent_usd")
+        assert abs(out["metrics"]["spent_usd"] - 6.99) < 1e-9, out["metrics"]
+
+
+def test_metrics_reads_the_LEDGER_by_name_when_it_knows_more():
+    """The daemon that absorbed the first shipped node ran code older than
+    the sum-of-runs fix (a launchd server keeps the code it booted with), so
+    the node carried only its last run's $3.83 while the ledger held five
+    runs. The ledger, keyed by the node's name and deduplicated by log, is
+    the source the status line trusts when it says more."""
+    with tempfile.TemporaryDirectory() as t:
+        gdir, med = _world(t)
+        g = cp.build(goals_dir=gdir, meditation_dir=med, elaborator=_elab)
+        cp.save(g, med)
+        cp.go(meditation_dir=med, max_parallel=1, dispatch=lambda n: {"log": "l1", "session": "s1"})
+        node = [n for n in cp.load(med)["nodes"] if n["status"] == "running"][0]
+        res = _finished(); res["total_cost_usd"] = 3.83
+        cp.tick(meditation_dir=med, dispatch=lambda n: None, read_result=lambda log: res if log == "l1" else None)
+        rows = [{"log": "a.log", "name": node["name"], "cost_usd": 2.86},
+                {"log": "b.log", "name": node["name"], "cost_usd": 3.83},
+                {"log": "b.log", "name": node["name"], "cost_usd": 3.83},     # the duplicate row
+                {"log": "z.log", "name": "goal-other-zzzz", "cost_usd": 9.0}]
+        with open(os.path.join(med, "spend.jsonl"), "w") as f:
+            for r in rows:
+                f.write(json.dumps(r) + "\n")
+        out = cp.tick(meditation_dir=med, dispatch=lambda n: None, read_result=lambda log: None)
+        assert abs(out["metrics"]["spent_usd"] - 6.69) < 1e-9, out["metrics"]
+        # and never LESS than what the node itself knows
+        os.remove(os.path.join(med, "spend.jsonl"))
+        out = cp.tick(meditation_dir=med, dispatch=lambda n: None, read_result=lambda log: None)
+        assert abs(out["metrics"]["spent_usd"] - 3.83) < 1e-9, out["metrics"]
 
 
 def _main():

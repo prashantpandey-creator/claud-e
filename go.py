@@ -22,7 +22,7 @@ import subprocess
 import sys
 import time
 import uuid
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 SKILL_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SKILL_DIR)
@@ -568,6 +568,18 @@ def _head(path: str) -> Dict[str, str]:
     return out
 
 
+def _model_effort_of(head: Dict[str, str]) -> Tuple[str, str]:
+    """The header's `# model: sonnet effort: high budget: 1` as (model, effort)."""
+    raw = head.get("model", "") or ""
+    model = raw.split("effort:")[0].strip()
+    effort = ""
+    if "effort:" in raw:
+        effort = raw.split("effort:", 1)[1].split("budget:")[0].strip()
+    if effort in ("", "default", "none"):
+        effort = ""
+    return model, effort
+
+
 def continue_agent(name: str, message: str, popen=None,
                    budget_usd: float = 0.0) -> Dict[str, Any]:
     """SendMessage for the swarm: resume the agent's own session with a new
@@ -616,6 +628,14 @@ def continue_agent(name: str, message: str, popen=None,
     log = os.path.join(HEADLESS_LOG_DIR, "%s-%s.log" % (stamp, name[:40]))
     argv = [claude_bin(), "-p", message, "--resume", sid,
             "--output-format", "json", "--permission-mode", role_mode(kind_of(name))]
+    # A resume without the model runs on the CLI's default: a $0.24 sonnet
+    # probe was continued on opus (2026-09-03) and cost $0.45 for 3 turns.
+    # The header's model and effort travel with the session.
+    model, effort = _model_effort_of(h)
+    if model:
+        argv += ["--model", model]
+    if effort:
+        argv += ["--effort", effort]
     # A resume without a cap is an unbounded run — the first three resumes
     # had none. The cap is the caller's (the node's, or what the owner set).
     if budget_usd:
@@ -624,8 +644,8 @@ def continue_agent(name: str, message: str, popen=None,
     try:
         os.makedirs(HEADLESS_LOG_DIR, exist_ok=True)
         with open(log, "w") as fh:
-            _write_header(fh, name, h.get("cwd", run_cwd), h.get("model", ""),
-                          "", "", sid, run_cwd, h.get("branch", ""),
+            _write_header(fh, name, h.get("cwd", run_cwd), model, effort, "",
+                          sid, run_cwd, h.get("branch", ""),
                           continues=os.path.basename(old), pid_slot=True)
             proc = popen(_wrap_awake(argv), cwd=run_cwd, stdout=fh,
                          stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,

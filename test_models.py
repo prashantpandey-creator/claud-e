@@ -371,6 +371,34 @@ def test_reconcile_cannot_DOUBLE_COUNT():
     assert models.reconcile(log_dir=d, ledger=led)["added"] == 0
 
 
+def test_reconcile_is_SAFE_under_two_concurrent_passes():
+    """Two reconcilers ran at once on 2026-09-04 (the brain's tick and a
+    manual pass): both passed the seen-check before either appended, and
+    log 073504 was ledgered twice — $3.83 counted as $7.66. The ledger is
+    locked for the whole pass, so the second waits and then adds nothing."""
+    import tempfile, json as _j, threading, time as _t
+    d = tempfile.mkdtemp()
+    led = os.path.join(d, "spend.jsonl")
+    res = _j.dumps({"type": "result", "total_cost_usd": 1.0, "num_turns": 1,
+                    "is_error": False, "usage": {}})
+    open(os.path.join(d, "c.log"), "w").write("# n\n\n" + res + "\n")
+    real = models._result_line
+    def slow(text):
+        _t.sleep(0.3)          # widen the window both passes used to fall into
+        return real(text)
+    models._result_line = slow
+    out = []
+    try:
+        ts = [threading.Thread(target=lambda: out.append(models.reconcile(log_dir=d, ledger=led)["added"]))
+              for _ in range(2)]
+        [t.start() for t in ts]; [t.join() for t in ts]
+    finally:
+        models._result_line = real
+    assert sorted(out) == [0, 1], out
+    rows = [ln for ln in open(led) if ln.strip()]
+    assert len(rows) == 1, rows
+
+
 def test_the_budget_cap_comes_from_LIKE_FOR_LIKE_runs():
     """Difficulty poisons cross-kind comparison; revive runs resemble each
     other. Under three measured runs it must say `default`, never invent an

@@ -832,7 +832,7 @@ def go(meditation_dir: str = MEDITATION_DIR, max_parallel: Optional[int] = None,
     g["events"].append({"ts": _now_iso(), "what": "go"})
     sent = _dispatch_ready(g, g.get("max_parallel") or DEFAULT_PARALLEL,
                            dispatch or dispatch_real)
-    g["metrics"] = _metrics(g, time.time())
+    g["metrics"] = _metrics(g, time.time(), os.path.join(meditation_dir, "spend.jsonl"))
     save(g, meditation_dir)
     return {"armed": True, "dispatched": sent, "metrics": g["metrics"]}
 
@@ -886,12 +886,13 @@ def _absorb(n: Dict[str, Any], res: Dict[str, Any], g: Dict[str, Any]) -> None:
                    "next": (so.get("next") or "").strip()}
     n["finished"] = _now_iso()
     n["stuck"] = False
-    # Spend across runs. A resumed session reports its own cumulative
-    # total, so per session the max counts; different sessions add. The
-    # status line read "$3.83 spent" after five runs worth $11.25.
-    hist = n.setdefault("spend_by_session", {})
-    sess = n.get("session") or n.get("log") or "?"
-    hist[sess] = max(float(hist.get(sess) or 0), float(res.get("total_cost_usd") or 0))
+    # Spend across runs. Every run's total is its own — a resumed run's
+    # out_tokens and cache_read are smaller than the run it continued, so
+    # they are per-invocation figures and total_cost_usd comes from the same
+    # modelUsage. Runs ADD, same session or not. The status line read
+    # "$3.83 spent" after five runs worth $14.10.
+    hist = n.setdefault("spend_by_run", {})
+    hist[n.get("log") or _now_iso()] = float(res.get("total_cost_usd") or 0)
     n["spent_usd"] = round(sum(hist.values()), 4)
     if res.get("is_error") or (res.get("subtype") not in (None, "success") and not so):
         n["status"] = "failed"
@@ -946,7 +947,26 @@ def _absorb(n: Dict[str, Any], res: Dict[str, Any], g: Dict[str, Any]) -> None:
             g["events"].append({"ts": _now_iso(), "what": "grew", "node": nid, "title": nxt[:60]})
 
 
-def _metrics(g: Dict[str, Any], now: float) -> Dict[str, Any]:
+def _ledger_by_name(ledger: Optional[str]) -> Dict[str, Dict[str, float]]:
+    """name -> {log: cost} from spend.jsonl; a log counts once."""
+    out: Dict[str, Dict[str, float]] = {}
+    if not ledger or not os.path.exists(ledger):
+        return out
+    try:
+        with open(ledger, errors="replace") as f:
+            for ln in f:
+                try:
+                    r = json.loads(ln)
+                except ValueError:
+                    continue
+                if r.get("name") and r.get("log"):
+                    out.setdefault(r["name"], {})[r["log"]] = float(r.get("cost_usd") or 0)
+    except OSError:
+        pass
+    return out
+
+
+def _metrics(g: Dict[str, Any], now: float, ledger: Optional[str] = None) -> Dict[str, Any]:
     # ideas are proposals, not steps: they do not count as nodes, pending
     # or per-goal totals until accepted. The status line read "0 of 25
     # done" over 13 steps the day ideas landed.
@@ -957,8 +977,18 @@ def _metrics(g: Dict[str, Any], now: float) -> Dict[str, Any]:
     for n in ns:
         by[n["status"]] = by.get(n["status"], 0) + 1
     fin = [n for n in ns if n.get("result")]
-    spent = round(sum(n.get("spent_usd") if n.get("spent_usd") is not None else n["result"]["cost_usd"]
-                      for n in fin), 4)
+    # The ledger (spend.jsonl, keyed by the node's name, one row per log)
+    # outranks what the node remembers: the daemon that absorbed the first
+    # shipped node ran code older than the sum-of-runs fix and kept only
+    # its last run's $3.83 of $14.10. Never less than the node's own figure.
+    led = _ledger_by_name(ledger)
+    spent = 0.0
+    for n in ns:
+        own = n.get("spent_usd")
+        if own is None:
+            own = n["result"]["cost_usd"] if n.get("result") else 0.0
+        spent += max(float(own or 0), sum(led.get(n.get("name") or "", {}).values()))
+    spent = round(spent, 4)
     per_goal: Dict[str, Dict[str, int]] = {}
     for n in ns:
         pg = per_goal.setdefault(n["goal"], {"title": n["goal_title"], "done": 0, "total": 0,
@@ -1014,7 +1044,7 @@ def tick(meditation_dir: str = MEDITATION_DIR, dispatch: Optional[Callable] = No
     if g.get("armed") and not g.get("paused_why"):
         sent = _dispatch_ready(g, max_parallel or g.get("max_parallel") or DEFAULT_PARALLEL,
                                dispatch or dispatch_real)
-    g["metrics"] = _metrics(g, t)
+    g["metrics"] = _metrics(g, t, os.path.join(meditation_dir, "spend.jsonl"))
     g["last_tick"] = _now_iso()
     save(g, meditation_dir)
     return {"armed": bool(g.get("armed")), "dispatched": sent, "metrics": g["metrics"]}
@@ -1079,7 +1109,7 @@ def done(node_id: str, meditation_dir: str = MEDITATION_DIR, note: str = "",
                                    % (n["title"], (" Note: " + note) if note else ""))
     g["events"].append({"ts": _now_iso(), "what": "owner did", "node": n["id"],
                         "title": n["title"][:60], "ticked": ticked})
-    g["metrics"] = _metrics(g, time.time())
+    g["metrics"] = _metrics(g, time.time(), os.path.join(meditation_dir, "spend.jsonl"))
     save(g, meditation_dir)
     return {"ok": True, "node": n["id"], "ticked": ticked,
             "unblocked": [m["id"] for m in g["nodes"] if n["id"] in m["depends_on"]]}
@@ -1169,7 +1199,7 @@ def discard_goal(name: str, meditation_dir: str = MEDITATION_DIR, reason: str = 
         g["events"].append({"ts": _now_iso(), "what": "goal discarded", "goal": name,
                             "nodes_removed": before - len(g["nodes"]),
                             "memories_moved": len(r.get("memories_moved", []))})
-        g["metrics"] = _metrics(g, time.time())
+        g["metrics"] = _metrics(g, time.time(), os.path.join(meditation_dir, "spend.jsonl"))
         save(g, meditation_dir)
         r["nodes_removed"] = before - len(g["nodes"])
     return r
@@ -1181,7 +1211,7 @@ def status(meditation_dir: str = MEDITATION_DIR) -> Dict[str, Any]:
         return {"id": "", "armed": False, "metrics": {}, "nodes": [], "why": "no campaign"}
     return {"id": g["id"], "armed": g.get("armed", False), "paused_why": g.get("paused_why", ""),
             "created": g.get("created"), "armed_at": g.get("armed_at", ""),
-            "metrics": _metrics(g, time.time()), "notes": g.get("notes", []),
+            "metrics": _metrics(g, time.time(), os.path.join(meditation_dir, "spend.jsonl")), "notes": g.get("notes", []),
             "proposed_goals": g.get("proposed_goals", []),
             "goals": g.get("goals", []),
             "predictions": load_predictions(meditation_dir),
