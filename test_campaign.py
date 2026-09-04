@@ -744,6 +744,41 @@ def test_predictions_are_on_the_PLAN_page_apart_from_the_steps():
         assert "PREDICTED" in page and "smoke test" in page
 
 
+def test_a_node_whose_session_is_in_a_GUARDED_worktree_is_handed_to_a_fresh_agent():
+    """The campaign's first node ran three sessions ($7.42) in a worktree
+    under ~/.claude, where Claude Code denies writes headless; the session
+    cannot move. A fresh agent takes the node WITH the previous findings."""
+    with tempfile.TemporaryDirectory() as t:
+        gdir, med = _world(t)
+        g = cp.build(goals_dir=gdir, meditation_dir=med, elaborator=_elab)
+        n = [x for x in g["nodes"] if x["title"] == "only open"][0]
+        import subprocess as _sp
+        repo = os.path.join(t, "r"); os.makedirs(repo)
+        _sp.run(["git", "init", "-q", "-b", "main", repo], check=True)
+        open(os.path.join(repo, "a"), "w").write("a\n"); _sp.run(["git", "-C", repo, "add", "a"], check=True)
+        _sp.run(["git", "-C", repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "i"], check=True)
+        n["cwd"] = repo          # the dispatcher refuses a non-repo cwd first
+        n["session"] = "old-sess"; n["resume_message"] = "cleared"
+        n["worktree"] = os.path.expanduser("~/.claude/meditation/worktrees/x")
+        n["result"] = {"did": ["designed the fix"], "blocked_on": "Write denied", "next": "apply it",
+                       "cost_usd": 1, "commits": [], "verified_commits": [], "pushed": False}
+        seen = {}
+        import go as _go
+        real_h = _go._headless
+        def fake_h(cwd, prompt, name, model="", effort="", budget_usd=0.0, **kw):
+            seen.update(prompt=prompt, name=name)
+            fake_h.last = {"log": "l", "session": "new", "worktree": "/tmp/w"}
+            return True
+        _go._headless = fake_h
+        try:
+            r = cp.dispatch_real(n)
+        finally:
+            _go._headless = real_h
+        assert r and r["session"] == "new", r
+        assert n.get("handed_over") and n["session"] == "" and not n.get("resume_message")
+        assert "designed the fix" in seen["prompt"] and "cleared by the owner" in seen["prompt"]
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

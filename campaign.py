@@ -117,6 +117,47 @@ IDEAS_SCHEMA = {
 }
 
 
+# Every planner is read-only and under dontAsk — which denies every tool not
+# NAMED. Bash programs alone left Read denied: the first prediction pass
+# returned 0 milestones for 12 of 13 repos, "successfully". Named now.
+PLANNER_ALLOWED = ("Read Glob Grep Bash(git:*) Bash(ls:*) Bash(cat:*) Bash(head:*) Bash(tail:*) "
+                   "Bash(grep:*) Bash(rg:*) Bash(find:*) Bash(wc:*) Bash(pwd:*)")
+PLANNER_DENIED = "Edit Write MultiEdit NotebookEdit Bash(git commit:*) Bash(git push:*) Bash(rm:*) Bash(mv:*)"
+# Measured 2026-09-04 on purangpt-next: a prediction hit a $0.60 cap in 4
+# turns (the first turn alone loads ~26k cache tokens, then README + git
+# log on a large repo). Reading a repo costs more than reading a goal file.
+PLANNER_BUDGET_USD = 0.80          # ideas: a goal file and a glance at the repo
+ELABORATE_BUDGET_USD_REAL = 1.00   # steps: one milestone against the repo
+PREDICT_BUDGET_USD = 1.50          # predictions: the whole repo, cold
+
+
+def _planner_result(stdout: str, key: str) -> List[Dict[str, Any]]:
+    """The structured list from a planner's result line — or an error that
+    says WHY there is none. A budget cut or a refused start used to come
+    back as [] and read as 'the planner found nothing'."""
+    for ln in reversed(stdout.strip().splitlines()):
+        if ln.startswith("{") and '"type"' in ln:
+            try:
+                d = json.loads(ln)
+            except ValueError:
+                continue
+            if d.get("type") != "result":
+                continue
+            sub = d.get("subtype") or ""
+            so = d.get("structured_output") or {}
+            items = [x for x in (so.get(key) or []) if isinstance(x, dict) and x.get("title")]
+            if not items and sub != "success":
+                raise RuntimeError("planner ended %s at $%.2f, %s turns, %d denials"
+                                   % (sub, d.get("total_cost_usd") or 0, d.get("num_turns"),
+                                      len(d.get("permission_denials") or [])))
+            if not items and d.get("permission_denials"):
+                raise RuntimeError("planner returned nothing after %d tool denials (%s)"
+                                   % (len(d["permission_denials"]),
+                                      ", ".join(sorted({x.get("tool_name", "?") for x in d["permission_denials"]}))))
+            return items
+    raise RuntimeError("planner returned no result object")
+
+
 def ideate_with_claude(goal: str, done: List[str], opens: List[str], cwd: str = "",
                        title: str = "", note: str = "") -> List[Dict[str, Any]]:
     """Ask a read-only planner what the goal file does NOT yet say.
@@ -137,21 +178,13 @@ def ideate_with_claude(goal: str, done: List[str], opens: List[str], cwd: str = 
         % (title or goal, "; ".join(done[:12]) or "none", "; ".join(opens[:12]) or "none",
            ("\nContext: " + note[:600]) if note else ""))
     argv = [_claude(), "-p", prompt, "--model", "sonnet", "--output-format", "json",
-            "--permission-mode", "dontAsk", "--max-budget-usd", str(ELABORATE_BUDGET_USD),
+            "--permission-mode", "dontAsk", "--max-budget-usd", str(PLANNER_BUDGET_USD),
             "--json-schema", json.dumps(IDEAS_SCHEMA),
-            "--disallowedTools", "Edit Write NotebookEdit Bash(git commit:*) Bash(git push:*) Bash(rm:*)"]
+            "--allowedTools", PLANNER_ALLOWED, "--disallowedTools", PLANNER_DENIED]
     r = subprocess.run(argv, cwd=cwd if cwd and os.path.isdir(cwd) else os.path.expanduser("~"),
                        capture_output=True, text=True, timeout=ELABORATE_TIMEOUT_S,
                        stdin=subprocess.DEVNULL)
-    for ln in reversed(r.stdout.strip().splitlines()):
-        if ln.startswith("{") and '"type"' in ln:
-            try:
-                d = json.loads(ln)
-            except ValueError:
-                continue
-            so = d.get("structured_output") or {}
-            return [x for x in (so.get("ideas") or []) if isinstance(x, dict) and x.get("title")]
-    raise RuntimeError("planner returned no ideas object")
+    return _planner_result(r.stdout, "ideas")
 
 
 def _claude() -> str:
@@ -199,21 +232,12 @@ def predict_with_claude(project: str, path: str, sha: str,
         "Prefer what the code and the commit trail imply over generic advice. Return the "
         "milestones object.%s" % (project, sha[:9], gl_txt))
     argv = [_claude(), "-p", prompt, "--model", "sonnet", "--output-format", "json",
-            "--permission-mode", "dontAsk", "--max-budget-usd", str(ELABORATE_BUDGET_USD),
+            "--permission-mode", "dontAsk", "--max-budget-usd", str(PREDICT_BUDGET_USD),
             "--json-schema", json.dumps(PREDICT_SCHEMA),
-            "--allowedTools", "Bash(git:*) Bash(ls:*) Bash(cat:*) Bash(head:*) Bash(grep:*) Bash(rg:*) Bash(find:*) Bash(wc:*)",
-            "--disallowedTools", "Edit Write NotebookEdit Bash(git commit:*) Bash(git push:*) Bash(rm:*)"]
+            "--allowedTools", PLANNER_ALLOWED, "--disallowedTools", PLANNER_DENIED]
     r = subprocess.run(argv, cwd=path, capture_output=True, text=True,
                        timeout=ELABORATE_TIMEOUT_S, stdin=subprocess.DEVNULL)
-    for ln in reversed(r.stdout.strip().splitlines()):
-        if ln.startswith("{") and '"type"' in ln:
-            try:
-                d = json.loads(ln)
-            except ValueError:
-                continue
-            so = d.get("structured_output") or {}
-            return [m for m in (so.get("milestones") or []) if isinstance(m, dict) and m.get("title")]
-    raise RuntimeError("planner returned no milestones object")
+    return _planner_result(r.stdout, "milestones")
 
 
 def load_predictions(meditation_dir: str = MEDITATION_DIR) -> Dict[str, Any]:
@@ -298,6 +322,10 @@ def predict(repos: Optional[Dict[str, str]] = None, goals_dir: Optional[str] = N
             ms = predictor(project, path, sha, goal)
         except Exception as e:
             out["failed"].append("%s: %s" % (project, str(e)[:80]))
+            pr[project] = {"sha": sha, "ts": _now_iso(), "path": path,
+                           "goal": goal["name"] if goal else None, "milestones": cur.get("milestones") or [],
+                           "error": str(e)[:160]}
+            _save_predictions(pr, meditation_dir)
             continue
         keep = []
         for m in ms[:6]:
@@ -437,22 +465,13 @@ def elaborate_with_claude(goal: str, milestone: str, cwd: str = "",
         "the steps. Return the steps object.%s"
         % (title or goal, milestone, ("\nContext: " + note[:600]) if note else ""))
     argv = [_claude(), "-p", prompt, "--model", "sonnet", "--output-format", "json",
-            "--permission-mode", "dontAsk", "--max-budget-usd", str(ELABORATE_BUDGET_USD),
+            "--permission-mode", "dontAsk", "--max-budget-usd", str(ELABORATE_BUDGET_USD_REAL),
             "--json-schema", json.dumps(STEPS_SCHEMA),
-            "--disallowedTools", "Edit Write NotebookEdit Bash(git commit:*) Bash(git push:*) Bash(rm:*)"]
+            "--allowedTools", PLANNER_ALLOWED, "--disallowedTools", PLANNER_DENIED]
     r = subprocess.run(argv, cwd=cwd if cwd and os.path.isdir(cwd) else os.path.expanduser("~"),
                        capture_output=True, text=True, timeout=ELABORATE_TIMEOUT_S,
                        stdin=subprocess.DEVNULL)
-    for ln in reversed(r.stdout.strip().splitlines()):
-        if ln.startswith("{") and '"type"' in ln:
-            try:
-                d = json.loads(ln)
-            except ValueError:
-                continue
-            so = d.get("structured_output") or {}
-            steps = so.get("steps") or []
-            return [s for s in steps if isinstance(s, dict) and s.get("id") and s.get("title")]
-    raise RuntimeError("planner returned no steps object")
+    return [x for x in _planner_result(r.stdout, "steps") if x.get("id")]
 
 
 # ---------------------------------------------------------------------------
@@ -674,6 +693,26 @@ def load(meditation_dir: str = MEDITATION_DIR) -> Optional[Dict[str, Any]]:
 # dispatch, real and injected
 # ---------------------------------------------------------------------------
 
+def _guarded(path: str) -> bool:
+    return bool(path) and path.startswith(os.path.expanduser("~/.claude") + os.sep)
+
+
+def _prior_findings(n: Dict[str, Any]) -> str:
+    """What the previous attempt at this node established — its RESULT's
+    `did`, `blocked_on` and `next` — so a fresh agent starts from the wall,
+    not from zero. Three runs ($7.42) designed one fix; the fourth writes it."""
+    r = n.get("result") or {}
+    if not r.get("did"):
+        return ""
+    out = ["A previous agent on this exact step reported (past tense, verified by its own log):"]
+    out += ["  - " + str(x)[:400] for x in r.get("did", [])[:8]]
+    if r.get("blocked_on"):
+        out.append("It stopped on: " + str(r["blocked_on"])[:300] + " — that block has been cleared by the owner.")
+    if r.get("next"):
+        out.append("It said the next step was: " + str(r["next"])[:400])
+    return "\n".join(out)
+
+
 def _prompt_for(n: Dict[str, Any]) -> str:
     lines = ["Goal: %s." % n["goal_title"],
              "Milestone: %s." % n["milestone"]]
@@ -688,6 +727,9 @@ def _prompt_for(n: Dict[str, Any]) -> str:
                  "prove it with the check, and put the single next step in `next`.")
     for s in n.get("steers") or []:
         lines.append("Owner's steer: %s" % s.get("message", ""))
+    pf = _prior_findings(n)
+    if pf:
+        lines.append(pf)
     return "\n".join(lines)
 
 
@@ -702,7 +744,8 @@ def dispatch_real(n: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         n["why_failed"] = ("cannot isolate: cwd %s is not a git repo — set cwd to the repo "
                            "in the goal file" % (cwd or "(none)"))
         return None
-    if n.get("session") and n.get("resume_message"):
+    prior = _prior_findings(n)
+    if n.get("session") and n.get("resume_message") and not _guarded(n.get("worktree", "")):
         # the wall the agent hit has been cleared by the owner: the SAME
         # session continues with that fact, instead of a fresh agent
         # rediscovering everything up to the wall
@@ -711,6 +754,12 @@ def dispatch_real(n: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             return {"log": r.get("log", ""), "session": r.get("session", n["session"]),
                     "worktree": n.get("worktree", ""), "why": "resumed"}
         return None
+    if n.get("session") and _guarded(n.get("worktree", "")):
+        # the session is bound to a worktree under ~/.claude, where writes
+        # are denied; a fresh agent takes over WITH what the last one found
+        n["session"] = ""
+        n["resume_message"] = ""
+        n["handed_over"] = True
     ok = go._headless(n.get("cwd") or os.path.expanduser("~"), _prompt_for(n), n["name"],
                       a.get("model", "sonnet"), a.get("effort", ""), float(a.get("budget_usd") or 0))
     if not ok:

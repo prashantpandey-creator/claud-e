@@ -171,7 +171,13 @@ HEADLESS_LOG_DIR = os.path.join(MEDITATION_DIR, "agents")
 # instead of hanging.
 
 AGENTS_FILE = os.path.join(SKILL_DIR, "agents.json")
-WORKTREE_ROOT = os.path.join(MEDITATION_DIR, "worktrees")
+# NOT under ~/.claude: Claude Code treats its own config tree as sensitive
+# and asks before writing there, and a headless run cannot answer — probe
+# 2026-09-04 under acceptEdits: "Write DENIED (permission request for
+# probe-perm.txt was rejected as a sensitive file)". Worktrees live where
+# an agent may write.
+WORKTREE_ROOT = os.path.expanduser("~/.local/share/meditate/worktrees")
+_OLD_WORKTREE_ROOT = os.path.join(MEDITATION_DIR, "worktrees")
 _ROLES: Dict[str, Any] = {}
 
 
@@ -192,6 +198,15 @@ def roles() -> Dict[str, Any]:
 def kind_of(name: str) -> str:
     """goal-purangpt-mobile-live -> goal. The same split the ledgers use."""
     return (name or "").split("-")[0]
+
+
+def role_mode(kind: str) -> str:
+    """acceptEdits for roles that edit, dontAsk for roles that only read.
+    Measured 2026-09-04: under dontAsk Write is denied even when named in
+    --allowedTools — the mode denies file edits regardless. Never bypass."""
+    role = (roles().get("roles") or {}).get(kind) or {}
+    m = role.get("mode") or "dontAsk"
+    return m if m in ("acceptEdits", "dontAsk") else "dontAsk"
 
 
 def role_argv(kind: str) -> List[str]:
@@ -358,7 +373,7 @@ def _headless(cwd: str, prompt: str, name: str, model: str = "",
                 # and "running in the background" was a guess.
                 "--output-format", "stream-json", "--verbose",
                 "--session-id", sid,
-                "--permission-mode", "dontAsk"]
+                "--permission-mode", role_mode(kind_of(name))]
         # A REAL cap, enforced by the CLI — the turn ceiling never was.
         if budget_usd:
             argv += ["--max-budget-usd", str(budget_usd)]
@@ -583,6 +598,11 @@ def continue_agent(name: str, message: str, popen=None) -> Dict[str, Any]:
                                capture_output=True, text=True, timeout=60)
             except (OSError, subprocess.TimeoutExpired):
                 pass
+    if wt and wt.startswith(os.path.expanduser("~/.claude") + os.sep):
+        return {"started": False,
+                "why": "the session ran in %s, under ~/.claude, where Claude Code denies writes to a "
+                       "headless run; a session cannot move directories — dispatch a fresh agent "
+                       "with the previous findings instead" % wt}
     if wt and not os.path.isdir(wt):
         return {"started": False,
                 "why": "the session ran in %s, which is gone and could not be re-added "
@@ -594,7 +614,7 @@ def continue_agent(name: str, message: str, popen=None) -> Dict[str, Any]:
     stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
     log = os.path.join(HEADLESS_LOG_DIR, "%s-%s.log" % (stamp, name[:40]))
     argv = [claude_bin(), "-p", message, "--resume", sid,
-            "--output-format", "json", "--permission-mode", "dontAsk"]
+            "--output-format", "json", "--permission-mode", role_mode(kind_of(name))]
     argv += role_argv(kind_of(name))
     try:
         os.makedirs(HEADLESS_LOG_DIR, exist_ok=True)

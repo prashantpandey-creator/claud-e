@@ -85,12 +85,17 @@ def _flag(argv, flag):
 
 def test_no_agent_runs_with_permissions_OFF():
     """8 full-permission unattended agents in 24 h was the largest exposure
-    the infra audit found. dontAsk is the unattended mode; a denied tool
-    ends up in blocked_on, not in a push."""
+    the infra audit found. Never bypass. A role that edits runs acceptEdits
+    — measured 2026-09-04: under dontAsk, Write is denied even when named in
+    --allowedTools, and three real runs ($7.42) designed a fix they could
+    not write. A role that only reads stays dontAsk."""
     with tempfile.TemporaryDirectory() as t:
         c = _launch(_git_repo(t), worktree_root=os.path.join(t, "wt"))
         assert "--dangerously-skip-permissions" not in c["argv"], c["argv"]
-        assert _flag(c["argv"], "--permission-mode") == "dontAsk", c["argv"]
+        assert "bypassPermissions" not in c["argv"]
+        assert _flag(c["argv"], "--permission-mode") == "acceptEdits", c["argv"]
+        c2 = _launch(os.path.join(t, "repo"), name="revive-look", worktree_root=os.path.join(t, "wt2"))
+        assert _flag(c2["argv"], "--permission-mode") == "dontAsk", c2["argv"]
 
 
 def test_the_run_ends_with_a_TYPED_result():
@@ -187,7 +192,7 @@ def test_continue_RESUMES_the_same_session():
         argv = _Popen.calls[-1]["argv"]
         assert _flag(argv, "--resume") == sid, argv
         assert "also fix the tests" in argv
-        assert _flag(argv, "--permission-mode") == "dontAsk"
+        assert _flag(argv, "--permission-mode") == "acceptEdits"
         head = open(r["log"]).read().splitlines()[:8]
         assert "# session: " + sid in head, head
         assert any(l.startswith("# continues: ") for l in head), head
@@ -694,6 +699,13 @@ def test_a_RESUMED_run_says_its_progress_is_not_streamed():
                            "# worktree: \n# branch: \n# continues: 20260904-000001-goal-r.log\n# pid: 4242\n\n")
         rows = go.live_agents(log_dir=t, alive=lambda pid: True)
         assert rows[0]["resumed"] is True and "not streamed" in rows[0]["state"], rows[0]
+
+
+def test_worktrees_live_OUTSIDE_the_claude_config_tree():
+    """Probe 2026-09-04 under acceptEdits: Write DENIED — 'rejected as a
+    sensitive file' — because the worktree sat under ~/.claude, which
+    Claude Code guards. Headless, a guard that asks is a guard that denies."""
+    assert not go.WORKTREE_ROOT.startswith(os.path.expanduser("~/.claude")), go.WORKTREE_ROOT
 
 
 def _main():

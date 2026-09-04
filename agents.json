@@ -144,7 +144,8 @@
         "Bash(ssh:*)",
         "Bash(scp:*)",
         "Bash(rsync:*)"
-      ]
+      ],
+      "mode": "acceptEdits"
     },
     "thread": {
       "description": "Resumes one continuation thread from a split session; same discipline as goal.",
@@ -224,7 +225,8 @@
         "Bash(ssh:*)",
         "Bash(scp:*)",
         "Bash(rsync:*)"
-      ]
+      ],
+      "mode": "acceptEdits"
     },
     "repair": {
       "description": "Fixes one item in the memory repair queue: a memory whose evidence no longer matches the world.",
@@ -300,7 +302,8 @@
         "Bash(scp:*)",
         "Bash(rsync:*)",
         "Bash(git push:*)"
-      ]
+      ],
+      "mode": "acceptEdits"
     },
     "revive": {
       "description": "Reads a dormant project and reports what it is, where it stopped, and the one next step. Read-only.",
@@ -322,7 +325,8 @@
         "Bash(git push:*)",
         "Bash(git add:*)",
         "Bash(rm:*)"
-      ]
+      ],
+      "mode": "dontAsk"
     },
     "assess": {
       "description": "Grades a project against its goal file; read-only.",
@@ -342,9 +346,11 @@
         "Bash(git push:*)",
         "Bash(git add:*)",
         "Bash(rm:*)"
-      ]
+      ],
+      "mode": "dontAsk"
     }
   },
   "_allowlist_note": "Measured 2026-09-04 on the first real campaign agent: with dontAsk, a list of git SUBCOMMANDS denied `git status --short` and every `cd … && …`, and the role had no npm/tsc/gradlew at all — $1.16, 10 turns, 4 denials, nothing moved. dontAsk denies everything not allowed, so the working set is allowed by PROGRAM (git, npm, python3, gradlew…) and the dangerous forms are denied by name; deny wins.",
-  "_edit_tools_note": "Measured 2026-09-04, second real run ($3.31, 30 turns): with Bash programs allowed the agent grounded on origin/main and designed the whole fix, then Write, Edit and `cat >` were denied — dontAsk denies every tool not named, and the edit tools were never named. goal/thread/repair name them now; revive/assess still deny them."
+  "_edit_tools_note": "Measured 2026-09-04, second real run ($3.31, 30 turns): with Bash programs allowed the agent grounded on origin/main and designed the whole fix, then Write, Edit and `cat >` were denied — dontAsk denies every tool not named, and the edit tools were never named. goal/thread/repair name them now; revive/assess still deny them.",
+  "_mode_note": "Measured 2026-09-04 with a probe: under dontAsk, Write is DENIED with `Write` in --allowedTools — the mode denies file edits regardless; the allowlist governs Bash. Working roles run acceptEdits (edits inside the worktree accepted; Bash by the allow/deny lists; anything else would need asking and, headless, is denied). Read-only roles stay dontAsk. Never bypassPermissions."
 }
