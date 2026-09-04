@@ -217,6 +217,31 @@ def test_an_EXPLICIT_go_bypasses_cooldown_and_a_refusal_says_WHY():
                                              "skipped": [{"goal": "g-hands", "why": "next milestone is yours: x"}]})
 
 
+def test_the_hourly_pass_DEFERS_to_an_armed_campaign_for_the_goals_it_holds():
+    """Two dispatchers on one goal: go --auto (hourly, one agent per goal at
+    its first open milestone) and the campaign (nodes, walls, sessions).
+    While the campaign is armed and holds nodes for a goal, the hourly pass
+    leaves that goal to it — otherwise the same milestone runs twice in two
+    worktrees and pushes twice."""
+    import go as g2, json as _j
+    with tempfile.TemporaryDirectory() as t:
+        med, store, gdir = _world(t)
+        open(os.path.join(med, "campaign.json"), "w").write(_j.dumps(
+            {"id": "c1", "armed": True, "nodes": [{"id": "n1", "goal": "g-a", "status": "pending", "kind": "goal"}]}))
+        launched = []
+        rep = g2.run(meditation_dir=med, store_dir=store, goals_dir=gdir,
+                     history_path=os.path.join(t, "h.jsonl"), ledger_path=os.path.join(t, "d.jsonl"),
+                     launcher=lambda cwd, prompt, name, model='': launched.append(name) or True)
+        assert rep["goals_launched"] == 0 and launched == [], (rep, launched)
+        assert any("campaign" in r["why"] for r in rep.get("skipped", [])), rep
+        # disarmed: the goal is the hourly pass's again
+        open(os.path.join(med, "campaign.json"), "w").write(_j.dumps({"id": "c1", "armed": False, "nodes": []}))
+        rep = g2.run(meditation_dir=med, store_dir=store, goals_dir=gdir,
+                     history_path=os.path.join(t, "h.jsonl"), ledger_path=os.path.join(t, "d.jsonl"),
+                     launcher=lambda cwd, prompt, name, model='': launched.append(name) or True)
+        assert rep["goals_launched"] == 1, rep
+
+
 def test_fleet_status_joins_ledger_and_goals():
     import drive as dv2
     with tempfile.TemporaryDirectory() as t:

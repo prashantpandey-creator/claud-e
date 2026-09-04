@@ -1057,6 +1057,42 @@ def test_the_wall_bound_comes_from_the_kind_median_within_limits():
         assert m == {"goal": 300.0}, m
 
 
+def test_replan_MERGES_against_the_campaign_as_it_is_when_the_planners_return():
+    """The planners take minutes; the brain ticks every five. A re-plan that
+    merged against the graph it loaded at the start would overwrite every
+    tick in between — a node absorbed, a wall raised. The merge re-loads."""
+    with tempfile.TemporaryDirectory() as t:
+        gdir = os.path.join(t, "goals"); os.makedirs(gdir)
+        med = os.path.join(t, "med"); os.makedirs(med)
+        _goal_file(gdir, "g", "Goal G", t, opens=["first open"])
+        g = cp.build(goals_dir=gdir, meditation_dir=med, elaborator=lambda goal, ms: [])
+        cp.save(g, med)
+        cp.go(meditation_dir=med, max_parallel=1, dispatch=lambda n: {"log": "l1", "session": "s1"})
+        node = [n for n in cp.load(med)["nodes"] if n["status"] == "running"][0]
+        _goal_file(gdir, "g", "Goal G", t, opens=["first open", "second open"])
+
+        def slow_elab(goal, ms):
+            # while "the planner runs", a tick lands: the node finishes
+            cp.tick(meditation_dir=med, dispatch=lambda n: None,
+                    read_result=lambda log: _finished() if log == "l1" else None)
+            return []
+        cp.replan(goals_dir=gdir, meditation_dir=med, elaborator=slow_elab)
+        after = {n["id"]: n for n in cp.load(med)["nodes"]}
+        assert after[node["id"]]["status"] == "done", after[node["id"]]["status"]
+
+
+def test_campaign_writes_are_SERIALISED_by_a_lock():
+    """tick (the brain, every 5 min), done/steer (the console) and replan
+    all load-mutate-save the same file. Each holds campaign.json.lock for
+    its load→save; a second writer waits rather than overwriting."""
+    import inspect
+    for fn in (cp.tick, cp.go, cp.done, cp.steer, cp.pause, cp.accept):
+        assert "_locked(" in inspect.getsource(fn), fn.__name__
+    with tempfile.TemporaryDirectory() as t:
+        with cp._locked(t):
+            assert os.path.exists(os.path.join(t, "campaign.json.lock"))
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

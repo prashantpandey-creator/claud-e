@@ -1182,6 +1182,13 @@ def run(n: Optional[int] = None, repair_only: bool = False,
                 result.setdefault("skipped", []).append(
                     {"goal": g["name"], "why": "nothing open to work on"})
                 continue
+            held = _campaign_holds(g["name"], meditation_dir)
+            if held:
+                # the campaign is armed and has this goal's steps: one
+                # dispatcher per goal, or the same milestone runs twice
+                result.setdefault("skipped", []).append(
+                    {"goal": g["name"], "why": "in the armed campaign (%s) — it runs there" % held})
+                continue
             if _human_next(g.get("next") or ""):
                 # The next milestone needs the owner's hands (credentials,
                 # approvals, payments). Four hourly runs were sent at "Owner
@@ -1307,6 +1314,18 @@ def run(n: Optional[int] = None, repair_only: bool = False,
             except OSError:
                 pass
     return result
+
+
+def _campaign_holds(goal: str, meditation_dir: str) -> str:
+    """The armed campaign's claim on a goal: its node count as a string, or ""."""
+    try:
+        g = json.load(open(os.path.join(meditation_dir, "campaign.json")))
+    except (OSError, ValueError):
+        return ""
+    if not g.get("armed"):
+        return ""
+    n = sum(1 for x in g.get("nodes") or [] if x.get("goal") == goal and x.get("status") != "idea")
+    return ("%d steps" % n) if n else ""
 
 
 def _human_next(text: str) -> bool:

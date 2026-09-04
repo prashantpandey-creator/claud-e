@@ -674,6 +674,35 @@ def _state_path(meditation_dir: str) -> str:
     return os.path.join(meditation_dir, STATE_NAME)
 
 
+class _locked:
+    """One writer at a time on campaign.json: the brain's 5-minute tick, the
+    hourly pass, the console's done/steer and a re-plan all load-mutate-
+    save it. Held for a load→save only — never across a planner call."""
+
+    def __init__(self, meditation_dir: str):
+        self.dir = meditation_dir
+        self.fh = None
+
+    def __enter__(self):
+        import fcntl
+        try:
+            os.makedirs(self.dir, exist_ok=True)
+            self.fh = open(os.path.join(self.dir, "campaign.json.lock"), "w")
+            fcntl.flock(self.fh, fcntl.LOCK_EX)
+        except OSError:
+            self.fh = None
+        return self
+
+    def __exit__(self, *a):
+        if self.fh is not None:
+            import fcntl
+            try:
+                fcntl.flock(self.fh, fcntl.LOCK_UN)
+            finally:
+                self.fh.close()
+        return False
+
+
 def save(g: Dict[str, Any], meditation_dir: str = MEDITATION_DIR) -> str:
     os.makedirs(meditation_dir, exist_ok=True)
     p = _state_path(meditation_dir)
@@ -977,6 +1006,13 @@ def parse_until(text: str, now: Optional[float] = None) -> Optional[float]:
 def go(meditation_dir: str = MEDITATION_DIR, max_parallel: Optional[int] = None,
        dispatch: Optional[Callable] = None, until: Optional[float] = None,
        now: Optional[Callable[[], float]] = None) -> Dict[str, Any]:
+    with _locked(meditation_dir):
+        return _go(meditation_dir=meditation_dir, max_parallel=max_parallel, dispatch=dispatch, until=until, now=now)
+
+
+def _go(meditation_dir: str = MEDITATION_DIR, max_parallel: Optional[int] = None,
+       dispatch: Optional[Callable] = None, until: Optional[float] = None,
+       now: Optional[Callable[[], float]] = None) -> Dict[str, Any]:
     """The owner's go. Arms the campaign and sends the first ready wave.
     `until` (epoch) is the deadline: past it nothing new is sent, and once
     nothing is running the campaign closes out with a written summary."""
@@ -1138,6 +1174,14 @@ def replan(goals_dir: Optional[str] = None, meditation_dir: str = MEDITATION_DIR
     cached.wants_context = True          # build() passes cwd/title/note
     new = build(goals_dir=goals_dir, meditation_dir=meditation_dir, elaborator=cached,
                 goals_rows=rows, ideator=None)
+    with _locked(meditation_dir):
+        # the planners took minutes; merge against the file AS IT IS NOW,
+        # not as it was when they started — the brain ticked meanwhile
+        old = load(meditation_dir) or old
+        return _merge_and_save(old, new, meditation_dir)
+
+
+def _merge_and_save(old: Dict[str, Any], new: Dict[str, Any], meditation_dir: str) -> Dict[str, Any]:
     om = {n["id"]: n for n in old["nodes"]}
     carried = 0
     for n in new["nodes"]:
@@ -1172,6 +1216,11 @@ def replan(goals_dir: Optional[str] = None, meditation_dir: str = MEDITATION_DIR
 
 
 def pause(meditation_dir: str = MEDITATION_DIR, why: str = "") -> Dict[str, Any]:
+    with _locked(meditation_dir):
+        return _pause(meditation_dir=meditation_dir, why=why)
+
+
+def _pause(meditation_dir: str = MEDITATION_DIR, why: str = "") -> Dict[str, Any]:
     g = load(meditation_dir)
     if not g:
         return {"armed": False, "why": "no campaign"}
@@ -1352,6 +1401,16 @@ def tick(meditation_dir: str = MEDITATION_DIR, dispatch: Optional[Callable] = No
          max_parallel: Optional[int] = None, death: Optional[Callable] = None,
          kill: Optional[Callable] = None, medians: Optional[Dict[str, float]] = None,
          mailer: Optional[Callable] = None) -> Dict[str, Any]:
+    with _locked(meditation_dir):
+        return _tick(meditation_dir=meditation_dir, dispatch=dispatch, read_result=read_result, log_mtime=log_mtime, now=now, max_parallel=max_parallel, death=death, kill=kill, medians=medians, mailer=mailer)
+
+
+def _tick(meditation_dir: str = MEDITATION_DIR, dispatch: Optional[Callable] = None,
+         read_result: Optional[Callable] = None, log_mtime: Optional[Callable] = None,
+         now: Optional[Callable[[], float]] = None,
+         max_parallel: Optional[int] = None, death: Optional[Callable] = None,
+         kill: Optional[Callable] = None, medians: Optional[Dict[str, float]] = None,
+         mailer: Optional[Callable] = None) -> Dict[str, Any]:
     """Advance the campaign one step. The heartbeat calls this every pass."""
     g = load(meditation_dir)
     if not g:
@@ -1410,6 +1469,12 @@ def tick(meditation_dir: str = MEDITATION_DIR, dispatch: Optional[Callable] = No
 
 def steer(node_id: str, message: str, meditation_dir: str = MEDITATION_DIR,
           continue_fn: Optional[Callable] = None) -> Dict[str, Any]:
+    with _locked(meditation_dir):
+        return _steer(node_id=node_id, message=message, meditation_dir=meditation_dir, continue_fn=continue_fn)
+
+
+def _steer(node_id: str, message: str, meditation_dir: str = MEDITATION_DIR,
+          continue_fn: Optional[Callable] = None) -> Dict[str, Any]:
     """A correction mid-flight: continue the node's own session with the
     owner's message. Works on running, blocked, failed and done nodes."""
     g = load(meditation_dir)
@@ -1436,6 +1501,12 @@ def steer(node_id: str, message: str, meditation_dir: str = MEDITATION_DIR,
 
 
 def done(node_id: str, meditation_dir: str = MEDITATION_DIR, note: str = "",
+         goals_dir: Optional[str] = None, tick_fn: Optional[Callable] = None) -> Dict[str, Any]:
+    with _locked(meditation_dir):
+        return _done(node_id=node_id, meditation_dir=meditation_dir, note=note, goals_dir=goals_dir, tick_fn=tick_fn)
+
+
+def _done(node_id: str, meditation_dir: str = MEDITATION_DIR, note: str = "",
          goals_dir: Optional[str] = None, tick_fn: Optional[Callable] = None) -> Dict[str, Any]:
     """The owner did the thing. The node is done by him, the goal file's
     checkbox ticks when the node IS a milestone, and every node that was
@@ -1474,6 +1545,11 @@ def done(node_id: str, meditation_dir: str = MEDITATION_DIR, note: str = "",
 
 
 def accept(node_id: str, meditation_dir: str = MEDITATION_DIR) -> Dict[str, Any]:
+    with _locked(meditation_dir):
+        return _accept(node_id=node_id, meditation_dir=meditation_dir)
+
+
+def _accept(node_id: str, meditation_dir: str = MEDITATION_DIR) -> Dict[str, Any]:
     """The owner takes an idea: it becomes a pending node and runs after the
     goal's last open milestone. Nothing else in the graph changes."""
     g = load(meditation_dir)
