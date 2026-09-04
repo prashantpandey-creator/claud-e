@@ -790,6 +790,41 @@ def test_an_EMPTY_prediction_is_not_a_cache_hit():
         assert len(calls) == 2, "an empty result was cached as an answer"
 
 
+def test_a_nodes_spend_is_the_SUM_of_its_runs_not_the_last_result():
+    """Live 2026-09-04: five runs on one node — three fresh sessions ($1.16,
+    $3.31, $2.95) and a fourth session resumed once ($2.86 then $3.83, the
+    CLI's total for that session) — and the status line read '$3.83 spent'.
+    A resumed session reports its own cumulative total, so per session the
+    max counts; across sessions they add."""
+    with tempfile.TemporaryDirectory() as t:
+        gdir, med = _world(t)
+        g = cp.build(goals_dir=gdir, meditation_dir=med, elaborator=_elab)
+        cp.save(g, med)
+        cp.go(meditation_dir=med, max_parallel=1, dispatch=lambda n: {"log": "l1", "session": "s1"})
+        node = [n for n in cp.load(med)["nodes"] if n["status"] == "running"][0]
+        res1 = _finished(blocked="wall", pushed=False, commits=()); res1["total_cost_usd"] = 1.16
+        cp.tick(meditation_dir=med, dispatch=lambda n: None, read_result=lambda log: res1 if log == "l1" else None)
+        # the owner clears the wall; the same session resumes and reports its cumulative total
+        wall = [n for n in cp.load(med)["nodes"] if n.get("from_agent")][0]
+        cp.done(wall["id"], meditation_dir=med)
+        cp.tick(meditation_dir=med, max_parallel=1, dispatch=lambda n: {"log": "l2", "session": "s1"}, read_result=lambda log: None)
+        res2 = _finished(); res2["total_cost_usd"] = 3.83
+        out = cp.tick(meditation_dir=med, dispatch=lambda n: None, read_result=lambda log: res2 if log == "l2" else None)
+        n2 = [n for n in cp.load(med)["nodes"] if n["id"] == node["id"]][0]
+        assert abs(n2["spent_usd"] - 3.83) < 1e-9, n2.get("spent_usd")      # same session: max, not sum
+        assert abs(out["metrics"]["spent_usd"] - 3.83) < 1e-9, out["metrics"]
+        # a FRESH session on the same node adds
+        n2["status"] = "pending"; n2["session"] = ""
+        g3 = cp.load(med); [x for x in g3["nodes"] if x["id"] == node["id"]][0].update(status="pending", session="")
+        cp.save(g3, med)
+        cp.tick(meditation_dir=med, max_parallel=1, dispatch=lambda n: {"log": "l3", "session": "s2"}, read_result=lambda log: None)
+        res3 = _finished(); res3["total_cost_usd"] = 2.00
+        out = cp.tick(meditation_dir=med, dispatch=lambda n: None, read_result=lambda log: res3 if log == "l3" else None)
+        n3 = [n for n in cp.load(med)["nodes"] if n["id"] == node["id"]][0]
+        assert abs(n3["spent_usd"] - 5.83) < 1e-9, n3.get("spent_usd")
+        assert abs(out["metrics"]["spent_usd"] - 5.83) < 1e-9, out["metrics"]
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

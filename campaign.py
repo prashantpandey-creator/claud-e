@@ -54,6 +54,7 @@ STALL_S = 45 * 60            # running, no result, log unchanged this long
 DEFAULT_PARALLEL = 3         # the RAM law: 6+9+8 < 30 GB, from the outage
 ELABORATE_BUDGET_USD = 0.35  # planning is cheap; execution is not
 ELABORATE_TIMEOUT_S = 300
+PREDICT_TIMEOUT_S = 600      # a prediction reads a whole repo cold; local-llm-ui timed out at 300
 
 STEPS_SCHEMA = {
     "type": "object",
@@ -236,7 +237,7 @@ def predict_with_claude(project: str, path: str, sha: str,
             "--json-schema", json.dumps(PREDICT_SCHEMA),
             "--allowedTools", PLANNER_ALLOWED, "--disallowedTools", PLANNER_DENIED]
     r = subprocess.run(argv, cwd=path, capture_output=True, text=True,
-                       timeout=ELABORATE_TIMEOUT_S, stdin=subprocess.DEVNULL)
+                       timeout=PREDICT_TIMEOUT_S, stdin=subprocess.DEVNULL)
     return _planner_result(r.stdout, "milestones")
 
 
@@ -885,6 +886,13 @@ def _absorb(n: Dict[str, Any], res: Dict[str, Any], g: Dict[str, Any]) -> None:
                    "next": (so.get("next") or "").strip()}
     n["finished"] = _now_iso()
     n["stuck"] = False
+    # Spend across runs. A resumed session reports its own cumulative
+    # total, so per session the max counts; different sessions add. The
+    # status line read "$3.83 spent" after five runs worth $11.25.
+    hist = n.setdefault("spend_by_session", {})
+    sess = n.get("session") or n.get("log") or "?"
+    hist[sess] = max(float(hist.get(sess) or 0), float(res.get("total_cost_usd") or 0))
+    n["spent_usd"] = round(sum(hist.values()), 4)
     if res.get("is_error") or (res.get("subtype") not in (None, "success") and not so):
         n["status"] = "failed"
         n["why_failed"] = str(res.get("subtype") or "error")
@@ -949,7 +957,8 @@ def _metrics(g: Dict[str, Any], now: float) -> Dict[str, Any]:
     for n in ns:
         by[n["status"]] = by.get(n["status"], 0) + 1
     fin = [n for n in ns if n.get("result")]
-    spent = round(sum(n["result"]["cost_usd"] for n in fin), 4)
+    spent = round(sum(n.get("spent_usd") if n.get("spent_usd") is not None else n["result"]["cost_usd"]
+                      for n in fin), 4)
     per_goal: Dict[str, Dict[str, int]] = {}
     for n in ns:
         pg = per_goal.setdefault(n["goal"], {"title": n["goal_title"], "done": 0, "total": 0,
