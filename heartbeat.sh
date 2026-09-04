@@ -69,6 +69,9 @@ STEPS=(
   # (a new item under YOUR HANDS, a step shipped, a stop, a hold). Inert when
   # ~/bin/sendmail or ~/.sendmail.conf is missing; never fails the pass.
   "mail.py --digest --quiet"
+  # …and hear him back: replies that carry our nonce, from his address,
+  # with dkim=pass. 'done' ticks the item; anything else steers the agent.
+  "mail.py --inbox --quiet"
 )
 
 # Steps whose nonzero exit is a FINDING, not a breakage.

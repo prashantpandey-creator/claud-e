@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -218,9 +219,162 @@ def send_summary(subject: str, text: str, runner: Optional[Callable] = None,
     return r
 
 
+# ---------------------------------------------------------------------------
+# the reply lane — IMAP, the same app password, a nonce, DKIM
+# ---------------------------------------------------------------------------
+
+IMAP_HOST = "imap.gmail.com"
+_NONCE_RE = re.compile(r"\[%s #([0-9a-f]{8})\]" % re.escape(TAG))
+
+
+def parse_reply(raw: bytes, owner: str) -> Dict[str, Any]:
+    """What a mail is, decided from its own headers and body: the nonce in
+    its subject, whether it is from the owner, whether Gmail's own
+    Authentication-Results says dkim=pass for gmail.com, and the body with
+    quoted lines and signatures removed. Never trusts the body."""
+    import email
+    from email import policy
+    try:
+        msg = email.message_from_bytes(raw, policy=policy.default)
+    except Exception:
+        return {"ok": False, "why": "unparseable"}
+    subject = str(msg.get("Subject") or "")
+    m = _NONCE_RE.search(subject)
+    nonce = m.group(1) if m else ""
+    frm = str(msg.get("From") or "")
+    addr = email.utils.parseaddr(frm)[1].lower()
+    auth = " ".join(str(v) for v in msg.get_all("Authentication-Results", []) +
+                    msg.get_all("ARC-Authentication-Results", []))
+    dkim_ok = bool(re.search(r"dkim=pass", auth, re.I)) and bool(re.search(r"header\.[id]=@?gmail\.com", auth, re.I))
+    body = ""
+    try:
+        part = msg.get_body(preferencelist=("plain",))
+        body = part.get_content() if part is not None else ""
+    except Exception:
+        body = ""
+    lines = []
+    for ln in (body or "").splitlines():
+        t = ln.strip()
+        if not t:
+            continue
+        if t.startswith(">"):
+            continue
+        if re.match(r"^On .{6,120} wrote:$", t):
+            break
+        if t in ("--", "-- ") or t.startswith("-- "):
+            break
+        lines.append(t)
+    return {"ok": True, "nonce": nonce, "from": addr, "is_owner": bool(owner) and addr == owner.lower(),
+            "dkim": dkim_ok, "body": "\n".join(lines).strip(), "subject": subject,
+            "message_id": str(msg.get("Message-ID") or "")}
+
+
+def act_on_reply(parsed: Dict[str, Any], st: Dict[str, Any], done_fn: Callable, steer_fn: Callable,
+                 continue_fn: Callable) -> Dict[str, Any]:
+    """The reply is the owner's word IF: it carries a nonce we sent, it is
+    from the owner's address, and DKIM passed for gmail.com. Then: a body
+    that is 'done' ticks the first human item the mail was about; anything
+    else is the message to that mail's agent (steer for a campaign node,
+    continue for a plain agent). The body is never executed."""
+    if not parsed.get("ok"):
+        return {"acted": False, "why": parsed.get("why", "unparseable")}
+    sent = (st.get("sent") or {}).get(parsed.get("nonce") or "")
+    if not sent:
+        return {"acted": False, "why": "no nonce we sent"}
+    if not parsed.get("is_owner"):
+        return {"acted": False, "why": "not from the owner's address"}
+    if not parsed.get("dkim"):
+        return {"acted": False, "why": "no dkim=pass for gmail.com"}
+    if parsed.get("message_id") and parsed["message_id"] in (st.get("handled") or []):
+        return {"acted": False, "why": "already handled"}
+    body = (parsed.get("body") or "").strip()
+    if not body:
+        return {"acted": False, "why": "empty reply"}
+    items = sent.get("items") or []
+    first = body.splitlines()[0].strip().lower().rstrip(".!")
+    if first in ("done", "done.", "ok done", "ticked"):
+        human = next((i for i in items if i.get("kind") == "human"), None)
+        if not human:
+            return {"acted": False, "why": "'done' but the mail had no item of yours"}
+        r = done_fn(human["id"])
+        return {"acted": bool(r.get("ok")), "what": "done", "node": human["id"], "why": r.get("why", "")}
+    target = next((i for i in items if i.get("kind") == "node"), None) or \
+             next((i for i in items if i.get("kind") == "agent"), None)
+    if not target:
+        return {"acted": False, "why": "the mail had no agent to steer; say 'done' to tick your item"}
+    if target["kind"] == "node":
+        r = steer_fn(target["id"], body)
+        return {"acted": bool(r.get("ok")), "what": "steer", "node": target["id"], "why": r.get("why", "")}
+    r = continue_fn(target["id"], body)
+    return {"acted": bool(r.get("started")), "what": "continue", "agent": target["id"], "why": r.get("why", "")}
+
+
+def poll_inbox(meditation_dir: str = MEDITATION_DIR, imap=None, conf: str = CONF,
+               done_fn: Optional[Callable] = None, steer_fn: Optional[Callable] = None,
+               continue_fn: Optional[Callable] = None, mark_seen: bool = True) -> Dict[str, Any]:
+    """The heartbeat's other step: read unseen replies that carry our tag,
+    act on the ones that pass the gate, remember every message id."""
+    st = load_state(meditation_dir)
+    if not st.get("sent"):
+        return {"polled": False, "why": "nothing was ever sent, so nothing can be a reply"}
+    c = read_conf(conf)
+    owner = str(c.get("user") or "")
+    if imap is None:
+        import imaplib
+        try:
+            imap = imaplib.IMAP4_SSL(IMAP_HOST)
+            imap.login(owner, str(c.get("password") or ""))
+        except Exception as e:
+            return {"polled": False, "why": "imap: " + str(e)[:120]}
+    if done_fn is None or steer_fn is None or continue_fn is None:
+        import campaign as cp
+        import go as _go
+        done_fn = done_fn or (lambda nid: cp.done(nid, meditation_dir=meditation_dir, note="by mail"))
+        steer_fn = steer_fn or (lambda nid, msg: cp.steer(nid, msg, meditation_dir=meditation_dir))
+        continue_fn = continue_fn or (lambda name, msg: _go.continue_agent(name, msg))
+    out: Dict[str, Any] = {"polled": True, "seen": 0, "acted": [], "refused": []}
+    try:
+        imap.select("INBOX")
+        typ, data = imap.search(None, "UNSEEN", "SUBJECT", '"[%s #"' % TAG)
+        ids = (data[0].split() if typ == "OK" and data and data[0] else [])
+        for mid in ids[:20]:
+            typ, parts = imap.fetch(mid, "(RFC822)")
+            raw = b""
+            for p_ in parts or []:
+                if isinstance(p_, tuple) and len(p_) > 1 and isinstance(p_[1], (bytes, bytearray)):
+                    raw = bytes(p_[1])
+            if not raw:
+                continue
+            out["seen"] += 1
+            parsed = parse_reply(raw, owner)
+            r = act_on_reply(parsed, st, done_fn, steer_fn, continue_fn)
+            rec = {"nonce": parsed.get("nonce", ""), "from": parsed.get("from", ""), **r}
+            (out["acted"] if r.get("acted") else out["refused"]).append(rec)
+            if parsed.get("message_id") and parsed["message_id"] not in (st.get("handled") or []):
+                st.setdefault("handled", []).append(parsed["message_id"])
+            st.setdefault("inbox_log", []).append({"ts": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()), **rec})
+            if mark_seen:
+                try:
+                    imap.store(mid, "+FLAGS", "\\Seen")
+                except Exception:
+                    pass
+        st["last_polled"] = time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime())
+        st["inbox_log"] = (st.get("inbox_log") or [])[-200:]
+        save_state(st, meditation_dir)
+    except Exception as e:
+        out["why"] = "imap: " + str(e)[:160]
+    finally:
+        try:
+            imap.logout()
+        except Exception:
+            pass
+    return out
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(prog="meditate mail", description=__doc__.split("\n")[0])
     ap.add_argument("--digest", action="store_true", help="mail what changed in the run since the last mail")
+    ap.add_argument("--inbox", action="store_true", help="read replies to our mails and act on the ones that pass the gate")
     ap.add_argument("--test", action="store_true", help="send one line to prove the lane")
     ap.add_argument("--quiet", action="store_true")
     ap.add_argument("--json", action="store_true")
@@ -234,6 +388,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                  "This is the twin. If you are reading this, mail out works.\n")
         print(json.dumps(r) if a.json else ("sent to %s" % r.get("to") if r.get("sent") else "not sent: " + r.get("why", "")))
         return 0 if r.get("sent") else 1
+    if a.inbox:
+        r = poll_inbox()
+        if a.json:
+            print(json.dumps(r))
+        elif not a.quiet or r.get("acted"):
+            print(("acted on %d reply(ies): %s" % (len(r["acted"]), r["acted"])) if r.get("acted")
+                  else ("no reply acted on: " + str(r.get("why") or r.get("refused") or "none")))
+        return 0
     if a.digest:
         r = send_digest()
         if a.json:
