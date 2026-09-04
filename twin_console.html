@@ -694,7 +694,14 @@ function renderCampaign(d){
     return;
   }
   const ideas = (d.nodes||[]).filter(x => x.status === "idea");
-  const state = d.armed ? "RUNNING" : d.paused_why ? "PAUSED" : "planned — waiting for go";
+  const held = d.hold_until && (d.hold_until * 1000) > Date.now();
+  const untilTxt = d.until ? " until " + String(d.until).slice(11, 16) : "";
+  const state = d.armed
+    ? (held ? "HOLDING — a usage limit answered; resumes by itself" + untilTxt
+       : d.closing ? "PAST " + String(d.until||"").slice(11, 16) + " — nothing new; waiting for running agents"
+       : "RUNNING" + untilTxt + " · ticks every 5 min")
+    : d.summary_at ? "CLOSED — summary written (campaign-summary.md, mailed)"
+    : d.paused_why ? "PAUSED" : "planned — waiting for go";
   if(n) n.textContent = `${m.done||0}/${m.nodes||0} · ${state}${ideas.length ? ` · ${ideas.length} ideas` : ""}`;
   if(sec && (d.armed || (m.blocked||0) > 0 || (m.stuck||0) > 0)) sec.classList.remove("collapsed");
   // the numbers that decide: one strip, tabular

@@ -308,6 +308,23 @@ def test_one_click_is_ONE_activity_row():
     assert len(calls) == 2, calls
 
 
+def test_the_brain_ticks_an_ARMED_campaign_every_five_minutes():
+    """The heartbeat ticks hourly; a finished node waited up to an hour for
+    the next dispatch. The brain keeps the run's clock while armed — and
+    tests never start that loop."""
+    import inspect, tempfile as _tf
+    assert "_tick_campaign_loop" in inspect.getsource(br.main)
+    assert "_tick_campaign_loop" not in inspect.getsource(br.make_server)
+    assert br._TICK_POLL_S <= 300
+    d = _tf.mkdtemp()
+    p = os.path.join(d, "campaign.json")
+    assert br._campaign_armed(p) is False
+    open(p, "w").write(json.dumps({"armed": True}))
+    assert br._campaign_armed(p) is True
+    open(p, "w").write(json.dumps({"armed": False}))
+    assert br._campaign_armed(p) is False
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

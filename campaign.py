@@ -51,6 +51,19 @@ MEDITATION_DIR = os.path.expanduser("~/.claude/meditation")
 STATE_NAME = "campaign.json"
 PAGE_NAME = "campaign.md"
 STALL_S = 45 * 60            # running, no result, log unchanged this long
+# Wall-time bound per run: 2x the kind's median duration from the ledger,
+# floored and capped. Nothing bounded an agent's wall time before — stuck
+# was a flag on the page; the process ran on. A stopped run is resumed once
+# with the fact, then handed to the owner.
+WALL_FACTOR = 2.0
+WALL_MIN_S = 30 * 60
+WALL_MAX_S = 120 * 60
+WALL_DEFAULT_S = 60 * 60
+MAX_ATTEMPTS = 2
+# A usage/rate limit answer is not the node's fault: the whole campaign
+# holds this long, the node keeps its session and its attempts.
+HOLD_S = 30 * 60
+_LIMIT_RE = re.compile(r"rate.?limit|usage limit|hit your (usage|limit)|overloaded|too many requests|\b429\b|quota", re.I)
 DEFAULT_PARALLEL = 3         # the RAM law: 6+9+8 < 30 GB, from the outage
 ELABORATE_BUDGET_USD = 0.35  # planning is cheap; execution is not
 ELABORATE_TIMEOUT_S = 300
@@ -544,9 +557,10 @@ def build(goals_dir: Optional[str] = None, meditation_dir: str = MEDITATION_DIR,
             steps: List[Dict[str, Any]] = []
             if elaborator is not None and not human:
                 try:
-                    steps = elaborator(g["name"], text) if elaborator is not elaborate_with_claude \
-                        else elaborator(g["name"], head, cwd=g.get("cwd") or "",
-                                        title=g.get("title") or "", note=g.get("note") or "")
+                    steps = elaborator(g["name"], text) \
+                        if (elaborator is not elaborate_with_claude and not getattr(elaborator, "wants_context", False)) \
+                        else elaborator(g["name"], text if getattr(elaborator, "wants_context", False) else head,
+                                        cwd=g.get("cwd") or "", title=g.get("title") or "", note=g.get("note") or "")
                 except Exception as e:
                     notes.append("elaboration failed for %s / %s: %s"
                                  % (g["name"], text[:50], str(e)[:80]))
@@ -783,6 +797,126 @@ def read_result_real(log: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+def median_duration_by_kind(ledger: Optional[str]) -> Dict[str, float]:
+    """kind -> median seconds of its SUCCESSFUL runs in spend.jsonl."""
+    byk: Dict[str, List[float]] = {}
+    if not ledger or not os.path.exists(ledger):
+        return {}
+    try:
+        with open(ledger, errors="replace") as f:
+            for ln in f:
+                try:
+                    r = json.loads(ln)
+                except ValueError:
+                    continue
+                if r.get("subtype") not in (None, "success"):
+                    continue
+                d = float(r.get("duration_ms") or 0) / 1000.0
+                if d <= 0:
+                    continue
+                kind = (r.get("name") or "").split("-", 1)[0]
+                if kind:
+                    byk.setdefault(kind, []).append(d)
+    except OSError:
+        return {}
+    out: Dict[str, float] = {}
+    for k, v in byk.items():
+        v.sort()
+        out[k] = v[len(v) // 2] if len(v) % 2 else (v[len(v) // 2 - 1] + v[len(v) // 2]) / 2.0
+    return out
+
+
+def wall_bound_s(kind: str, medians: Dict[str, float]) -> float:
+    med = medians.get(kind)
+    if not med:
+        return float(WALL_DEFAULT_S)
+    return float(min(WALL_MAX_S, max(WALL_MIN_S, WALL_FACTOR * med)))
+
+
+def _death_line_real(log: str) -> str:
+    """The CLI refusing to start leaves one non-event line as the whole
+    body ("claude: No such file or directory", "No conversation found…").
+    That line, or "" for a run that is streaming or has not spoken yet."""
+    if not log or not os.path.exists(log):
+        return ""
+    try:
+        if time.time() - os.path.getmtime(log) < 120:
+            return ""
+        body = [ln for ln in open(log, errors="replace").read(4000).splitlines()
+                if ln.strip() and not ln.startswith("#")]
+    except OSError:
+        return ""
+    first = body[0].strip() if body else ""
+    return first[:160] if first and not first.startswith("{") else ""
+
+
+def _kill_real(n: Dict[str, Any]) -> bool:
+    """Stop the run's whole process group (caffeinate + claude)."""
+    import signal
+    try:
+        import go
+        pid = int((go._head(n.get("log", "")).get("pid") or "0").strip() or 0)
+    except Exception:
+        pid = 0
+    if not pid:
+        return False
+    try:
+        os.killpg(os.getpgid(pid), signal.SIGTERM)
+        return True
+    except (OSError, ProcessLookupError):
+        try:
+            os.kill(pid, signal.SIGTERM)
+            return True
+        except (OSError, ProcessLookupError):
+            return False
+
+
+def _wall_node(n: Dict[str, Any], g: Dict[str, Any], text: str, why: str) -> Dict[str, Any]:
+    """A human node raised on behalf of an agent's node; the node waits on it."""
+    wall = next((m for m in g["nodes"] if m.get("kind") == "human" and m["goal"] == n["goal"]
+                 and m["title"].strip().lower() == text.strip().lower()), None)
+    if wall is None:
+        wid = n["id"] + ".you"
+        while any(m["id"] == wid for m in g["nodes"]):
+            wid += "x"
+        wall = {"id": wid, "goal": n["goal"], "goal_title": n["goal_title"], "cwd": n["cwd"],
+                "milestone": n["milestone"], "title": text, "why": why,
+                "kind": "human", "check": "", "depends_on": [], "status": "waiting",
+                "agent": {"model": "you", "effort": "", "basis": "human", "budget_usd": 0.0,
+                          "cap_basis": "none", "why": "not dispatchable"},
+                "name": "human-%s-%s" % (n["goal"][:16], wid.replace(".", "_")),
+                "steers": [], "log": "", "session": "", "result": None, "from_agent": n["id"]}
+        g["nodes"].append(wall)
+    if wall["id"] not in n["depends_on"]:
+        n["depends_on"].append(wall["id"])
+    return wall
+
+
+def _stop_run(n: Dict[str, Any], g: Dict[str, Any], why: str, keep_session: bool = True) -> None:
+    """A run stopped without a RESULT: once, it resumes with the fact; twice,
+    the owner decides. Attempts count stops, not dispatches."""
+    n["attempts"] = int(n.get("attempts") or 0) + 1
+    n["stuck"] = False
+    n["stopped_why"] = why[:200]
+    g["events"].append({"ts": _now_iso(), "what": "stopped", "node": n["id"],
+                        "why": why[:120], "attempt": n["attempts"]})
+    if not keep_session:
+        n["session"] = ""
+        n["resume_message"] = ""
+    if n["attempts"] >= MAX_ATTEMPTS:
+        _wall_node(n, g, "Agent stopped twice on '%s' without a result (last: %s). Split the step, "
+                         "raise its cap, or drop it." % (n["title"][:60], why[:80]),
+                   "two runs ended without a RESULT; a third would be the same run again")
+        n["status"] = "pending"
+        n["resume_message"] = ""
+        return
+    n["status"] = "pending"
+    if keep_session and n.get("session"):
+        n["resume_message"] = ("Your previous run was stopped: %s — it produced no RESULT. Finish the "
+                               "smallest shippable piece now: commit, push when green, and end with "
+                               "the RESULT object." % why[:120])
+
+
 def _log_mtime_real(log: str) -> Optional[float]:
     try:
         return os.path.getmtime(log)
@@ -791,7 +925,8 @@ def _log_mtime_real(log: str) -> Optional[float]:
 
 
 def _dispatch_ready(g: Dict[str, Any], max_parallel: int,
-                    dispatch: Callable[[Dict[str, Any]], Optional[Dict[str, Any]]]) -> List[str]:
+                    dispatch: Callable[[Dict[str, Any]], Optional[Dict[str, Any]]],
+                    now: Optional[float] = None) -> List[str]:
     running = sum(1 for n in g["nodes"] if n["status"] == "running")
     sent: List[str] = []
     for n in ready(g):
@@ -809,7 +944,7 @@ def _dispatch_ready(g: Dict[str, Any], max_parallel: int,
         if n.get("resume_message"):
             n["resumed_with"] = n.pop("resume_message")
         n["started"] = _now_iso()
-        n["started_epoch"] = time.time()
+        n["started_epoch"] = now if now is not None else time.time()
         running += 1
         sent.append(n["id"])
         g["events"].append({"ts": _now_iso(), "what": "dispatched", "node": n["id"],
@@ -817,24 +952,223 @@ def _dispatch_ready(g: Dict[str, Any], max_parallel: int,
     return sent
 
 
+def parse_until(text: str, now: Optional[float] = None) -> Optional[float]:
+    """'21:00' → today's 21:00 local (tomorrow's if already past); a number is an epoch."""
+    text = (text or "").strip()
+    if not text:
+        return None
+    try:
+        v = float(text)
+        return v if v > 1e9 else None
+    except ValueError:
+        pass
+    m = re.match(r"^(\d{1,2}):(\d{2})$", text)
+    if not m:
+        return None
+    t = now if now is not None else time.time()
+    lt = time.localtime(t)
+    target = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, int(m.group(1)), int(m.group(2)), 0,
+                          lt.tm_wday, lt.tm_yday, lt.tm_isdst))
+    if target <= t:
+        target += 86400
+    return target
+
+
 def go(meditation_dir: str = MEDITATION_DIR, max_parallel: Optional[int] = None,
-       dispatch: Optional[Callable] = None) -> Dict[str, Any]:
-    """The owner's go. Arms the campaign and sends the first ready wave."""
+       dispatch: Optional[Callable] = None, until: Optional[float] = None,
+       now: Optional[Callable[[], float]] = None) -> Dict[str, Any]:
+    """The owner's go. Arms the campaign and sends the first ready wave.
+    `until` (epoch) is the deadline: past it nothing new is sent, and once
+    nothing is running the campaign closes out with a written summary."""
     g = load(meditation_dir)
     if not g:
         return {"armed": False, "why": "no campaign planned — run `campaign plan` first"}
+    t = (now or time.time)()
     g["armed"] = True
     g["armed_at"] = _now_iso()
-    g["armed_epoch"] = time.time()
+    g["armed_epoch"] = t
     g["paused_why"] = ""
+    g["hold_until"] = 0
+    if until:
+        g["until_epoch"] = float(until)
+        g["until"] = time.strftime("%Y-%m-%d %H:%M", time.localtime(float(until)))
+    else:
+        g.pop("until_epoch", None)
+        g.pop("until", None)
     if max_parallel:
         g["max_parallel"] = int(max_parallel)
-    g["events"].append({"ts": _now_iso(), "what": "go"})
+    g["events"].append({"ts": _now_iso(), "what": "go", "until": g.get("until", "")})
     sent = _dispatch_ready(g, g.get("max_parallel") or DEFAULT_PARALLEL,
-                           dispatch or dispatch_real)
-    g["metrics"] = _metrics(g, time.time(), os.path.join(meditation_dir, "spend.jsonl"))
+                           dispatch or dispatch_real, now=t)
+    g["metrics"] = _metrics(g, t, os.path.join(meditation_dir, "spend.jsonl"))
     save(g, meditation_dir)
-    return {"armed": True, "dispatched": sent, "metrics": g["metrics"]}
+    return {"armed": True, "dispatched": sent, "metrics": g["metrics"], "until": g.get("until", "")}
+
+
+def summarize(g: Dict[str, Any], ledger: Optional[str] = None) -> str:
+    """The report at the end of a run: what shipped, what stopped, what is
+    yours, what it cost — from results, never from the plan."""
+    m = _metrics(g, time.time(), ledger)
+    ns = [n for n in g["nodes"] if n["status"] != "idea"]
+    out = ["CLAUD-E run %s — summary" % g.get("id", ""),
+           "armed %s%s · %.1f h · %d of %d steps done · $%.2f spent"
+           % (str(g.get("armed_at", ""))[:16], (" until " + g["until"]) if g.get("until") else "",
+              m.get("hours") or 0.0, m["done"], m["nodes"], m["spent_usd"]), ""]
+    out.append("SHIPPED")
+    shipped = [n for n in ns if n["status"] == "done" and n.get("result")]
+    if not shipped:
+        out.append("  nothing finished with a result")
+    for n in shipped:
+        r = n["result"]
+        out.append("  - %s › %s" % (n["goal_title"][:40], n["title"][:70]))
+        if r.get("verified_commits"):
+            out.append("      commits verified: %s%s" % (", ".join(c[:9] for c in r["verified_commits"][:6]),
+                                                       " · pushed" if r.get("pushed") else " · NOT pushed"))
+        elif r.get("commits"):
+            out.append("      commits claimed, none verified: %s" % ", ".join(c[:9] for c in r["commits"][:4]))
+        else:
+            out.append("      no commits")
+        for d in (r.get("did") or [])[:4]:
+            out.append("      · %s" % str(d)[:110])
+        if r.get("tests"):
+            out.append("      tests: %s" % json.dumps(r["tests"])[:80])
+    out.append("")
+    out.append("STOPPED / NEEDS A DECISION")
+    stopped = [n for n in ns if n["status"] in ("failed",) or n.get("stopped_why")]
+    for n in stopped:
+        out.append("  - %s › %s: %s" % (n["goal_title"][:30], n["title"][:60],
+                                       (n.get("why_failed") or n.get("stopped_why") or "")[:100]))
+    if not stopped:
+        out.append("  none")
+    out.append("")
+    out.append("YOUR HANDS (open)")
+    hands = [n for n in ns if n.get("kind") == "human" and n["status"] == "waiting"]
+    for n in hands:
+        out.append("  - %s" % n["title"][:110])
+    if not hands:
+        out.append("  nothing waits on you")
+    out.append("")
+    out.append("STILL TO RUN")
+    todo = [n for n in ns if n["status"] in ("pending",) and n.get("kind") != "human"]
+    for n in todo[:12]:
+        out.append("  - %s › %s" % (n["goal_title"][:30], n["title"][:70]))
+    if not todo:
+        out.append("  nothing pending")
+    out.append("")
+    out.append("SPEND  $%.2f · %d commits verified (%d claimed) · %d pushed · %d denials · %d stops"
+               % (m["spent_usd"], m["verified_commits"], m["claimed_commits"], m["pushed"], m["denials"],
+                  sum(1 for e in g.get("events") or [] if e.get("what") == "stopped")))
+    return "\n".join(out)
+
+
+def close_out(g: Dict[str, Any], meditation_dir: str, t: float, mailer: Optional[Callable] = None) -> str:
+    """The deadline passed and nothing runs: disarm, write the summary, mail it."""
+    ledger = os.path.join(meditation_dir, "spend.jsonl")
+    text = summarize(g, ledger)
+    g["armed"] = False
+    g["paused_why"] = "deadline %s reached — summary written" % (g.get("until") or time.strftime("%H:%M", time.localtime(t)))
+    g["closing"] = False
+    g["summary"] = text
+    g["summary_at"] = _now_iso()
+    try:
+        with open(os.path.join(meditation_dir, "campaign-summary.md"), "w") as f:
+            f.write(text + "\n")
+    except OSError:
+        pass
+    g["events"].append({"ts": _now_iso(), "what": "closed", "why": g["paused_why"]})
+    if mailer is None:
+        try:
+            import mail as _mail
+            mailer = _mail.send_summary
+        except Exception:
+            mailer = None
+    if mailer is not None:
+        try:
+            mailer("CLAUD-E run summary — %s" % time.strftime("%Y-%m-%d %H:%M", time.localtime(t)), text)
+        except Exception as e:
+            g["events"].append({"ts": _now_iso(), "what": "mail failed", "why": str(e)[:100]})
+    return text
+
+
+_CARRY = ("status", "session", "log", "worktree", "result", "spend_by_run", "spent_usd", "attempts",
+          "steers", "resumed_with", "resume_message", "started", "started_epoch", "finished",
+          "blocked_on", "stuck", "handed_over", "why_failed", "done_by", "note", "grown",
+          "stopped_why", "agent")
+
+
+def _steps_from_old(old: Dict[str, Any], mid: str) -> List[Dict[str, Any]]:
+    """The sub-steps a milestone already has, in planner shape, so a re-plan
+    does not pay the planner for what it planned last time."""
+    subs = [n for n in old["nodes"] if n["id"].startswith(mid + ".") and not n.get("from_agent")
+            and n["id"] != mid + ".next" and n["status"] != "idea"]
+    out = []
+    for n in subs:
+        sid = n["id"][len(mid) + 1:]
+        out.append({"id": sid, "title": n["title"], "why": n.get("why", ""),
+                    "depends_on": [d[len(mid) + 1:] for d in n.get("depends_on") or []
+                                   if d.startswith(mid + ".") and d != mid + ".next"],
+                    "kind": n.get("kind", "goal"), "check": n.get("check", "")})
+    return out
+
+
+def replan(goals_dir: Optional[str] = None, meditation_dir: str = MEDITATION_DIR,
+           elaborator: Optional[Callable] = None) -> Dict[str, Any]:
+    """Re-read the goal files without losing the run. Node ids are
+    sha1(goal, milestone), so every node the new graph shares with the old
+    keeps its state; walls raised by agents and steps grown from results
+    stay attached to their parents; milestones ticked in the file leave;
+    milestones already elaborated keep their sub-steps unpaid."""
+    old = load(meditation_dir)
+    if not old:
+        g = build(goals_dir=goals_dir, meditation_dir=meditation_dir, elaborator=elaborator)
+        save(g, meditation_dir)
+        return {"ok": True, "carried": 0, "new": len(g["nodes"]), "id": g["id"]}
+    real = elaborator if elaborator is not None else elaborate_with_claude
+    import goals as gl
+    rows = gl.scan(goals_dir) if goals_dir else gl.scan()
+    known = {n["id"] for n in old["nodes"]}
+
+    def cached(goal: str, milestone: str, **kw):
+        mid = _nid(goal, milestone)
+        if mid in known:
+            return _steps_from_old(old, mid)
+        if real is elaborate_with_claude:
+            return real(goal, milestone, **kw)
+        return real(goal, milestone)
+    cached.wants_context = True          # build() passes cwd/title/note
+    new = build(goals_dir=goals_dir, meditation_dir=meditation_dir, elaborator=cached,
+                goals_rows=rows, ideator=None)
+    om = {n["id"]: n for n in old["nodes"]}
+    carried = 0
+    for n in new["nodes"]:
+        o = om.get(n["id"])
+        if not o:
+            continue
+        for k in _CARRY:
+            if k in o:
+                n[k] = o[k]
+        # dependencies the old node gained at run time (walls, grown steps)
+        for d in o.get("depends_on") or []:
+            if d not in n["depends_on"] and (d in om) and (om[d].get("from_agent") or om[d].get("grown")):
+                n["depends_on"].append(d)
+        carried += 1
+    new_ids = {n["id"] for n in new["nodes"]}
+    for o in old["nodes"]:
+        if o["id"] in new_ids:
+            continue
+        parent = o.get("from_agent") or (o["id"][:-5] if o["id"].endswith(".next") else "")
+        if (o.get("from_agent") or o.get("grown") or o["status"] == "idea") and (parent in new_ids or o["status"] == "idea"):
+            new["nodes"].append(o)
+            new_ids.add(o["id"])
+    for k in ("id", "created", "armed", "armed_at", "armed_epoch", "max_parallel", "events",
+              "paused_why", "until", "until_epoch", "hold_until", "closing", "summary", "summary_at"):
+        if k in old:
+            new[k] = old[k]
+    fresh = sum(1 for n in new["nodes"] if n["id"] not in om)
+    new["events"].append({"ts": _now_iso(), "what": "replanned", "carried": carried, "new": fresh})
+    new["metrics"] = _metrics(new, time.time(), os.path.join(meditation_dir, "spend.jsonl"))
+    save(new, meditation_dir)
+    return {"ok": True, "carried": carried, "new": fresh, "id": new["id"], "notes": new.get("notes", [])}
 
 
 def pause(meditation_dir: str = MEDITATION_DIR, why: str = "") -> Dict[str, Any]:
@@ -870,7 +1204,8 @@ def _verified_commits(n: Dict[str, Any], commits: List[str]) -> List[str]:
     return out
 
 
-def _absorb(n: Dict[str, Any], res: Dict[str, Any], g: Dict[str, Any]) -> None:
+def _absorb(n: Dict[str, Any], res: Dict[str, Any], g: Dict[str, Any],
+            now: Optional[float] = None) -> None:
     """A finished node: record what it did, and grow the graph by its next."""
     so = res.get("structured_output")
     so = so if isinstance(so, dict) else {}
@@ -886,6 +1221,14 @@ def _absorb(n: Dict[str, Any], res: Dict[str, Any], g: Dict[str, Any]) -> None:
                    "next": (so.get("next") or "").strip()}
     n["finished"] = _now_iso()
     n["stuck"] = False
+    if res.get("is_error") and _LIMIT_RE.search(json.dumps(res)[:6000] if isinstance(res, dict) else ""):
+        # not this node's fault: hold the campaign, keep the session
+        g["hold_until"] = (now or time.time()) + HOLD_S
+        n["status"] = "pending"
+        n["resume_message"] = "The previous run stopped on a usage limit. Continue from where you stopped."
+        g["events"].append({"ts": _now_iso(), "what": "held", "node": n["id"],
+                            "why": "usage limit — holding %d min" % (HOLD_S // 60)})
+        return
     # Spend across runs. Every run's total is its own — a resumed run's
     # out_tokens and cache_read are smaller than the run it continued, so
     # they are per-invocation figures and total_cost_usd comes from the same
@@ -905,23 +1248,8 @@ def _absorb(n: Dict[str, Any], res: Dict[str, Any], g: Dict[str, Any]) -> None:
         # it can continue from the wall, not from the start.
         wall_text = str(so["blocked_on"]).strip()[:300]
         n["blocked_on"] = wall_text
-        wall = next((m for m in g["nodes"] if m.get("kind") == "human" and m["goal"] == n["goal"]
-                     and m["title"].strip().lower() == wall_text.lower()), None)
-        if wall is None:
-            wid = n["id"] + ".you"
-            while any(m["id"] == wid for m in g["nodes"]):
-                wid += "x"
-            wall = {"id": wid, "goal": n["goal"], "goal_title": n["goal_title"], "cwd": n["cwd"],
-                    "milestone": n["milestone"], "title": wall_text,
-                    "why": "the agent working \"%s\" hit this and only you can clear it" % n["title"][:50],
-                    "kind": "human", "check": "", "depends_on": [], "status": "waiting",
-                    "agent": {"model": "you", "effort": "", "basis": "human", "budget_usd": 0.0,
-                              "cap_basis": "none", "why": "not dispatchable"},
-                    "name": "human-%s-%s" % (n["goal"][:16], wid.replace(".", "_")),
-                    "steers": [], "log": "", "session": "", "result": None, "from_agent": n["id"]}
-            g["nodes"].append(wall)
-        if wall["id"] not in n["depends_on"]:
-            n["depends_on"].append(wall["id"])
+        _wall_node(n, g, wall_text,
+                   "the agent working \"%s\" hit this and only you can clear it" % n["title"][:50])
         n["status"] = "pending"
         n["resume_message"] = ""
         g["events"].append({"ts": _now_iso(), "what": "blocked", "node": n["id"], "why": wall_text[:80]})
@@ -1021,7 +1349,9 @@ def _metrics(g: Dict[str, Any], now: float, ledger: Optional[str] = None) -> Dic
 def tick(meditation_dir: str = MEDITATION_DIR, dispatch: Optional[Callable] = None,
          read_result: Optional[Callable] = None, log_mtime: Optional[Callable] = None,
          now: Optional[Callable[[], float]] = None,
-         max_parallel: Optional[int] = None) -> Dict[str, Any]:
+         max_parallel: Optional[int] = None, death: Optional[Callable] = None,
+         kill: Optional[Callable] = None, medians: Optional[Dict[str, float]] = None,
+         mailer: Optional[Callable] = None) -> Dict[str, Any]:
     """Advance the campaign one step. The heartbeat calls this every pass."""
     g = load(meditation_dir)
     if not g:
@@ -1029,25 +1359,53 @@ def tick(meditation_dir: str = MEDITATION_DIR, dispatch: Optional[Callable] = No
     now_f = now or time.time
     read_result = read_result or read_result_real
     log_mtime = log_mtime or _log_mtime_real
+    death = death or _death_line_real
+    kill = kill or _kill_real
+    ledger = os.path.join(meditation_dir, "spend.jsonl")
+    if medians is None:
+        medians = median_duration_by_kind(ledger)
     t = now_f()
     for n in g["nodes"]:
         if n["status"] != "running":
             continue
         res = read_result(n.get("log", ""))
         if res:
-            _absorb(n, res, g)
+            _absorb(n, res, g, now=t)
+            continue
+        dead = death(n.get("log", ""))
+        if dead:
+            _stop_run(n, g, "died at start: " + dead, keep_session=False)
             continue
         mt = log_mtime(n.get("log", "")) if n.get("log") else None
         last = mt if mt else n.get("started_epoch") or t
-        n["stuck"] = (t - last) > STALL_S
+        elapsed = t - float(n.get("started_epoch") or t)
+        bound = wall_bound_s(n.get("kind") or "goal", medians)
+        if elapsed > bound or (t - last) > STALL_S:
+            why = ("ran %d min, the bound for a %s run is %d min" % (elapsed // 60, n.get("kind") or "goal", bound // 60)
+                   if elapsed > bound else "log unmoved for %d min" % ((t - last) // 60))
+            gone = kill(n)
+            _stop_run(n, g, why + (" (stopped)" if gone else " (process already gone)"))
+            continue
+        n["stuck"] = False
     sent: List[str] = []
-    if g.get("armed") and not g.get("paused_why"):
+    deadline = float(g.get("until_epoch") or 0)
+    held = float(g.get("hold_until") or 0) > t
+    past = bool(deadline) and t >= deadline
+    if g.get("armed") and not g.get("paused_why") and not held and not past:
         sent = _dispatch_ready(g, max_parallel or g.get("max_parallel") or DEFAULT_PARALLEL,
-                               dispatch or dispatch_real)
-    g["metrics"] = _metrics(g, t, os.path.join(meditation_dir, "spend.jsonl"))
+                               dispatch or dispatch_real, now=t)
+    if g.get("armed") and past:
+        if any(n["status"] == "running" for n in g["nodes"]):
+            if not g.get("closing"):
+                g["closing"] = True
+                g["events"].append({"ts": _now_iso(), "what": "deadline", "why": "nothing new; waiting for running agents"})
+        else:
+            close_out(g, meditation_dir, t, mailer=mailer)
+    g["metrics"] = _metrics(g, t, ledger)
     g["last_tick"] = _now_iso()
     save(g, meditation_dir)
-    return {"armed": bool(g.get("armed")), "dispatched": sent, "metrics": g["metrics"]}
+    return {"armed": bool(g.get("armed")), "dispatched": sent, "metrics": g["metrics"],
+            "held": held, "past_deadline": past}
 
 
 def steer(node_id: str, message: str, meditation_dir: str = MEDITATION_DIR,
@@ -1210,6 +1568,8 @@ def status(meditation_dir: str = MEDITATION_DIR) -> Dict[str, Any]:
     if not g:
         return {"id": "", "armed": False, "metrics": {}, "nodes": [], "why": "no campaign"}
     return {"id": g["id"], "armed": g.get("armed", False), "paused_why": g.get("paused_why", ""),
+            "until": g.get("until", ""), "until_epoch": g.get("until_epoch"), "hold_until": g.get("hold_until") or 0,
+            "closing": bool(g.get("closing")), "summary_at": g.get("summary_at", ""),
             "created": g.get("created"), "armed_at": g.get("armed_at", ""),
             "metrics": _metrics(g, time.time(), os.path.join(meditation_dir, "spend.jsonl")), "notes": g.get("notes", []),
             "proposed_goals": g.get("proposed_goals", []),
@@ -1356,9 +1716,10 @@ def render_status(s: Dict[str, Any]) -> str:
 
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(prog="meditate campaign", description=__doc__.split("\n")[0])
-    ap.add_argument("verb", choices=["plan", "show", "go", "tick", "status", "pause", "steer", "accept",
+    ap.add_argument("verb", choices=["plan", "replan", "show", "go", "tick", "status", "pause", "steer", "accept",
                                      "accept-goal", "done", "discard", "discard-goal", "restore",
-                                     "predict", "accept-predicted", "discard-predicted"])
+                                     "predict", "accept-predicted", "discard-predicted", "summary"])
+    ap.add_argument("--until", default="", help="go: deadline HH:MM (local) — nothing new after it; summary when the last run ends")
     ap.add_argument("--all", action="store_true", help="predict: every repo, not only those touched in 30 days")
     ap.add_argument("--fresh", action="store_true", help="predict: ignore the commit cache")
     ap.add_argument("args", nargs="*")
@@ -1395,11 +1756,29 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(render(g, predictions=load_predictions(md)) if g else "no campaign planned — run: meditate campaign plan")
         return 0 if g else 1
     if a.verb == "go":
-        r = go(meditation_dir=md, max_parallel=a.max)
+        until = parse_until(a.until) if a.until else None
+        if a.until and not until:
+            print("--until wants HH:MM, got %r" % a.until)
+            return 2
+        r = go(meditation_dir=md, max_parallel=a.max, until=until)
         print(json.dumps(r) if a.json else
-              ("armed — dispatched %d: %s" % (len(r.get("dispatched", [])), ", ".join(r.get("dispatched", [])))
+              ("armed%s — dispatched %d: %s" % ((" until " + r["until"]) if r.get("until") else "",
+                                                len(r.get("dispatched", [])), ", ".join(r.get("dispatched", [])))
                if r.get("armed") else "not armed: %s" % r.get("why")))
         return 0 if r.get("armed") else 1
+    if a.verb == "replan":
+        r = replan(meditation_dir=md, elaborator=None if not a.no_elaborate else (lambda goal, ms: []))
+        print(json.dumps(r) if a.json else "re-planned %s — %d nodes carried, %d new%s"
+              % (r.get("id"), r.get("carried", 0), r.get("new", 0),
+                 ("\n  " + "\n  ".join(r["notes"])) if r.get("notes") else ""))
+        return 0
+    if a.verb == "summary":
+        g = load(md)
+        if not g:
+            print("no campaign")
+            return 1
+        print(summarize(g, os.path.join(md, "spend.jsonl")))
+        return 0
     if a.verb == "tick":
         r = tick(meditation_dir=md, max_parallel=a.max)
         print(json.dumps(r) if a.json else render_status(status(md)))

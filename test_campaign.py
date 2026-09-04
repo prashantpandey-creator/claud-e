@@ -283,26 +283,32 @@ def test_the_monitor_reads_MONEY_from_the_result_not_the_plan():
         assert m["pushed"] == 2, m
 
 
-def test_a_running_node_with_a_SILENT_log_is_called_stuck_not_working():
+def test_a_running_node_with_a_SILENT_log_is_STOPPED_not_called_working():
     """'Running' from the plan's point of view and 'doing something' are
-    different claims. Stuck is measured: no result and no log growth for
-    longer than the stall window."""
+    different claims. A log unmoved past the stall window used to set a
+    flag the page showed while the process ran on; now the run is stopped
+    and resumed once with the fact."""
     with tempfile.TemporaryDirectory() as t:
         gdir, med = _world(t)
         g = cp.build(goals_dir=gdir, meditation_dir=med, elaborator=_elab)
         cp.save(g, med)
-        cp.go(meditation_dir=med, max_parallel=1,
-              dispatch=lambda n: {"log": "l-" + n["id"], "session": "s"})
         clock = [1000.0]
-        out = cp.tick(meditation_dir=med, dispatch=lambda n: {"log": "z", "session": "z"},
-                      read_result=lambda log: None,
+        cp.go(meditation_dir=med, max_parallel=1, now=lambda: clock[0],
+              dispatch=lambda n: {"log": "l-" + n["id"], "session": "s"})
+        killed = []
+        out = cp.tick(meditation_dir=med, dispatch=lambda n: {"log": "z", "session": "s"},
+                      read_result=lambda log: None, kill=lambda n: killed.append(n["id"]) or True,
                       log_mtime=lambda log: 1000.0, now=lambda: clock[0])
-        assert out["metrics"]["stuck"] == 0
+        assert out["metrics"]["stuck"] == 0 and killed == []
         clock[0] = 1000.0 + cp.STALL_S + 1
-        out = cp.tick(meditation_dir=med, dispatch=lambda n: {"log": "z", "session": "z"},
-                      read_result=lambda log: None,
+        out = cp.tick(meditation_dir=med, max_parallel=1, dispatch=lambda n: {"log": "z", "session": "s"},
+                      read_result=lambda log: None, kill=lambda n: killed.append(n["id"]) or True,
                       log_mtime=lambda log: 1000.0, now=lambda: clock[0])
-        assert out["metrics"]["stuck"] == 1, out["metrics"]
+        g2 = cp.load(med)
+        assert len(killed) == 1, killed
+        n = [x for x in g2["nodes"] if x["id"] == killed[0]][0]
+        assert n["attempts"] == 1 and n["log"] == "z" and "unmoved" in n.get("resumed_with", ""), n
+        assert any(e["what"] == "stopped" for e in g2["events"])
 
 
 def test_tick_KEEPS_dispatching_ready_work_while_armed_within_the_cap():
@@ -855,6 +861,200 @@ def test_metrics_reads_the_LEDGER_by_name_when_it_knows_more():
         os.remove(os.path.join(med, "spend.jsonl"))
         out = cp.tick(meditation_dir=med, dispatch=lambda n: None, read_result=lambda log: None)
         assert abs(out["metrics"]["spent_usd"] - 3.83) < 1e-9, out["metrics"]
+
+
+def _goal_file(gdir, name, title, cwd, opens, dones=()):
+    with open(os.path.join(gdir, name + ".md"), "w") as f:
+        f.write("---\nname: %s\ntitle: %s\nproject: %s\ncwd: %s\nstatus: active\n---\n## Milestones\n%s%s"
+                % (name, title, name, cwd,
+                   "".join("- [x] %s\n" % d for d in dones),
+                   "".join("- [ ] %s\n" % o for o in opens)))
+
+
+def test_replan_KEEPS_the_run_by_node_id_and_does_not_re_elaborate():
+    """A re-plan used to archive the running campaign and start clean: the
+    five-run session on 'Android sign-in repaired', its wall and its spend
+    would have been rediscovered from zero. Node ids are sha1(goal,
+    milestone), so state carries by id: done stays done with its result,
+    an agent-raised wall stays attached to its parent, the campaign id and
+    armed flag stay, and a milestone that was already elaborated reuses its
+    sub-steps instead of paying the planner again. A milestone ticked in
+    the file between plans simply leaves the graph."""
+    with tempfile.TemporaryDirectory() as t:
+        gdir = os.path.join(t, "goals"); os.makedirs(gdir)
+        med = os.path.join(t, "med"); os.makedirs(med)
+        _goal_file(gdir, "g", "Goal G", t, opens=["first open", "second open"])
+        calls = []
+        def elab(goal, milestone):
+            calls.append(milestone)
+            return ([{"id": "s1", "title": "sub one", "why": "w", "depends_on": [], "kind": "goal", "check": ""}]
+                    if milestone == "first open" else [])
+        g = cp.build(goals_dir=gdir, meditation_dir=med, elaborator=elab)
+        cp.save(g, med)
+        cp.go(meditation_dir=med, max_parallel=1, dispatch=lambda n: {"log": "l1", "session": "s1"})
+        node = [n for n in cp.load(med)["nodes"] if n["status"] == "running"][0]
+        # the sub-step ships; then the milestone node hits a wall
+        res = _finished(); res["total_cost_usd"] = 1.5
+        cp.tick(meditation_dir=med, max_parallel=1, dispatch=lambda n: {"log": "l2", "session": "s2"},
+                read_result=lambda log: res if log == "l1" else None)
+        cp.tick(meditation_dir=med, max_parallel=1, dispatch=lambda n: {"log": "l9", "session": "s9"},
+                read_result=lambda log: _finished(blocked="Owner supplies the key") if log == "l2" else None)
+        before = cp.load(med)
+        wall = [n for n in before["nodes"] if n.get("from_agent")][0]
+        parent = [n for n in before["nodes"] if n["id"] == wall["from_agent"]][0]
+        assert wall["id"] in parent["depends_on"]
+        # the owner ticks nothing, adds a milestone, and re-plans
+        _goal_file(gdir, "g", "Goal G", t, opens=["first open", "second open", "third open"])
+        calls.clear()
+        r = cp.replan(goals_dir=gdir, meditation_dir=med, elaborator=elab)
+        after = cp.load(med)
+        assert after["id"] == before["id"] and after["armed"] is True, (after["id"], before["id"])
+        assert calls == ["third open"], "re-elaborated a milestone it already had: %s" % calls
+        by = {n["id"]: n for n in after["nodes"]}
+        assert by[node["id"]]["status"] == "done" and by[node["id"]]["result"]["cost_usd"] == 1.5
+        assert wall["id"] in by and by[wall["id"]]["status"] == "waiting"
+        assert wall["id"] in by[parent["id"]]["depends_on"] and by[parent["id"]]["session"] == "s2"
+        assert any(n["title"] == "third open" and n["status"] == "pending" for n in after["nodes"])
+        assert r["carried"] >= 2 and r["new"] == 1, r
+        # a milestone ticked in the file leaves the graph
+        _goal_file(gdir, "g", "Goal G", t, opens=["first open", "third open"], dones=["second open"])
+        cp.replan(goals_dir=gdir, meditation_dir=med, elaborator=elab)
+        assert not any(n["title"] == "second open" for n in cp.load(med)["nodes"])
+        assert len(os.listdir(os.path.join(med, "campaigns"))) == 0 if os.path.isdir(os.path.join(med, "campaigns")) else True
+
+
+def test_a_deadline_stops_dispatch_and_CLOSES_OUT_with_a_summary():
+    """'Keep running till 9 pm and then give me a summary.' Past the
+    deadline nothing new is sent; once nothing is running the campaign
+    disarms, writes campaign-summary.md, and mails it."""
+    with tempfile.TemporaryDirectory() as t:
+        gdir, med = _world(t)
+        g = cp.build(goals_dir=gdir, meditation_dir=med, elaborator=_elab)
+        cp.save(g, med)
+        t0 = 1_000_000.0
+        r = cp.go(meditation_dir=med, max_parallel=1, dispatch=lambda n: {"log": "l1", "session": "s1"},
+                  until=t0 + 100, now=lambda: t0)
+        assert r["dispatched"] and cp.load(med)["until_epoch"] == t0 + 100
+        mails = []
+        # before the deadline: a finished node lets the next one go
+        out = cp.tick(meditation_dir=med, max_parallel=1, dispatch=lambda n: {"log": "l2", "session": "s2"},
+                      read_result=lambda log: _finished() if log == "l1" else None, now=lambda: t0 + 50,
+                      mailer=lambda subj, body: mails.append(subj))
+        assert out["dispatched"], out
+        # past it: nothing new, and the running one is left to finish
+        out = cp.tick(meditation_dir=med, max_parallel=3, dispatch=lambda n: {"log": "l3", "session": "s3"},
+                      read_result=lambda log: None, now=lambda: t0 + 101, mailer=lambda s, b: mails.append(s))
+        assert out["dispatched"] == [] and cp.load(med)["armed"] is True
+        # it finishes: close out
+        out = cp.tick(meditation_dir=med, dispatch=lambda n: {"log": "l4", "session": "s4"},
+                      read_result=lambda log: _finished() if log == "l2" else None, now=lambda: t0 + 200,
+                      mailer=lambda s, b: mails.append(s))
+        g2 = cp.load(med)
+        assert g2["armed"] is False and "deadline" in g2["paused_why"], g2["paused_why"]
+        p = os.path.join(med, "campaign-summary.md")
+        assert os.path.exists(p)
+        text = open(p).read()
+        assert "SHIPPED" in text and "commits" in text.lower(), text[:400]
+        assert mails and "summary" in mails[-1].lower(), mails
+
+
+def test_a_run_past_its_bound_is_STOPPED_retried_once_then_handed_to_you():
+    """Nothing bounded an agent's wall time: stuck was a flag on the page.
+    Now a run past 2x its kind's median (floor 30 min, cap 2 h) or with a
+    log unmoved 45 min is stopped and resumed once with the fact; a second
+    stop raises a wall for the owner instead of a third run."""
+    with tempfile.TemporaryDirectory() as t:
+        gdir, med = _world(t)
+        g = cp.build(goals_dir=gdir, meditation_dir=med, elaborator=_elab)
+        cp.save(g, med)
+        t0 = 2_000_000.0
+        cp.go(meditation_dir=med, max_parallel=1, dispatch=lambda n: {"log": "l1", "session": "s1"}, now=lambda: t0)
+        node = [n for n in cp.load(med)["nodes"] if n["status"] == "running"][0]
+        killed = []
+        kill = lambda n: killed.append(n["id"]) or True
+        # inside the bound: nothing happens
+        cp.tick(meditation_dir=med, dispatch=lambda n: None, read_result=lambda log: None,
+                log_mtime=lambda log: t0 + 1000, now=lambda: t0 + 1200, kill=kill, medians={node["kind"]: 600.0})
+        assert killed == [], killed
+        # past it (2 x 600 s = 1200 → floored to 1800): stopped, resumed with the fact
+        out = cp.tick(meditation_dir=med, max_parallel=1, dispatch=lambda n: {"log": "l2", "session": "s1"},
+                      read_result=lambda log: None, log_mtime=lambda log: t0 + 1700, now=lambda: t0 + 1801,
+                      kill=kill, medians={node["kind"]: 600.0})
+        assert killed == [node["id"]], killed
+        n2 = [n for n in cp.load(med)["nodes"] if n["id"] == node["id"]][0]
+        assert n2["attempts"] == 1 and n2["status"] == "running" and n2["log"] == "l2", n2
+        assert "stopped" in (n2.get("resumed_with") or "").lower(), n2.get("resumed_with")
+        # a second overrun: no third run — a wall for the owner
+        out = cp.tick(meditation_dir=med, max_parallel=1, dispatch=lambda n: {"log": "l3", "session": "s1"},
+                      read_result=lambda log: None, log_mtime=lambda log: t0 + 1900, now=lambda: t0 + 1801 + 1801,
+                      kill=kill, medians={node["kind"]: 600.0})
+        g3 = cp.load(med)
+        n3 = [n for n in g3["nodes"] if n["id"] == node["id"]][0]
+        assert n3["attempts"] == 2 and n3["status"] == "pending" and n3["log"] != "l3", n3
+        walls = [n for n in g3["nodes"] if n.get("from_agent") == node["id"]]
+        assert walls and walls[0]["status"] == "waiting" and "twice" in walls[0]["title"], walls
+        assert walls[0]["id"] in n3["depends_on"]
+        assert [e["what"] for e in g3["events"]].count("stopped") == 2
+
+
+def test_a_run_that_DIED_at_start_is_retried_fresh():
+    """'claude: No such file or directory' as the log's only line was a
+    node running forever. It is a death: retried once with a fresh session."""
+    with tempfile.TemporaryDirectory() as t:
+        gdir, med = _world(t)
+        g = cp.build(goals_dir=gdir, meditation_dir=med, elaborator=_elab)
+        cp.save(g, med)
+        t0 = 3_000_000.0
+        cp.go(meditation_dir=med, max_parallel=1, dispatch=lambda n: {"log": "l1", "session": "s1"}, now=lambda: t0)
+        node = [n for n in cp.load(med)["nodes"] if n["status"] == "running"][0]
+        sent = []
+        cp.tick(meditation_dir=med, max_parallel=1, dispatch=lambda n: sent.append(n.get("session")) or {"log": "l2", "session": "s9"},
+                read_result=lambda log: None, death=lambda log: "claude: No such file or directory" if log == "l1" else "",
+                now=lambda: t0 + 700, kill=lambda n: True)
+        n2 = [n for n in cp.load(med)["nodes"] if n["id"] == node["id"]][0]
+        assert n2["attempts"] == 1 and n2["status"] == "running" and n2["session"] == "s9", n2
+        assert sent == [""], "a death at start must not resume the dead session: %s" % sent
+
+
+def test_a_usage_limit_HOLDS_the_whole_campaign_not_one_node():
+    """A result that is an error about the usage/rate limit is not the
+    node's fault: the campaign holds 30 minutes and the node resumes after,
+    with its session, at no cost to its attempts."""
+    with tempfile.TemporaryDirectory() as t:
+        gdir, med = _world(t)
+        g = cp.build(goals_dir=gdir, meditation_dir=med, elaborator=_elab)
+        cp.save(g, med)
+        t0 = 4_000_000.0
+        cp.go(meditation_dir=med, max_parallel=1, dispatch=lambda n: {"log": "l1", "session": "s1"}, now=lambda: t0)
+        node = [n for n in cp.load(med)["nodes"] if n["status"] == "running"][0]
+        limited = {"type": "result", "subtype": "error_during_execution", "is_error": True,
+                   "total_cost_usd": 0.02, "num_turns": 1, "result": "You have hit your usage limit. Try again at 6pm."}
+        out = cp.tick(meditation_dir=med, max_parallel=1, dispatch=lambda n: {"log": "l2", "session": "s1"},
+                      read_result=lambda log: limited if log == "l1" else None, now=lambda: t0 + 10)
+        g2 = cp.load(med)
+        n2 = [n for n in g2["nodes"] if n["id"] == node["id"]][0]
+        assert out["dispatched"] == [] and g2["hold_until"] > t0 + 10, (out, g2.get("hold_until"))
+        assert n2["status"] == "pending" and n2["session"] == "s1" and not n2.get("attempts"), n2
+        assert n2["status"] != "failed"
+        # the hold lifts by itself
+        out = cp.tick(meditation_dir=med, max_parallel=1, dispatch=lambda n: {"log": "l2", "session": "s1"},
+                      read_result=lambda log: None, now=lambda: t0 + 10 + cp.HOLD_S + 1)
+        assert out["dispatched"] == [node["id"]], out
+
+
+def test_the_wall_bound_comes_from_the_kind_median_within_limits():
+    assert cp.wall_bound_s("goal", {}) == cp.WALL_DEFAULT_S
+    assert cp.wall_bound_s("goal", {"goal": 600.0}) == cp.WALL_MIN_S            # 2x600 floored
+    assert cp.wall_bound_s("goal", {"goal": 4000.0}) == cp.WALL_MAX_S           # 2x4000 capped
+    assert cp.wall_bound_s("goal", {"goal": 2000.0}) == 4000.0
+    with tempfile.TemporaryDirectory() as t:
+        led = os.path.join(t, "spend.jsonl")
+        with open(led, "w") as f:
+            for d in (100, 300, 500):
+                f.write(json.dumps({"log": "x%d.log" % d, "name": "goal-x", "duration_ms": d * 1000, "subtype": "success"}) + "\n")
+            f.write(json.dumps({"log": "y.log", "name": "revive-y", "duration_ms": 9_000_000, "subtype": "died"}) + "\n")
+        m = cp.median_duration_by_kind(led)
+        assert m == {"goal": 300.0}, m
 
 
 def _main():

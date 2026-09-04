@@ -533,6 +533,38 @@ def _reexec_due(boot: float, newest: float, now: float, quiet_s: float = _REEXEC
     return newest > boot + 1 and (now - newest) > quiet_s
 
 
+_TICK_POLL_S = 300.0
+
+
+def _campaign_armed(path: str) -> bool:
+    try:
+        g = json.load(open(path))
+        return bool(g.get("armed"))
+    except (OSError, ValueError):
+        return False
+
+
+def _tick_campaign_loop() -> None:
+    """The run's clock while the owner is away. The heartbeat ticks hourly,
+    so a node that finished at :05 waited until :00 for the next dispatch —
+    with 3 at a time and 25-minute runs, most of a day idle. Every 5 minutes
+    while armed: reconcile the ledger, then one tick, in a subprocess so it
+    runs this hour's code and a crash is a line, not the server."""
+    import subprocess as _sp
+    path = os.path.join(os.path.expanduser("~/.claude/meditation"), "campaign.json")
+    while True:
+        time.sleep(_TICK_POLL_S)
+        if not _campaign_armed(path):
+            continue
+        try:
+            _sp.run([sys.executable, "-c", "import sys; sys.path.insert(0, %r); import models; models.reconcile()" % SKILL_DIR],
+                    capture_output=True, text=True, timeout=120)
+            _sp.run([sys.executable, os.path.join(SKILL_DIR, "campaign.py"), "tick", "--json"],
+                    capture_output=True, text=True, timeout=240)
+        except Exception as e:
+            print("campaign tick failed: %s" % str(e)[:120], flush=True)
+
+
 def _watch_code(srv) -> None:
     """Two commits landed after the brain booted on 2026-09-04 and the
     sum-of-runs fix never ran in it: a launchd server keeps the code it
@@ -1946,6 +1978,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if not args.no_open:
         os.system("open '%s' 2>/dev/null" % url)
     threading.Thread(target=_watch_code, args=(srv,), daemon=True).start()
+    threading.Thread(target=_tick_campaign_loop, daemon=True).start()
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

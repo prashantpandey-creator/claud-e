@@ -2,7 +2,7 @@
 # meditate bootstrap — the one-liner.
 #
 #   curl -fsSL https://meditate.sh | bash
-#   curl -fsSL https://raw.githubusercontent.com/prashantpandey-creator/meditate/main/get.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/prashantpandey-creator/claud-e/main/get.sh | bash
 #
 # All this does is put the skill where Claude Code looks for skills, then hand
 # over to install.sh. It exists because the two-command form asked people to
@@ -14,7 +14,7 @@
 # of keeping the bootstrap separate from the installer.
 set -euo pipefail
 
-REPO="${MEDITATE_REPO:-https://github.com/prashantpandey-creator/meditate}"
+REPO="${MEDITATE_REPO:-https://github.com/prashantpandey-creator/claud-e}"
 DEST="${MEDITATE_DEST:-$HOME/.claude/skills/meditate}"
 BRANCH="${MEDITATE_BRANCH:-main}"
 

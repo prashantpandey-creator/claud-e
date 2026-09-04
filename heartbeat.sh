@@ -65,6 +65,10 @@ STEPS=(
   # 52 python processes 24 times a day against the owner's own sessions.
   "doctor.py --quick --mend"
   "voice.py --notify --quiet"
+  # Reach the owner when he is away: one mail per pass when the run changed
+  # (a new item under YOUR HANDS, a step shipped, a stop, a hold). Inert when
+  # ~/bin/sendmail or ~/.sendmail.conf is missing; never fails the pass.
+  "mail.py --digest --quiet"
 )
 
 # Steps whose nonzero exit is a FINDING, not a breakage.

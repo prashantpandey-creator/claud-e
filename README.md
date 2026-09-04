@@ -1,8 +1,8 @@
-# Meditate
+# CLAUD-E
 
-**Your Claude, remembered — and measured. On your machine, and nowhere else.**
+**Your digital twin for Claude Code. Your Claude, remembered — and measured. On your machine, and nowhere else.**
 
-Meditate turns everything Claude Code does on your machine into knowledge you
+CLAUD-E (the repo was `meditate` until 2026-09-04; the `meditate` command name stays) turns everything Claude Code does on your machine into knowledge you
 can trust: facts with receipts, projects with honest progress, and agents you
 dispatch and watch.
 
@@ -37,13 +37,13 @@ maintainer asking how many people are there.
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/prashantpandey-creator/meditate/main/get.sh | bash
+curl -fsSL https://raw.githubusercontent.com/prashantpandey-creator/claud-e/main/get.sh | bash
 ```
 
 Or clone it yourself, if you would rather read the code first — same result:
 
 ```bash
-git clone https://github.com/prashantpandey-creator/meditate ~/.claude/skills/meditate
+git clone https://github.com/prashantpandey-creator/claud-e ~/.claude/skills/meditate
 bash ~/.claude/skills/meditate/install.sh
 ```
 
