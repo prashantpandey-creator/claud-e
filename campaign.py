@@ -90,6 +90,17 @@ def is_human(text: str) -> bool:
     return bool(_HUMAN_RE.search(text or ""))
 
 
+_SUBJ_STOP = {"the", "and", "for", "with", "from", "into", "that", "this", "owner", "supplies",
+              "approved", "live", "done", "set", "made", "first", "new", "via", "env", "deploy"}
+
+
+def _share_subject(a: str, b: str) -> bool:
+    """Two milestone lines share a subject word (4+ letters, not filler)."""
+    ta = {w for w in re.findall(r"[a-z]{4,}", (a or "").lower()) if w not in _SUBJ_STOP}
+    tb = {w for w in re.findall(r"[a-z]{4,}", (b or "").lower()) if w not in _SUBJ_STOP}
+    return bool(ta & tb)
+
+
 IDEAS_SCHEMA = {
     "type": "object",
     "properties": {
@@ -252,7 +263,8 @@ def build(goals_dir: Optional[str] = None, meditation_dir: str = MEDITATION_DIR,
         opens = [m for m in (g.get("milestones") or []) if not m.get("done")]
         dones = [m for m in (g.get("milestones") or []) if m.get("done")]
         n_goals += 1
-        prev_id: Optional[str] = None
+        prev_id: Optional[str] = None        # the last AGENT milestone
+        trailing_human: List[Dict[str, Any]] = []   # human items since it
         for m in opens:
             text = (m.get("text") or "").strip()
             # the headline, not the raw line: a milestone reads "iOS subs
@@ -261,12 +273,22 @@ def build(goals_dir: Optional[str] = None, meditation_dir: str = MEDITATION_DIR,
             head = (m.get("headline") or text).strip() or text
             mid = _nid(g["name"], text)
             human = is_human(text)
+            # File order is the author's dependency between agent steps.
+            # Through a HUMAN item it holds only when the two lines share a
+            # subject word: "Pixel activated" after "Owner supplies the Pixel
+            # ID" is real; "Android sign-in repaired" after "iOS subscriptions
+            # approved" was a false gate that left the whole run with nothing
+            # ready (measured 2026-09-04: ready set empty, 3 items waiting).
+            deps0 = [prev_id] if prev_id else []
+            for hn in trailing_human:
+                if _share_subject(hn["title"], head):
+                    deps0.append(hn["id"])
             node = {"id": mid, "goal": g["name"], "goal_title": g.get("title") or g["name"],
                     "cwd": g.get("cwd") or "", "milestone": head, "title": head,
                     "why": ("only you can do this" if human else
                             "an open milestone of " + (g.get("title") or g["name"])),
                     "kind": "human" if human else "goal", "check": "",
-                    "depends_on": [prev_id] if prev_id else [],
+                    "depends_on": deps0,
                     "status": "waiting" if human else "pending",
                     "agent": ({"model": "you", "effort": "", "basis": "human", "budget_usd": 0.0,
                                "cap_basis": "none", "why": "not dispatchable"} if human
@@ -297,9 +319,7 @@ def build(goals_dir: Optional[str] = None, meditation_dir: str = MEDITATION_DIR,
                 if kind != "human" and is_human(str(s.get("title") or "") + " " + str(s.get("why") or "")):
                     kind = "human"
                 sid = ids[str(s["id"])]
-                deps = [ids[d] for d in (s.get("depends_on") or []) if d in ids]
-                if prev_id:
-                    deps.append(prev_id)
+                deps = [ids[d] for d in (s.get("depends_on") or []) if d in ids] + list(deps0)
                 subs.append({"id": sid, "goal": g["name"], "goal_title": node["goal_title"],
                              "cwd": node["cwd"], "milestone": head, "title": str(s["title"]).strip(),
                              "why": str(s.get("why") or "").strip(), "kind": kind,
@@ -313,7 +333,11 @@ def build(goals_dir: Optional[str] = None, meditation_dir: str = MEDITATION_DIR,
             node["depends_on"] = node["depends_on"] + [s["id"] for s in subs]
             nodes.extend(subs)
             nodes.append(node)
-            prev_id = node["id"]
+            if human:
+                trailing_human.append(node)
+            else:
+                prev_id = node["id"]
+                trailing_human = []
         # IDEAS — what the file does not say yet. Proposed, shown, and run
         # only once the owner accepts one; an accepted idea runs after the
         # goal's last open milestone.
@@ -446,6 +470,14 @@ def _prompt_for(n: Dict[str, Any]) -> str:
 def dispatch_real(n: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     import go
     a = n["agent"]
+    # Never in place. A goal whose cwd is not a repo cannot be isolated, and
+    # the checkouts under it belong to whoever is typing in them; go.run
+    # already refuses this unattended — the campaign must too.
+    cwd = n.get("cwd") or ""
+    if not go._repo_top(cwd):
+        n["why_failed"] = ("cannot isolate: cwd %s is not a git repo — set cwd to the repo "
+                           "in the goal file" % (cwd or "(none)"))
+        return None
     if n.get("session") and n.get("resume_message"):
         # the wall the agent hit has been cleared by the owner: the SAME
         # session continues with that fact, instead of a fresh agent

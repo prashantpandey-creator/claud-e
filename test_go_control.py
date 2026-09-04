@@ -602,6 +602,35 @@ def test_continue_records_its_PID_too():
         assert "# pid: 4242" in head, head
 
 
+def test_a_worktree_is_cut_from_ORIGIN_when_the_checkout_is_stale():
+    """Standing rule (owner, 2026-09-03): both PuranGPT checkouts are far
+    behind origin/main; anything grounded on the working tree is wrong.
+    A worktree from local HEAD would hand the agent a 283-commit-old base.
+    When origin has the branch, the worktree starts from origin's tip."""
+    with tempfile.TemporaryDirectory() as t:
+        origin = os.path.join(t, "origin.git")
+        subprocess.run(["git", "init", "-q", "--bare", "-b", "main", origin], check=True)
+        repo = _git_repo(t)
+        subprocess.run(["git", "-C", repo, "remote", "add", "origin", origin], check=True)
+        subprocess.run(["git", "-C", repo, "push", "-q", "origin", "main"], check=True)
+        # origin moves on; the local checkout does not
+        other = os.path.join(t, "other")
+        subprocess.run(["git", "clone", "-q", origin, other], check=True)
+        open(os.path.join(other, "new.txt"), "w").write("n\n")
+        subprocess.run(["git", "-C", other, "add", "new.txt"], check=True)
+        subprocess.run(["git", "-C", other, "-c", "user.email=t@t", "-c", "user.name=t",
+                        "commit", "-qm", "newer"], check=True)
+        subprocess.run(["git", "-C", other, "push", "-q", "origin", "main"], check=True)
+        old_root = go.WORKTREE_ROOT; go.WORKTREE_ROOT = os.path.join(t, "wt")
+        try:
+            wt, branch, why = go.make_worktree(repo, "goal-s", "20260904-000000")
+            assert branch, why
+            assert os.path.exists(os.path.join(wt, "new.txt")), "worktree was cut from the stale local HEAD"
+            assert "origin/main" in why, why
+        finally:
+            go.WORKTREE_ROOT = old_root
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

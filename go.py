@@ -249,15 +249,33 @@ def make_worktree(cwd: str, name: str, stamp: str):
         return cwd, "", "no worktree: not a repo"
     branch = "agent/%s-%s" % (name[:40], stamp)
     path = os.path.join(WORKTREE_ROOT, "%s-%s" % (name[:40], stamp))
+    # Base on ORIGIN's tip when there is one. The owner's checkouts run
+    # hundreds of commits behind (rule of 2026-09-03: ground on origin/main,
+    # never the working tree); a worktree from local HEAD hands the agent a
+    # stale base and its push collides with everything since.
+    base, why = "HEAD", ""
+    try:
+        subprocess.run(["git", "-C", top, "fetch", "-q", "origin"],
+                       capture_output=True, text=True, timeout=60)
+        cur = subprocess.run(["git", "-C", top, "rev-parse", "--abbrev-ref", "HEAD"],
+                             capture_output=True, text=True, timeout=10).stdout.strip() or "main"
+        for cand in ("origin/" + cur, "origin/main", "origin/master"):
+            ok = subprocess.run(["git", "-C", top, "rev-parse", "--verify", "-q", cand],
+                                capture_output=True, text=True, timeout=10)
+            if ok.returncode == 0:
+                base, why = cand, "based on %s" % cand
+                break
+    except (OSError, subprocess.TimeoutExpired):
+        pass
     try:
         os.makedirs(WORKTREE_ROOT, exist_ok=True)
         r = subprocess.run(["git", "-C", top, "worktree", "add", "-q", "-b", branch,
-                            path, "HEAD"], capture_output=True, text=True, timeout=60)
+                            path, base], capture_output=True, text=True, timeout=60)
     except (OSError, subprocess.TimeoutExpired) as e:
         return cwd, "", "no worktree: %s" % str(e)[:80]
     if r.returncode != 0:
         return cwd, "", "no worktree: %s" % (r.stderr.strip() or "git failed")[:80]
-    return path, branch, ""
+    return path, branch, why
 
 
 def _write_header(fh, name, cwd, model, effort, budget_usd, sid, wt, branch,

@@ -593,6 +593,44 @@ def test_a_RE_PLAN_refuses_to_archive_an_ARMED_campaign():
         assert cp.load(med)["id"] == g["id"], "the armed campaign was replaced"
 
 
+GOAL_ORDER = """---
+name: mob
+title: Mobile live
+project: m
+cwd: %s
+status: active
+---
+## Milestones
+- [ ] iOS subscriptions approved
+- [ ] Android sign-in repaired
+- [ ] Owner supplies the Pixel ID from the Meta dashboard
+- [ ] Pixel activated in the deploy env with NEXT_PUBLIC_META_PIXEL_ID
+"""
+
+
+def test_a_human_item_gates_the_next_step_only_when_they_share_a_SUBJECT():
+    """Live graph 2026-09-04: the ready set was EMPTY — every agent step sat
+    behind a human item, and 'Android sign-in repaired' waited on 'iOS
+    subscriptions approved' only because it came next in the file. File
+    order is the author's dependency between agent steps; through a human
+    item it holds only when the two lines share a subject word ('Pixel')."""
+    with tempfile.TemporaryDirectory() as t:
+        gdir = os.path.join(t, "goals"); os.makedirs(gdir)
+        open(os.path.join(gdir, "m.md"), "w").write(GOAL_ORDER % t)
+        med = os.path.join(t, "med"); os.makedirs(med)
+        g = cp.build(goals_dir=gdir, meditation_dir=med, elaborator=lambda *a: [])
+        by = {n["title"]: n for n in g["nodes"]}
+        ios, android = by["iOS subscriptions approved"], by["Android sign-in repaired"]
+        assert ios["kind"] == "human"
+        assert ios["id"] not in android["depends_on"], "a false gate: iOS approval does not gate Android sign-in"
+        pix_id, pix_on = by["Owner supplies the Pixel ID from the Meta dashboard"], \
+            by["Pixel activated in the deploy env with NEXT_PUBLIC_META_PIXEL_ID"]
+        assert pix_id["kind"] == "human" and pix_id["id"] in pix_on["depends_on"], "a real gate: shares 'pixel'"
+        # the agent step after the human one still follows the LAST agent step
+        assert android["id"] in pix_on["depends_on"]
+        assert [n["title"] for n in cp.ready(g)] == ["Android sign-in repaired"]
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]
