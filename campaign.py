@@ -63,6 +63,9 @@ MAX_ATTEMPTS = 2
 # A usage/rate limit answer is not the node's fault: the whole campaign
 # holds this long, the node keeps its session and its attempts.
 HOLD_S = 30 * 60
+# A read-only step that walls on its own permissions is the twin's gap, not
+# the owner's item: it is re-run under the working role, once.
+_DENIED_RE = re.compile(r"denied|sandbox|permission|not allowed|read-only|read only|no network|egress", re.I)
 _LIMIT_RE = re.compile(r"rate.?limit|usage limit|hit your (usage|limit)|overloaded|too many requests|\b429\b|quota", re.I)
 DEFAULT_PARALLEL = 3         # the RAM law: 6+9+8 < 30 GB, from the outage
 ELABORATE_BUDGET_USD = 0.35  # planning is cheap; execution is not
@@ -926,6 +929,26 @@ def _wall_node(n: Dict[str, Any], g: Dict[str, Any], text: str, why: str) -> Dic
     return wall
 
 
+def escalate(n: Dict[str, Any], g: Dict[str, Any], why: str) -> None:
+    """Re-run a read-only step under the working role, fresh session, prior
+    findings carried by _prompt_for. Once: a second wall is a real wall."""
+    n["escalated"] = {"from": n.get("kind"), "why": why[:200], "ts": _now_iso()}
+    n["kind"] = "goal"
+    n["agent"] = agent_for("goal")
+    n["name"] = "goal-%s-%s" % (n["goal"][:16], n["id"].replace(".", "_"))
+    n["session"] = ""
+    n["resume_message"] = ""
+    n["status"] = "pending"
+    n["stuck"] = False
+    # the walls this step raised for its own permissions are not the owner's
+    for w in [m for m in g["nodes"] if m.get("from_agent") == n["id"] and m["status"] == "waiting"
+              and _DENIED_RE.search(m.get("title") or "")]:
+        w["status"] = "done"
+        w["done_by"] = "escalation"
+        w["note"] = "re-run under the working role"
+    g["events"].append({"ts": _now_iso(), "what": "escalated", "node": n["id"], "why": why[:100]})
+
+
 def _stop_run(n: Dict[str, Any], g: Dict[str, Any], why: str, keep_session: bool = True) -> None:
     """A run stopped without a RESULT: once, it resumes with the fact; twice,
     the owner decides. Attempts count stops, not dispatches."""
@@ -1295,6 +1318,12 @@ def _absorb(n: Dict[str, Any], res: Dict[str, Any], g: Dict[str, Any],
         n["status"] = "failed"
         n["why_failed"] = str(res.get("subtype") or "error")
         g["events"].append({"ts": _now_iso(), "what": "failed", "node": n["id"], "why": n["why_failed"]})
+        return
+    if so.get("blocked_on") and n.get("kind") in ("assess", "revive") and not n.get("escalated") \
+            and _DENIED_RE.search(str(so["blocked_on"])):
+        # a read-only role denied a tool it needed: the twin's gap, not the
+        # owner's item. Re-run under the working role with what was found.
+        escalate(n, g, str(so["blocked_on"]).strip()[:200])
         return
     if so.get("blocked_on"):
         # The agent found the wall; the wall is the owner's. It becomes a
@@ -1799,7 +1828,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(prog="meditate campaign", description=__doc__.split("\n")[0])
     ap.add_argument("verb", choices=["plan", "replan", "show", "go", "tick", "status", "pause", "steer", "accept",
                                      "accept-goal", "done", "discard", "discard-goal", "restore",
-                                     "predict", "accept-predicted", "discard-predicted", "summary"])
+                                     "predict", "accept-predicted", "discard-predicted", "summary", "escalate"])
     ap.add_argument("--until", default="", help="go: deadline HH:MM (local) — nothing new after it; summary when the last run ends")
     ap.add_argument("--all", action="store_true", help="predict: every repo, not only those touched in 30 days")
     ap.add_argument("--fresh", action="store_true", help="predict: ignore the commit cache")
@@ -1852,6 +1881,21 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(json.dumps(r) if a.json else "re-planned %s — %d nodes carried, %d new%s"
               % (r.get("id"), r.get("carried", 0), r.get("new", 0),
                  ("\n  " + "\n  ".join(r["notes"])) if r.get("notes") else ""))
+        return 0
+    if a.verb == "escalate":
+        if not a.args:
+            print("usage: campaign escalate <node-id>")
+            return 2
+        with _locked(md):
+            g = load(md)
+            n = next((m for m in (g or {}).get("nodes", []) if m["id"] == a.args[0] or m["name"] == a.args[0]), None)
+            if not g or not n:
+                print("no node %s" % a.args[0])
+                return 1
+            escalate(n, g, "by owner")
+            g["metrics"] = _metrics(g, time.time(), os.path.join(md, "spend.jsonl"))
+            save(g, md)
+        print("escalated %s to the working role — runs on the next tick" % n["id"])
         return 0
     if a.verb == "summary":
         g = load(md)

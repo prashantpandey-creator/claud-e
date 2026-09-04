@@ -119,6 +119,27 @@ def test_the_role_is_passed_and_selected():
         assert "--allowedTools" in c["argv"] and "--disallowedTools" in c["argv"]
 
 
+def test_read_only_roles_can_READ_FETCH_CURL_and_TYPECHECK_but_not_write():
+    """assess named only git log, git status and python3: two steps walled
+    on 'gh CLI and git fetch denied' and 'sandbox denies npx/tsc' (12
+    denials, $0.69) on 2026-09-04. Under dontAsk every tool must be named,
+    so a read-only role names the whole read set — and still no edit,
+    commit or push."""
+    for kind in ("assess", "revive"):
+        argv = go.role_argv(kind)
+        allowed = argv[argv.index("--allowedTools") + 1]
+        denied = argv[argv.index("--disallowedTools") + 1]
+        for tool in ("Read", "Glob", "Grep", "Bash(git fetch:*)", "Bash(git diff:*)", "Bash(curl:*)",
+                     "Bash(gh:*)", "Bash(npx tsc:*)", "Bash(npm test:*)", "Bash(pytest:*)"):
+            assert tool in allowed, "%s not allowed for %s" % (tool, kind)
+        for tool in ("Edit", "Write", "Bash(git commit:*)", "Bash(git push:*)", "Bash(git add:*)",
+                     "Bash(rm:*)", "Bash(gh pr merge:*)"):
+            assert tool in denied, "%s not denied for %s" % (tool, kind)
+    for kind in ("goal", "thread", "repair"):
+        allowed = go.role_argv(kind)[go.role_argv(kind).index("--allowedTools") + 1]
+        assert "Bash(gh:*)" in allowed and "Bash(git fetch:*)" in allowed, kind
+
+
 def test_revive_cannot_EDIT_or_PUSH():
     """Deny wins, and --allowedTools is additive to the user's 38-rule
     allowlist — so a read-only role must be expressed as denials."""

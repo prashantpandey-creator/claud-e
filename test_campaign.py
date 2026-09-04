@@ -1115,6 +1115,41 @@ def test_a_PREDICTED_milestone_is_not_chained_behind_the_line_above_it():
         assert len(cp.ready(g)) == 2, [n["title"] for n in cp.ready(g)]
 
 
+def test_a_read_only_step_walled_by_its_OWN_permissions_escalates_instead_of_waiting_on_you():
+    """Two assess steps walled on 2026-09-04 with 'sandbox denies all
+    write/exec Bash ops' and 'gh CLI and git fetch both denied' — the
+    twin's role gap, shown to the owner as his item. A permission wall on
+    a read-only step re-runs it under the working role, once; any other
+    wall on it is a real wall."""
+    with tempfile.TemporaryDirectory() as t:
+        gdir, med = _world(t)
+        g = cp.build(goals_dir=gdir, meditation_dir=med, elaborator=_elab)
+        cp.save(g, med)
+        cp.go(meditation_dir=med, max_parallel=1, dispatch=lambda n: {"log": "l1", "session": "s1"})
+        node = [n for n in cp.load(med)["nodes"] if n["status"] == "running"][0]
+        assert node["kind"] == "assess", node["kind"]
+        sent = []
+        out = cp.tick(meditation_dir=med, max_parallel=1,
+                      dispatch=lambda n: sent.append((n["id"], n["kind"], n.get("session"))) or {"log": "l2", "session": "s2"},
+                      read_result=lambda log: _finished(blocked="Sandbox denies all write/exec Bash ops in this worktree") if log == "l1" else None)
+        g2 = cp.load(med)
+        n2 = [n for n in g2["nodes"] if n["id"] == node["id"]][0]
+        assert n2["kind"] == "goal" and n2["escalated"]["from"] == "assess" and n2["status"] == "running", n2
+        assert sent == [(node["id"], "goal", "")], sent
+        assert not any(m.get("from_agent") == node["id"] and m["status"] == "waiting" for m in g2["nodes"])
+        assert any(e["what"] == "escalated" for e in g2["events"])
+        # walled again, now as goal: a real wall for the owner
+        out = cp.tick(meditation_dir=med, dispatch=lambda n: None,
+                      read_result=lambda log: _finished(blocked="Sandbox denies git push") if log == "l2" else None)
+        g3 = cp.load(med)
+        assert any(m.get("from_agent") == node["id"] and m["status"] == "waiting" for m in g3["nodes"])
+        # and a non-permission wall on a read-only step was always the owner's
+        g4 = cp.build(goals_dir=gdir, meditation_dir=med, elaborator=_elab)
+        a = [n for n in g4["nodes"] if n["kind"] == "assess"][0]
+        cp._absorb(a, _finished(blocked="Need the App Store build number from the owner"), g4)
+        assert a["kind"] == "assess" and any(m.get("from_agent") == a["id"] for m in g4["nodes"])
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]
