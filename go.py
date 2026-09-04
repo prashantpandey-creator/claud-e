@@ -498,8 +498,14 @@ def live_agents(log_dir: Optional[str] = None, alive=None, now=None,
         # found with session ID …" — and that line is the state, verbatim
         body = [ln for ln in text.splitlines() if ln.strip() and not ln.startswith("#")]
         first = body[0].strip() if body else ""
+        resumed = bool(h.get("continues"))
         if first and not first.startswith("{"):
             state = "died: " + first[:80]
+        elif resumed and is_alive and turns == 0:
+            # a --resume run streams only its final result (measured: one
+            # event after 30 turns); the card must not read "0 turns" as
+            # "doing nothing"
+            state = "running (resumed session — progress is not streamed by the CLI)"
         else:
             state = ("running" if is_alive and not stalled else
                      "stalled" if is_alive else
@@ -516,8 +522,8 @@ def live_agents(log_dir: Optional[str] = None, alive=None, now=None,
                     "since_move_s": int(t - mt), "session": h.get("session", ""),
                     "worktree": h.get("worktree", ""), "branch": h.get("branch", ""),
                     "cwd": h.get("cwd", ""), "model": h.get("model", ""),
-                    "median_turns": med,
-                    "progress": (turns / med) if med else None})
+                    "median_turns": med, "resumed": resumed,
+                    "progress": (turns / med) if med and not resumed else None})
     return out
 
 

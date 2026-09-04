@@ -1531,6 +1531,41 @@ class _Handler(BaseHTTPRequestHandler):
                         res = {"started": False, "output": r.get("why", "could not discard")}
                 except Exception as e:
                     res = {"started": False, "output": str(e)[:160]}
+            elif action == "predict-all":
+                # Predicted milestones for every project touched in 30 days
+                # (or all with arg "all"): a read-only planner per repo,
+                # cached on the repo's commit. Minutes; runs detached.
+                try:
+                    _log_brain_action("predict-all", arg)
+                    cmd = ["python3", os.path.join(SKILL_DIR, "campaign.py"), "predict"]
+                    if arg == "all":
+                        cmd.append("--all")
+                    if arg == "fresh":
+                        cmd.append("--fresh")
+                    subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                     start_new_session=True)
+                    res = {"started": True,
+                           "output": "predicting — a read-only planner per repo touched this month, "
+                                     "cached on its commit; tiles fill in as they land"}
+                except Exception as e:
+                    res = {"started": False, "output": str(e)[:160]}
+            elif action in ("accept-predicted", "discard-predicted"):
+                # arg = project, value = the predicted milestone's title
+                try:
+                    import campaign as _cp
+                    title = str(req.get("value") or "").strip()
+                    if not title:
+                        res = {"started": False, "output": "which milestone?"}
+                    else:
+                        _log_brain_action(action, arg)
+                        r = (_cp.accept_predicted(arg, title) if action == "accept-predicted"
+                             else _cp.discard_predicted(arg, title))
+                        res = {"started": bool(r.get("ok")),
+                               "output": (("added to goal %s — re-plan to bring it in" % r.get("goal"))
+                                          if action == "accept-predicted" else "discarded — it will not be predicted again")
+                               if r.get("ok") else r.get("why", "could not")}
+                except Exception as e:
+                    res = {"started": False, "output": str(e)[:160]}
             elif action == "human-done":
                 # The owner did a thing only he could do. arg = node id,
                 # value = an optional note. The goal file's box ticks when the
@@ -1700,7 +1735,13 @@ class _Handler(BaseHTTPRequestHandler):
                 body = json.dumps(_swarm_cached()).encode()
                 ctype = "application/json"
             elif self.path == "/api/projects":
-                body = json.dumps(_projects_cached()).encode()
+                d = dict(_projects_cached())
+                try:
+                    import campaign as _cp
+                    d["predictions"] = _cp.load_predictions()
+                except Exception:
+                    d["predictions"] = {}
+                body = json.dumps(d).encode()
                 ctype = "application/json"
             elif self.path == "/api/agents":
                 # Every dispatched agent still running, read from its own

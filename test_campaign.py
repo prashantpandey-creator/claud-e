@@ -631,6 +631,119 @@ def test_a_human_item_gates_the_next_step_only_when_they_share_a_SUBJECT():
         assert [n["title"] for n in cp.ready(g)] == ["Android sign-in repaired"]
 
 
+# ---------------------------------------------------------------------------
+# predicted milestones: the twin plans ahead for EVERY project, on its own
+# ---------------------------------------------------------------------------
+#
+# The owner's ask (2026-09-04): "create elaborate future plans and milestones
+# for all the projects on its own — predicted milestones." Ideas proposed per
+# GOAL; this predicts per PROJECT, goal or not, from the repo itself. A
+# prediction is a proposal: accept appends it to the project's goal (or
+# writes one), discard ledgers it, and a project that has not moved (same
+# HEAD) is never re-predicted — the cache keys on the commit.
+
+def _predictor(project, path, sha, goal):
+    return [{"title": "add a smoke test to %s" % project, "why": "nothing checks deploys",
+             "check": "curl / after deploy returns 200", "size": "S"},
+            {"title": "document the env vars", "why": "install fails on a clean box",
+             "check": "README lists every var", "size": "S"}]
+
+
+def _projects_world(t):
+    repo = os.path.join(t, "shop"); os.makedirs(repo)
+    import subprocess
+    subprocess.run(["git", "init", "-q", "-b", "main", repo], check=True)
+    open(os.path.join(repo, "a"), "w").write("a\n")
+    subprocess.run(["git", "-C", repo, "add", "a"], check=True)
+    subprocess.run(["git", "-C", repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"], check=True)
+    gdir = os.path.join(t, "goals"); os.makedirs(gdir)
+    med = os.path.join(t, "med"); os.makedirs(med)
+    return repo, gdir, med
+
+
+def test_predict_writes_milestones_per_project_keyed_on_its_COMMIT():
+    with tempfile.TemporaryDirectory() as t:
+        repo, gdir, med = _projects_world(t)
+        calls = []
+        def pred(project, path, sha, goal):
+            calls.append(project); return _predictor(project, path, sha, goal)
+        r = cp.predict(repos={"shop": repo}, goals_dir=gdir, meditation_dir=med, predictor=pred)
+        assert r["predicted"] == ["shop"] and calls == ["shop"], r
+        pr = cp.load_predictions(med)
+        assert pr["shop"]["milestones"][0]["title"].startswith("add a smoke test")
+        assert pr["shop"]["sha"] and pr["shop"]["ts"]
+        # same commit -> cache hit, no second call
+        r2 = cp.predict(repos={"shop": repo}, goals_dir=gdir, meditation_dir=med, predictor=pred)
+        assert r2["cached"] == ["shop"] and calls == ["shop"], (r2, calls)
+
+
+def test_a_project_that_MOVED_is_predicted_again():
+    with tempfile.TemporaryDirectory() as t:
+        repo, gdir, med = _projects_world(t)
+        calls = []
+        def pred(project, path, sha, goal):
+            calls.append(sha); return _predictor(project, path, sha, goal)
+        cp.predict(repos={"shop": repo}, goals_dir=gdir, meditation_dir=med, predictor=pred)
+        import subprocess
+        open(os.path.join(repo, "b"), "w").write("b\n")
+        subprocess.run(["git", "-C", repo, "add", "b"], check=True)
+        subprocess.run(["git", "-C", repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "more"], check=True)
+        cp.predict(repos={"shop": repo}, goals_dir=gdir, meditation_dir=med, predictor=pred)
+        assert len(calls) == 2 and calls[0] != calls[1]
+
+
+def test_a_prediction_is_NEVER_a_step_until_accepted_and_accept_lands_in_the_goal():
+    with tempfile.TemporaryDirectory() as t:
+        repo, gdir, med = _projects_world(t)
+        open(os.path.join(gdir, "shop-live.md"), "w").write(
+            "---\nname: shop-live\ntitle: Shop live\nproject: shop\ncwd: %s\nstatus: active\n---\n"
+            "## Milestones\n- [ ] checkout works\n" % repo)
+        cp.predict(repos={"shop": repo}, goals_dir=gdir, meditation_dir=med, predictor=_predictor)
+        g = cp.build(goals_dir=gdir, meditation_dir=med, elaborator=lambda *a: [])
+        assert not any("smoke test" in n["title"] for n in g["nodes"]), "a prediction became a step on its own"
+        r = cp.accept_predicted("shop", "add a smoke test to shop", meditation_dir=med, goals_dir=gdir)
+        assert r["ok"] and r["goal"] == "shop-live", r
+        txt = open(os.path.join(gdir, "shop-live.md")).read()
+        assert "- [ ] add a smoke test to shop" in txt and "predicted" in txt
+        left = cp.load_predictions(med)["shop"]["milestones"]
+        assert not any(m["title"] == "add a smoke test to shop" for m in left)
+        # a goal-less project gets a goal file written for it (its own repo:
+        # one path is one project's goal, so sharing shop's would be shop's)
+        solo = os.path.join(t, "solo"); os.makedirs(solo)
+        import subprocess as _sp
+        _sp.run(["git", "init", "-q", "-b", "main", solo], check=True)
+        open(os.path.join(solo, "a"), "w").write("a\n"); _sp.run(["git", "-C", solo, "add", "a"], check=True)
+        _sp.run(["git", "-C", solo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "i"], check=True)
+        cp.predict(repos={"solo": solo}, goals_dir=gdir, meditation_dir=med, predictor=_predictor)
+        r2 = cp.accept_predicted("solo", "document the env vars", meditation_dir=med, goals_dir=gdir)
+        assert r2["ok"] and os.path.exists(os.path.join(gdir, "solo-next.md")), r2
+        assert "- [ ] document the env vars" in open(os.path.join(gdir, "solo-next.md")).read()
+
+
+def test_a_discarded_prediction_stays_GONE_across_re_predictions():
+    with tempfile.TemporaryDirectory() as t:
+        repo, gdir, med = _projects_world(t)
+        cp.predict(repos={"shop": repo}, goals_dir=gdir, meditation_dir=med, predictor=_predictor)
+        r = cp.discard_predicted("shop", "document the env vars", meditation_dir=med, ledger=os.path.join(med, "d.jsonl"))
+        assert r["ok"], r
+        assert not any(m["title"] == "document the env vars" for m in cp.load_predictions(med)["shop"]["milestones"])
+        cp.predict(repos={"shop": repo}, goals_dir=gdir, meditation_dir=med, predictor=_predictor, fresh=True,
+                   ledger=os.path.join(med, "d.jsonl"))
+        assert not any(m["title"] == "document the env vars" for m in cp.load_predictions(med)["shop"]["milestones"])
+
+
+def test_predictions_are_on_the_PLAN_page_apart_from_the_steps():
+    with tempfile.TemporaryDirectory() as t:
+        repo, gdir, med = _projects_world(t)
+        cp.predict(repos={"shop": repo}, goals_dir=gdir, meditation_dir=med, predictor=_predictor)
+        g = cp.build(goals_dir=gdir, meditation_dir=med, elaborator=lambda *a: [])
+        cp.save(g, med)
+        s = cp.status(meditation_dir=med)
+        assert s["predictions"]["shop"]["milestones"], s.get("predictions")
+        page = cp.render(g, predictions=cp.load_predictions(med))
+        assert "PREDICTED" in page and "smoke test" in page
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

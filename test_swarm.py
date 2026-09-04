@@ -189,7 +189,7 @@ def test_a_click_shows_its_state_where_the_finger_IS():
     html = _console()
     assert 'btn.textContent = "working…"' in html
     assert "btn.disabled = true" in html
-    assert 'act(b.dataset.act, b.dataset.arg, b)' in html, \
+    assert 'act(b.dataset.act, b.dataset.arg, b, b.dataset.val || "")' in html, \
         "the click no longer hands the button to act()"
 
 

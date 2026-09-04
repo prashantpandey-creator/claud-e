@@ -675,10 +675,25 @@ def test_a_goal_agent_can_actually_WORK_under_dontAsk():
         c = _launch(_git_repo(t), worktree_root=os.path.join(t, "wt"))
         allowed = c["argv"][c["argv"].index("--allowedTools") + 1]
         denied = c["argv"][c["argv"].index("--disallowedTools") + 1]
-        for need in ("Bash(git:*)", "Bash(cd:*)", "Bash(npm:*)", "Bash(python3:*)", "Bash(./gradlew:*)"):
+        for need in ("Bash(git:*)", "Bash(cd:*)", "Bash(npm:*)", "Bash(python3:*)", "Bash(./gradlew:*)",
+                     # second real run: Bash unblocked, then Write/Edit/`cat >` denied — the fix was
+                     # designed and could not be written. dontAsk denies every tool not NAMED.
+                     "Edit", "Write", "MultiEdit", "Read", "Glob", "Grep"):
             assert need in allowed, need
         for bad in ("Bash(git push --force:*)", "Bash(rm -rf:*)", "Bash(sudo:*)", "Bash(git reset --hard:*)"):
             assert bad in denied, bad
+
+
+def test_a_RESUMED_run_says_its_progress_is_not_streamed():
+    """A --resume run's stream carried only the final result event (measured
+    2026-09-04: Counter({'result': 1}) after 30 turns and 577 s). The card
+    read 'running · 0 turns' for ten minutes. A resumed log says so."""
+    with tempfile.TemporaryDirectory() as t:
+        p = os.path.join(t, "20260904-000004-goal-r.log")
+        open(p, "w").write("# goal-r\n# cwd: /tmp\n# model: opus effort: max budget: 2\n# session: s\n"
+                           "# worktree: \n# branch: \n# continues: 20260904-000001-goal-r.log\n# pid: 4242\n\n")
+        rows = go.live_agents(log_dir=t, alive=lambda pid: True)
+        assert rows[0]["resumed"] is True and "not streamed" in rows[0]["state"], rows[0]
 
 
 def _main():

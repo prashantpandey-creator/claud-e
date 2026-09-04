@@ -162,6 +162,230 @@ def _claude() -> str:
         return "claude"
 
 
+PREDICT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "milestones": {"type": "array", "items": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string"},
+                "why": {"type": "string"},
+                "check": {"type": "string"},
+                "size": {"type": "string", "enum": ["S", "M", "L"]},
+            },
+            "required": ["title", "why", "check", "size"]}}},
+    "required": ["milestones"],
+}
+PREDICTIONS_NAME = "predictions.json"
+
+
+def predict_with_claude(project: str, path: str, sha: str,
+                        goal: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Read-only planner in the project's own repo: the next 3-6 milestones
+    it needs, in order, each with a why, a check and a size. Goal or not."""
+    gl_txt = ""
+    if goal:
+        gl_txt = ("\nThis project has a goal file '%s': done = %s; open = %s. Predict what comes "
+                  "AFTER the open ones; do not repeat either list."
+                  % (goal.get("title") or goal.get("name"),
+                     "; ".join(goal.get("done_titles") or [])[:600] or "none",
+                     "; ".join(goal.get("open_titles") or [])[:600] or "none"))
+    prompt = (
+        "You are predicting, not doing. Project: %s (repo in the current directory, at commit %s).\n"
+        "Read the README, the last 20 commits, any TODO/ROADMAP, and the test state (read-only). "
+        "Then predict the next 3 to 6 milestones this project needs to reach what it is "
+        "evidently for, in order — concrete, one sentence each, with `why` (what it unlocks or "
+        "what breaks without it), `check` (how you would prove it done), and `size` S/M/L. "
+        "Prefer what the code and the commit trail imply over generic advice. Return the "
+        "milestones object.%s" % (project, sha[:9], gl_txt))
+    argv = [_claude(), "-p", prompt, "--model", "sonnet", "--output-format", "json",
+            "--permission-mode", "dontAsk", "--max-budget-usd", str(ELABORATE_BUDGET_USD),
+            "--json-schema", json.dumps(PREDICT_SCHEMA),
+            "--allowedTools", "Bash(git:*) Bash(ls:*) Bash(cat:*) Bash(head:*) Bash(grep:*) Bash(rg:*) Bash(find:*) Bash(wc:*)",
+            "--disallowedTools", "Edit Write NotebookEdit Bash(git commit:*) Bash(git push:*) Bash(rm:*)"]
+    r = subprocess.run(argv, cwd=path, capture_output=True, text=True,
+                       timeout=ELABORATE_TIMEOUT_S, stdin=subprocess.DEVNULL)
+    for ln in reversed(r.stdout.strip().splitlines()):
+        if ln.startswith("{") and '"type"' in ln:
+            try:
+                d = json.loads(ln)
+            except ValueError:
+                continue
+            so = d.get("structured_output") or {}
+            return [m for m in (so.get("milestones") or []) if isinstance(m, dict) and m.get("title")]
+    raise RuntimeError("planner returned no milestones object")
+
+
+def load_predictions(meditation_dir: str = MEDITATION_DIR) -> Dict[str, Any]:
+    try:
+        return json.load(open(os.path.join(meditation_dir, PREDICTIONS_NAME)))
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_predictions(pr: Dict[str, Any], meditation_dir: str) -> None:
+    os.makedirs(meditation_dir, exist_ok=True)
+    tmp = os.path.join(meditation_dir, PREDICTIONS_NAME + ".tmp")
+    with open(tmp, "w") as f:
+        json.dump(pr, f, indent=1)
+    os.replace(tmp, os.path.join(meditation_dir, PREDICTIONS_NAME))
+
+
+def _head_sha(path: str) -> str:
+    try:
+        return subprocess.run(["git", "-C", path, "rev-parse", "HEAD"], capture_output=True,
+                              text=True, timeout=10).stdout.strip()
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+
+
+def _goal_for_project(project: str, path: str, goals_dir: Optional[str]) -> Optional[Dict[str, Any]]:
+    import goals as gl
+    try:
+        rows = gl.scan(goals_dir) if goals_dir else gl.scan()
+    except Exception:
+        return None
+    best = None
+    for g in rows:
+        gc = (g.get("cwd") or "").rstrip("/")
+        if (g.get("project") or "") == project or (gc and path and (path.rstrip("/") == gc or path.startswith(gc + "/"))):
+            if best is None or len(gc) > len(best.get("cwd") or ""):
+                best = g
+    if not best:
+        return None
+    ms = best.get("milestones") or []
+    return {"name": best["name"], "title": best.get("title"), "cwd": best.get("cwd"),
+            "done_titles": [(m.get("headline") or m.get("text") or "") for m in ms if m.get("done")],
+            "open_titles": [(m.get("headline") or m.get("text") or "") for m in ms if not m.get("done")],
+            "file": best.get("file")}
+
+
+def predict(repos: Optional[Dict[str, str]] = None, goals_dir: Optional[str] = None,
+            meditation_dir: str = MEDITATION_DIR, predictor: Optional[Callable] = None,
+            fresh: bool = False, active_days: Optional[int] = 30, limit: int = 20,
+            ledger: Optional[str] = None) -> Dict[str, Any]:
+    """Predicted milestones for every project, on its own. Keyed on the
+    repo's HEAD: a project that has not moved is not re-predicted (a full
+    pass is a planner call per project). Discarded titles never return."""
+    import goals as gl
+    predictor = predictor or predict_with_claude
+    if repos is None:
+        import projects as _pj
+        repos = dict(_pj._repo_dirs())
+        if active_days is not None:
+            recent = {}
+            try:
+                for r in _pj.rollup():
+                    recent[r.get("project")] = r.get("last_touched_days")
+            except Exception:
+                recent = {}
+            repos = {k: v for k, v in repos.items()
+                     if recent.get(k) is not None and recent[k] <= active_days}
+    gone = gl.discarded_names(ledger)
+    pr = load_predictions(meditation_dir)
+    out = {"predicted": [], "cached": [], "skipped": [], "failed": []}
+    for project, path in list(repos.items())[:limit]:
+        if not path or not os.path.isdir(path):
+            out["skipped"].append(project)
+            continue
+        sha = _head_sha(path)
+        cur = pr.get(project) or {}
+        if not fresh and cur.get("sha") == sha and cur.get("milestones") is not None:
+            out["cached"].append(project)
+            continue
+        goal = _goal_for_project(project, path, goals_dir)
+        try:
+            ms = predictor(project, path, sha, goal)
+        except Exception as e:
+            out["failed"].append("%s: %s" % (project, str(e)[:80]))
+            continue
+        keep = []
+        for m in ms[:6]:
+            t_ = str(m.get("title") or "").strip()
+            if not t_ or ("predict:%s:%s" % (project, _nid(t_))) in gone:
+                continue
+            keep.append({"title": t_, "why": str(m.get("why") or "").strip(),
+                         "check": str(m.get("check") or "").strip(),
+                         "size": m.get("size") if m.get("size") in ("S", "M", "L") else "M"})
+        pr[project] = {"sha": sha, "ts": _now_iso(), "path": path,
+                       "goal": goal["name"] if goal else None, "milestones": keep}
+        out["predicted"].append(project)
+        # save per project: a pass over 13 repos is up to an hour of planner
+        # calls, and nothing reached the page until the last one finished
+        _save_predictions(pr, meditation_dir)
+    _save_predictions(pr, meditation_dir)
+    return out
+
+
+def accept_predicted(project: str, title: str, meditation_dir: str = MEDITATION_DIR,
+                     goals_dir: Optional[str] = None) -> Dict[str, Any]:
+    """A predicted milestone becomes a real one: appended to the project's
+    goal file, or a `<project>-next` goal is written for a project without
+    one. The next plan turns it into steps."""
+    import goals as gl
+    pr = load_predictions(meditation_dir)
+    ent = pr.get(project)
+    if not ent:
+        return {"ok": False, "why": "no predictions for %s" % project}
+    m = next((x for x in ent["milestones"] if x["title"] == title), None)
+    if not m:
+        return {"ok": False, "why": "no such predicted milestone"}
+    gdir = goals_dir or gl.GOALS_DIR
+    goal = _goal_for_project(project, ent.get("path", ""), goals_dir)
+    line = "- [ ] %s <!-- predicted %s: %s; check: %s -->\n" % (
+        m["title"], time.strftime("%Y-%m-%d"), m.get("why", "")[:120].replace("-->", ""),
+        m.get("check", "")[:120].replace("-->", ""))
+    if goal and goal.get("file") and os.path.exists(goal["file"]):
+        txt = open(goal["file"], errors="replace").read()
+        if "## Milestones" in txt:
+            head, _, rest = txt.partition("## Milestones\n")
+            lines = rest.split("\n")
+            i = 0
+            while i < len(lines) and (lines[i].startswith("- [") or not lines[i].strip() and i + 1 < len(lines) and lines[i + 1].startswith("- [")):
+                i += 1
+            lines.insert(i, line.rstrip("\n"))
+            txt = head + "## Milestones\n" + "\n".join(lines)
+        else:
+            txt = txt.rstrip("\n") + "\n\n## Milestones\n" + line
+        open(goal["file"], "w").write(txt)
+        target = goal["name"]
+    else:
+        name = re.sub(r"[^a-z0-9-]+", "-", project.lower()).strip("-") + "-next"
+        path = os.path.join(gdir, name + ".md")
+        if not os.path.exists(path):
+            os.makedirs(gdir, exist_ok=True)
+            open(path, "w").write("---\nname: %s\ntitle: %s — what comes next\nproject: %s\ncwd: %s\nstatus: active\n---\n"
+                                  "## Milestones\n%s\n## Note\nWritten from the twin's predicted milestones on %s. "
+                                  "Edit freely; the checkboxes are the measurement.\n"
+                                  % (name, project, project, ent.get("path") or os.path.expanduser("~"), line,
+                                     time.strftime("%Y-%m-%d")))
+        else:
+            open(path, "a").write(line)
+        target = name
+    ent["milestones"] = [x for x in ent["milestones"] if x["title"] != title]
+    ent.setdefault("accepted", []).append({"title": title, "ts": _now_iso(), "goal": target})
+    _save_predictions(pr, meditation_dir)
+    return {"ok": True, "goal": target, "title": title}
+
+
+def discard_predicted(project: str, title: str, meditation_dir: str = MEDITATION_DIR,
+                      ledger: Optional[str] = None, reason: str = "") -> Dict[str, Any]:
+    import goals as gl
+    pr = load_predictions(meditation_dir)
+    ent = pr.get(project)
+    if not ent:
+        return {"ok": False, "why": "no predictions for %s" % project}
+    before = len(ent["milestones"])
+    ent["milestones"] = [x for x in ent["milestones"] if x["title"] != title]
+    if len(ent["milestones"]) == before:
+        return {"ok": False, "why": "no such predicted milestone"}
+    gl._ledger_write(ledger, {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                              "name": "predict:%s:%s" % (project, _nid(title)), "kind": "predicted",
+                              "project": project, "title": title, "reason": reason})
+    _save_predictions(pr, meditation_dir)
+    return {"ok": True, "project": project, "title": title}
+
+
 def _now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime())
 
@@ -898,6 +1122,7 @@ def status(meditation_dir: str = MEDITATION_DIR) -> Dict[str, Any]:
             "metrics": _metrics(g, time.time()), "notes": g.get("notes", []),
             "proposed_goals": g.get("proposed_goals", []),
             "goals": g.get("goals", []),
+            "predictions": load_predictions(meditation_dir),
             "nodes": [{k: n.get(k) for k in ("id", "goal", "goal_title", "title", "kind", "status",
                                               "depends_on", "agent", "blocked_on", "stuck",
                                               "result", "steers", "grown", "name", "log",
@@ -915,7 +1140,7 @@ _GLYPH = {"done": "✓", "running": "▶", "blocked": "■", "failed": "✗", "p
           "waiting": "☐"}
 
 
-def render(g: Dict[str, Any]) -> str:
+def render(g: Dict[str, Any], predictions: Optional[Dict[str, Any]] = None) -> str:
     """The page the owner reads before saying go. Plain words, every step,
     who runs it, what it costs at most."""
     out = ["ALL GOALS — the plan", ""]
@@ -975,6 +1200,21 @@ def render(g: Dict[str, Any]) -> str:
                 out.append("      done means: " + n["check"][:100])
             out.append("      not in the plan until you accept it — accept with: campaign accept %s" % n["id"])
         out.append("")
+    pr = predictions if predictions is not None else {}
+    if any(v.get("milestones") for v in pr.values()):
+        out.append("PREDICTED MILESTONES — what each project needs next, read from its own repo; "
+                   "not a step until you accept it")
+        for proj, ent in sorted(pr.items()):
+            if not ent.get("milestones"):
+                continue
+            out.append("  %s%s (at %s)" % (proj, (" → goal " + ent["goal"]) if ent.get("goal") else "",
+                                           (ent.get("sha") or "")[:9]))
+            for m in ent["milestones"]:
+                out.append("    ? [%s] %s" % (m.get("size", "M"), m["title"][:90]))
+                if m.get("why"):
+                    out.append("        why: " + m["why"][:100])
+            out.append("        accept with: campaign accept-predicted %s \"<title>\"" % proj)
+        out.append("")
     if g.get("proposed_goals"):
         out.append("PROPOSED GOALS — work your memories carry that no goal file does")
         for c in g["proposed_goals"]:
@@ -1025,7 +1265,10 @@ def render_status(s: Dict[str, Any]) -> str:
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(prog="meditate campaign", description=__doc__.split("\n")[0])
     ap.add_argument("verb", choices=["plan", "show", "go", "tick", "status", "pause", "steer", "accept",
-                                     "accept-goal", "done", "discard", "discard-goal", "restore"])
+                                     "accept-goal", "done", "discard", "discard-goal", "restore",
+                                     "predict", "accept-predicted", "discard-predicted"])
+    ap.add_argument("--all", action="store_true", help="predict: every repo, not only those touched in 30 days")
+    ap.add_argument("--fresh", action="store_true", help="predict: ignore the commit cache")
     ap.add_argument("args", nargs="*")
     ap.add_argument("--max", type=int, default=None, help="agents at a time")
     ap.add_argument("--no-elaborate", action="store_true", help="milestones only, no planner calls")
@@ -1057,7 +1300,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
     if a.verb == "show":
         g = load(md)
-        print(render(g) if g else "no campaign planned — run: meditate campaign plan")
+        print(render(g, predictions=load_predictions(md)) if g else "no campaign planned — run: meditate campaign plan")
         return 0 if g else 1
     if a.verb == "go":
         r = go(meditation_dir=md, max_parallel=a.max)
@@ -1083,6 +1326,20 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 2
         r = accept(a.args[0], meditation_dir=md)
         print(json.dumps(r) if a.json else ("accepted %s" % r["node"] if r.get("ok") else "could not accept: " + r.get("why", "")))
+        return 0 if r.get("ok") else 1
+    if a.verb == "predict":
+        r = predict(meditation_dir=md, fresh=a.fresh, active_days=None if a.all else 30)
+        print(json.dumps(r) if a.json else "predicted %d · cached %d · skipped %d · failed %d\n%s" % (
+            len(r["predicted"]), len(r["cached"]), len(r["skipped"]), len(r["failed"]),
+            "\n".join("  " + x for x in r["failed"][:8])))
+        return 0
+    if a.verb in ("accept-predicted", "discard-predicted"):
+        if len(a.args) < 2:
+            print("usage: campaign %s <project> \"<title>\"" % a.verb)
+            return 2
+        fn = accept_predicted if a.verb == "accept-predicted" else discard_predicted
+        r = fn(a.args[0], " ".join(a.args[1:]), meditation_dir=md)
+        print(json.dumps(r) if a.json else (("ok — " + json.dumps({k: v for k, v in r.items() if k != "ok"})) if r.get("ok") else "could not: " + r.get("why", "")))
         return 0 if r.get("ok") else 1
     if a.verb in ("discard", "discard-goal", "restore"):
         if not a.args:
