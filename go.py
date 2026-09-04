@@ -705,70 +705,25 @@ def dispatch_one(cwd: str, prompt: str, name: str, model: str = "",
                  gui=None, headless=None,
                  prefer_headless: Optional[bool] = None,
                  effort: str = "", budget_usd: float = 0.0) -> bool:
-    """Open a watchable window if we can; otherwise run it headless.
+    """Run the agent headless. Never a window.
 
-    Measured live: the heartbeat's first real run selected the right work,
-    opened the gate correctly (away 115 min) and dispatched ZERO — every
-    osascript launch failed, the first by timing out after 75 seconds. The
-    cause is a conflict baked into the design: the gate fires when the owner
-    is AWAY, away almost always means the DISPLAY IS OFF, and driving Terminal
-    through System Events needs an awake display.
-
-    There is no display detector to consult — pmset's IODisplayWrangler probe
-    answers "Internal failure" on this hardware — so this does not predict. It
-    tries the window and falls back. A watchable window is better when it is
-    available; a running agent is better than a window that never opened.
+    The window path (launch.py's Terminal + `claude --dangerously-skip-
+    permissions`) was kept as the "watchable" first choice and the headless
+    run as its fallback. Measured 2026-09-04: three console clicks opened
+    three Terminal sessions with every permission off — in the purangpt-next
+    checkout (283 commits behind origin), in mila-english (30 uncommitted
+    files belonging to another session) and in the owner's HOME directory —
+    and none of them carried a role, a worktree, a cap or a RESULT. Every
+    rule the swarm runs under lives in _headless; a dispatch that skips it
+    is not a dispatch, it is an unsupervised shell. `gui` and
+    `prefer_headless` are accepted and ignored so old callers still resolve.
     """
-    if gui is None:
-        from launch import launch_claude as gui       # type: ignore
     if headless is None:
         headless = _headless
-    # HOW it launched, recorded on the function so the ledger can write it.
-    # Measured 2026-08-29: 52 of 58 dispatch rows had an empty window_id and
-    # nothing distinguished "the window opened but its id did not parse" from
-    # "no window at all" from "fell through to headless". A ledger that cannot
-    # tell those apart cannot say whether the fleet works — and it was
-    # reporting 59 dispatches while five headless logs held 39 bytes each,
-    # header only, no agent output.
     dispatch_one.how = ""
-    # Do not try the window when the display is almost certainly off.
-    #
-    # auto_should_run only fires past AUTO_AWAY_AFTER_S — 20 minutes with no
-    # key or mouse — so EVERY unattended dispatch happens in exactly the state
-    # this function's docstring says osascript cannot work in. The result was
-    # 45 identical "osascript error" lines in heartbeat.log, each one after a
-    # 75-second timeout, and the headless path that does work reached only
-    # after burning that. Measured 2026-08-29: headless answers a PONG probe
-    # in 45s from cold. Skipping the doomed call is subtraction, not a new
-    # layer — and if the idle signal cannot be read we still try the window,
-    # because not-checkable is not "away".
-    if prefer_headless is None:
-        try:
-            import attention
-            idle = attention.signals().get("idle_s")
-            prefer_headless = idle is not None and idle >= AUTO_AWAY_AFTER_S
-        except Exception:
-            prefer_headless = False
-    if prefer_headless:
-        try:
-            if _call_headless(headless, cwd, prompt, name, model, effort, budget_usd):
-                dispatch_one.how = "headless (display likely off)"
-                return True
-        except Exception as e:
-            dispatch_one.how = "headless-error: " + str(e)[:60]
-    try:
-        if gui(cwd, prompt, name, model):
-            dispatch_one.how = "gui"
-            return True
-        dispatch_one.how = "gui-refused"
-    except Exception as e:
-        # osascript times out by RAISING, not returning — 45 of these sat in
-        # heartbeat.log, same failure every time, seen by nobody.
-        dispatch_one.how = "gui-error: " + str(e)[:60]
     try:
         ok = bool(_call_headless(headless, cwd, prompt, name, model, effort, budget_usd))
-        dispatch_one.how = ("headless" if ok else "headless-refused") \
-            + ("" if not dispatch_one.how.startswith("gui-") else " after " + dispatch_one.how)
+        dispatch_one.how = "headless" if ok else "headless-refused"
         return ok
     except Exception as e:
         dispatch_one.how = "failed: " + str(e)[:60]
@@ -789,6 +744,28 @@ _READ_IT = object()      # "I brought no reading — go take one"
 
 SPLIT_LEDGER = os.path.join(MEDITATION_DIR, "dispatch.jsonl")
 SPLIT_FLOOR = 600_000          # the top CEILING_BAND floor in coordination.py
+
+
+def choose(kind: str, model: str = "") -> Dict[str, Any]:
+    """Who to send, at what effort, and the REASON — recorded, not implied.
+
+    Measured 2026-08-30: 0 of 6 goal files named a model, so every dispatch
+    fell through to a hardcoded `--model sonnet`, and `effort` appeared 0
+    times in this file. The fleet was not choosing badly, it was not choosing
+    at all — invisibly. An explicit default that states its reason can be
+    argued with; a hardcoded one cannot.
+
+    A model named on the goal always wins: that is the owner deciding.
+    """
+    if model:
+        return {"model": model, "effort": "", "basis": "goal file",
+                "why": "the goal names this model"}
+    try:
+        import models as _md
+        return _md.pick(kind)
+    except Exception:
+        return {"model": "sonnet", "effort": "", "basis": "fallback",
+                "why": "could not read the policy"}
 
 
 def _ledger_write(path: str, row: Dict[str, Any]) -> None:
@@ -1082,11 +1059,36 @@ def run(n: Optional[int] = None, repair_only: bool = False,
         folded = {"error": str(e)[:80]}
 
     lp = ledger_path or dv.LEDGER_PATH
-    cands = dv.dispatchable(goals_dir, lp, history_path)
+    skw = {}
+    if goals_dir:
+        skw["goals_dir"] = goals_dir
+    if history_path:
+        skw["history_path"] = history_path
+    named_refusal: Optional[Dict[str, str]] = None
     if only_goal:
-        cands = [c for c in cands if c["name"] == only_goal]
+        # An explicit go names its goal: the owner is the one pressing, so
+        # the dispatch cooldown does not apply — and a goal that cannot be
+        # sent is named with its reason, not folded into "(4 cooling)".
+        # Nine console clicks answered that line with started:true.
+        allg = [x for x in gl.scan(**skw) if x["name"] == only_goal]
+        cands = allg
         repair = None
+        if not allg:
+            named_refusal = {"goal": only_goal, "why": "no goal file by that name"}
+        else:
+            x = allg[0]
+            if x["status"] in ("done", "paused"):
+                named_refusal = {"goal": only_goal, "why": "the goal is %s" % x["status"]}
+            elif x["done"] >= x["total"]:
+                named_refusal = {"goal": only_goal,
+                                 "why": "all %d of %d milestones done" % (x["done"], x["total"])}
+            elif _human_next(x.get("next") or ""):
+                named_refusal = {"goal": only_goal,
+                                 "why": "next milestone is yours: %s" % (x.get("next") or "")[:80]}
+        if named_refusal:
+            cands = []
     else:
+        cands = dv.dispatchable(goals_dir, lp, history_path)
         repair = _repair_kickoff(meditation_dir, store_dir, select=repair_select)
 
     would: List[str] = []
@@ -1107,7 +1109,9 @@ def run(n: Optional[int] = None, repair_only: bool = False,
     result: Dict[str, Any] = {"would": would, "repair_launched": False,
                               "reconciled": folded.get("added", 0),
                               "goals_launched": 0, "sent": [], "errors": [],
-                              "cooling": getattr(dv.dispatchable, "cooling", 0)}
+                              "cooling": 0 if only_goal else getattr(dv.dispatchable, "cooling", 0)}
+    if named_refusal:
+        result["skipped"] = [named_refusal]
     if blocked:
         result["repair_blocked"] = blocked
         result["errors"].append({"code": "instrument", "message": blocked})
@@ -1177,6 +1181,14 @@ def run(n: Optional[int] = None, repair_only: bool = False,
                 # Three of these were sitting in the live ledger.
                 result.setdefault("skipped", []).append(
                     {"goal": g["name"], "why": "nothing open to work on"})
+                continue
+            if _human_next(g.get("next") or ""):
+                # The next milestone needs the owner's hands (credentials,
+                # approvals, payments). Four hourly runs were sent at "Owner
+                # supplies the Pixel ID" on 2026-09-03/04, $3.65 to rediscover
+                # that an agent has no hands.
+                result.setdefault("skipped", []).append(
+                    {"goal": g["name"], "why": "next milestone is yours: %s" % g["next"][:80]})
                 continue
             here = os.path.realpath(k["cwd"])
             isolable = _repo_top(k["cwd"]) is not None
@@ -1297,6 +1309,25 @@ def run(n: Optional[int] = None, repair_only: bool = False,
     return result
 
 
+def _human_next(text: str) -> bool:
+    try:
+        import campaign as _cp
+        return bool(_cp.is_human(text))
+    except Exception:
+        return False
+
+
+def _refusal_lines(data: Dict[str, Any]) -> str:
+    """What did not go, and why — one line per named goal."""
+    out = ["Nothing to move: no repair queue, no dispatchable goal"
+           + (" (%d cooling)" % data["cooling"] if data.get("cooling") else "")]
+    for r in (data.get("skipped") or []) + (data.get("deferred") or []):
+        out.append("  - %s: %s" % (r.get("goal", "?"), r.get("why", "")))
+    for e in data.get("errors") or []:
+        out.append("  - error: %s" % (e if isinstance(e, str) else e.get("message", "")))
+    return "\n".join(out)
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(prog="meditate go", description="Move everything forward")
     ap.add_argument("sel", nargs="?", default=None,
@@ -1310,6 +1341,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--continue", dest="cont", nargs=2, metavar=("NAME", "MESSAGE"),
                     help="resume a finished or stopped agent with a new message")
+    ap.add_argument("--headless", action="store_true",
+                    help="no window, no in-place launch: the console's go (unattended rules, no idle gate)")
     args = ap.parse_args(argv)
 
     if args.cont:
@@ -1381,7 +1414,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         repair_select = args.sel        # `meditate fix 2` = item 2, not a cap
         n = None
     data = run(n=n, repair_only=args.repair_only,
-               only_goal=only_goal, repair_select=repair_select)
+               only_goal=only_goal, repair_select=repair_select,
+               unattended=bool(args.headless))
     env = {"tool_name": "meditate_go", "success": True, "data": data,
            "metadata": {"dry_run": n == 0}, "errors": []}
     if args.json:
@@ -1395,8 +1429,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             print("  nothing — world is clean and goals are covered")
         return 0
     if not data["sent"]:
-        print("Nothing to move: no repair queue, no dispatchable goal"
-              + (" (%d cooling)" % data["cooling"] if data["cooling"] else ""))
+        print(_refusal_lines(data))
         return 0
     detail = data.get("launched") or []
     if detail:

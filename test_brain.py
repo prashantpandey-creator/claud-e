@@ -276,6 +276,38 @@ def test_server_REPLACES_ITSELF_when_the_code_on_disk_is_newer():
     assert "_watch_code" in inspect.getsource(br.main)
 
 
+def test_a_go_that_sent_nothing_says_NOTHING_SENT_and_why():
+    """The console's go ran go.py and reported started:true with the CLI's
+    'Nothing to move' line truncated to 28 characters on the button. The
+    runner reads go's JSON envelope: started is whether an agent was sent,
+    and the output is the launch or the named reasons."""
+    env = {"data": {"sent": [], "cooling": 0,
+                    "skipped": [{"goal": "g-done", "why": "all 6 of 6 milestones done"}]}}
+    started, out = br._go_output(env)
+    assert started is False and "g-done: all 6 of 6 milestones done" in out, out
+    env = {"data": {"sent": ["goal-g-a"], "launched": [{"kind": "goal", "title": "Ship it",
+                                                         "milestone": "first open thing"}]}}
+    started, out = br._go_output(env)
+    assert started is True and "Ship it" in out and "first open thing" in out, out
+    started, out = br._go_output({"garbage": 1})
+    assert started is False and "did not answer" in out, out
+    # the page: a refused click reads 'nothing sent', and go's reasons open the readout
+    src = open(os.path.join(SKILL, "twin_console.html")).read()
+    assert '"nothing sent"' in src, "button label on refusal"
+    assert 'showReadout("go"' in src or "showReadout('go'" in src, "reasons are shown whole"
+
+
+def test_one_click_is_ONE_activity_row():
+    """accept-goal, accept-predicted, discard-proposed and go-all were each
+    logged twice per click (a handler-level call plus the generic one at the
+    end of do_POST); the ACTIVITY feed showed every click doubled."""
+    import inspect
+    src = inspect.getsource(br)
+    calls = [l for l in src.splitlines() if "_log_brain_action(" in l and "def _log_brain_action" not in l]
+    # exactly two remain: the mascot's early-return path, and the generic one
+    assert len(calls) == 2, calls
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

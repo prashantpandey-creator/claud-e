@@ -176,6 +176,47 @@ def test_go_single_goal_by_name():
         assert rep["goals_launched"] == 1 and launched == ["goal-g-a"], (rep, launched)
 
 
+def test_an_EXPLICIT_go_bypasses_cooldown_and_a_refusal_says_WHY():
+    """Nine console clicks on 2026-09-04 each answered 'Nothing to move: no
+    dispatchable goal (4 cooling)' and started:true. The named goal had been
+    filtered out before the loop — by cooldown, by being 100% done, by a
+    human-only next milestone — and none of that was said. An explicit go
+    is the owner pressing: cooldown does not apply to him, and a goal that
+    cannot be sent is named with its reason."""
+    import go as g2, json as _j, time as _t
+    with tempfile.TemporaryDirectory() as t:
+        med, store, gdir = _world(t)
+        with open(os.path.join(gdir, "d.md"), "w") as f:
+            f.write(GOAL.replace("name: g-a", "name: g-done").replace("- [ ] first open thing", "- [x] shipped"))
+        with open(os.path.join(gdir, "h.md"), "w") as f:
+            f.write(GOAL.replace("name: g-a", "name: g-hands").replace(
+                "- [ ] first open thing", "- [ ] Owner supplies the Pixel ID and a System User token"))
+        led = os.path.join(t, "d.jsonl")
+        with open(led, "w") as f:
+            f.write(_j.dumps({"goal": "g-a", "ts_epoch": _t.time() - 600, "kind": "goal"}) + "\n")
+        kw = dict(meditation_dir=med, store_dir=store, goals_dir=gdir,
+                  history_path=os.path.join(t, "h.jsonl"), ledger_path=led)
+        launched = []
+        lch = lambda cwd, prompt, name, model='': launched.append(name) or True
+        # the hourly pass respects the cooldown
+        rep = g2.run(launcher=lch, **kw)
+        assert rep["goals_launched"] == 0 and rep["cooling"] == 1, rep
+        # the owner's explicit go does not
+        rep = g2.run(only_goal="g-a", launcher=lch, **kw)
+        assert rep["goals_launched"] == 1 and launched == ["goal-g-a"], (rep, launched)
+        # and every refusal is named
+        rep = g2.run(only_goal="g-done", launcher=lch, **kw)
+        assert rep["goals_launched"] == 0
+        assert any("done" in r["why"] for r in rep.get("skipped", [])), rep
+        rep = g2.run(only_goal="g-hands", launcher=lch, **kw)
+        assert any("yours" in r["why"] for r in rep.get("skipped", [])), rep
+        rep = g2.run(only_goal="g-nope", launcher=lch, **kw)
+        assert any("no goal" in r["why"] for r in rep.get("skipped", [])), rep
+        # the CLI says the same, not 'Nothing to move'
+        assert "yours" in g2._refusal_lines({"sent": [], "cooling": 0,
+                                             "skipped": [{"goal": "g-hands", "why": "next milestone is yours: x"}]})
+
+
 def test_fleet_status_joins_ledger_and_goals():
     import drive as dv2
     with tempfile.TemporaryDirectory() as t:
@@ -462,57 +503,36 @@ def test_auto_holds_on_unknown_even_when_the_machine_is_away():
     assert _with_idle(None)["run"] is False, "unreadable ioreg dispatched"
 
 
-def test_dispatch_falls_back_to_HEADLESS_when_the_window_fails():
-    """Measured live: the automation fired, the gate opened correctly (away
-    115 min), it selected the right work — and dispatched ZERO.
-
-    Every launch failed inside osascript: the first timed out after 75s, the
-    next two exited non-zero. The cause is a conflict built into the design:
-    the gate dispatches when the owner is AWAY, away almost always means the
-    DISPLAY IS OFF (pmset shows it off 21:26-22:11, exactly when the beat
-    fired), and driving Terminal through System Events needs an awake display.
-    The two conditions are mutually exclusive.
-
-    No display detector is available here — pmset's IODisplayWrangler probe
-    returns "Internal failure" on Apple Silicon — so do not predict. Try the
-    window; when it fails, run the agent headless, which needs no GUI at all
-    (verified: `claude -p` returns normally with the screen off)."""
-    calls = []
-
-    def gui_fails(cwd, prompt, name, model=""):
-        calls.append(("gui", name))
-        return False
-
-    def headless(cwd, prompt, name, model=""):
-        calls.append(("headless", name))
-        return True
-
-    # prefer_headless pinned: unpinned, this read the owner's idle clock and
-    # went red the moment he had been away 20 minutes (measured: idle 1426 s
-    # against the 1200 s gate) — a test about fallback order, failing on the
-    # time of day.
-    ok = go.dispatch_one("/tmp", "do the thing", "probe",
-                         gui=gui_fails, headless=headless, prefer_headless=False)
-    assert ok is True, "fell back to nothing"
-    assert [c[0] for c in calls] == ["gui", "headless"], calls
-
-
-def test_headless_is_not_used_when_the_window_opens():
-    """A watchable window is better when it is available — do not downgrade."""
+def test_dispatch_is_HEADLESS_ONLY_the_window_path_is_gone():
+    """Measured 2026-09-04: three console clicks opened three Terminal
+    sessions of `claude --dangerously-skip-permissions` — in a checkout 283
+    commits behind origin, in another session's dirty checkout, and in HOME
+    — none under a role, a worktree, a cap or a RESULT. The window was the
+    "watchable" first choice with headless as fallback. There is no first
+    choice now: a dispatch IS the headless run, and a gui handed in is never
+    called."""
     calls = []
     ok = go.dispatch_one("/tmp", "p", "probe",
                          gui=lambda *a, **k: calls.append("gui") or True,
                          headless=lambda *a, **k: calls.append("headless") or True,
                          prefer_headless=False)
-    assert ok is True and calls == ["gui"], calls
-
-
-def test_a_raising_launcher_still_falls_back():
-    """osascript timing out raises rather than returning False."""
+    assert ok is True and calls == ["headless"], calls
+    assert go.dispatch_one.how == "headless"
+    # a headless launcher that refuses is reported, not retried through a window
+    calls = []
+    ok = go.dispatch_one("/tmp", "p", "probe",
+                         gui=lambda *a, **k: calls.append("gui") or True,
+                         headless=lambda *a, **k: calls.append("headless") or False)
+    assert ok is False and calls == ["headless"], calls
+    assert go.dispatch_one.how == "headless-refused"
+    # and one that raises is a named failure
     def boom(*a, **k):
-        raise RuntimeError("osascript timed out after 75 seconds")
-    assert go.dispatch_one("/tmp", "p", "probe", gui=boom,
-                           headless=lambda *a, **k: True) is True
+        raise RuntimeError("claude: No such file or directory")
+    assert go.dispatch_one("/tmp", "p", "probe", headless=boom) is False
+    assert go.dispatch_one.how.startswith("failed: claude"), go.dispatch_one.how
+    # the launcher itself never carries the bypass flag
+    import inspect
+    assert "dangerously" not in inspect.getsource(go._headless)
 
 
 def _main():

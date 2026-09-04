@@ -34,8 +34,8 @@ from projects import rollup as _pj_rollup
 DEFAULT_PORT = 7711
 
 ACTIONS = {
-    "go":    lambda arg: ["python3", os.path.join(SKILL_DIR, "go.py")] + ([arg] if arg else []),
-    "fix":   lambda arg: ["python3", os.path.join(SKILL_DIR, "go.py"), "--repair-only"] + ([arg] if arg else []),
+    "go":    lambda arg: ["python3", os.path.join(SKILL_DIR, "go.py"), "--json", "--headless"] + ([arg] if arg else []),
+    "fix":   lambda arg: ["python3", os.path.join(SKILL_DIR, "go.py"), "--json", "--headless", "--repair-only"] + ([arg] if arg else []),
     "grade": lambda arg: ["python3", os.path.join(SKILL_DIR, "nidra_bridge.py"), "--sleep"],
     # Reach a live session by id: `tell <sid> <message>`. The console listed
     # sessions but could not touch one, which is what "not connected enough"
@@ -83,6 +83,28 @@ def _note(step: str) -> None:
         thinking.note(step)
     except Exception:
         pass
+
+
+def _go_output(env: Dict[str, Any]) -> "tuple":
+    """go.py's envelope → (an agent was sent, what to show)."""
+    data = env.get("data") if isinstance(env, dict) else None
+    if not isinstance(data, dict):
+        raw = (env or {}).get("raw", "") if isinstance(env, dict) else ""
+        return False, "go did not answer in its own format" + ((": " + str(raw)[:200]) if raw else "")
+    if data.get("sent"):
+        lines = []
+        for l in data.get("launched") or []:
+            lines.append("sent %s: %s%s" % (l.get("kind", "agent"), l.get("title") or "",
+                                             (" → " + l["milestone"]) if l.get("milestone") else ""))
+        return True, "\n".join(lines) or ("sent " + ", ".join(data["sent"]))
+    reasons = ["%s: %s" % (r.get("goal", "?"), r.get("why", ""))
+               for r in (data.get("skipped") or []) + (data.get("deferred") or [])]
+    for e in data.get("errors") or []:
+        reasons.append("error: " + (e if isinstance(e, str) else str(e.get("message", ""))))
+    if not reasons:
+        reasons = ["nothing dispatchable" + (" (%d goals cooling after a recent dispatch)" % data["cooling"]
+                                             if data.get("cooling") else "")]
+    return False, "\n".join(reasons)
 
 
 def _default_runner(action: str, arg: str) -> Dict[str, Any]:
@@ -138,6 +160,16 @@ def _default_runner(action: str, arg: str) -> Dict[str, Any]:
     except subprocess.TimeoutExpired:
         out = "still running after %ds — check `meditate fleet`" % limit
     _note("")
+    if action in ("go", "fix"):
+        # go answers in JSON: started is whether an agent was SENT, and the
+        # output is the launch or the named refusals. Nine clicks on
+        # 2026-09-04 read started:true over "Nothing to move".
+        try:
+            env = json.loads(out)
+        except ValueError:
+            env = {"raw": out}
+        started, text = _go_output(env)
+        return {"started": started, "output": text}
     if len(out) > cap:
         kept = out[:cap].rsplit("\n", 1)[0]
         out = kept + "\n… %d more characters not shown" % (len(out) - len(kept))
@@ -1469,7 +1501,6 @@ class _Handler(BaseHTTPRequestHandler):
                     if cur and cur.get("armed"):
                         raise RuntimeError("the current campaign is armed (go given %s) — pause it before re-planning"
                                            % cur.get("armed_at", "?"))
-                    _log_brain_action("plan-all", arg)
                     cmd = ["python3", os.path.join(SKILL_DIR, "campaign.py"), "plan"]
                     if arg == "fast":
                         cmd.append("--no-elaborate")
@@ -1486,7 +1517,6 @@ class _Handler(BaseHTTPRequestHandler):
                 # THE go. Arms the campaign and sends the first ready wave.
                 try:
                     import campaign as _cp
-                    _log_brain_action("go-all", arg)
                     r = _cp.go(max_parallel=int(arg) if str(arg).isdigit() else None)
                     m = r.get("metrics") or {}
                     res = {"started": bool(r.get("armed")),
@@ -1499,7 +1529,6 @@ class _Handler(BaseHTTPRequestHandler):
             elif action == "pause-all":
                 try:
                     import campaign as _cp
-                    _log_brain_action("pause-all", arg)
                     r = _cp.pause(why=arg or "paused from the console")
                     res = {"started": True, "output": "paused — " + r.get("why", "")}
                 except Exception as e:
@@ -1510,7 +1539,6 @@ class _Handler(BaseHTTPRequestHandler):
                 # file so the owner can tail it himself.
                 try:
                     import go as _go
-                    _log_brain_action("tail", arg)
                     lg = _go._find_log(arg) or ""
                     if not lg:
                         res = {"started": False, "output": "no log for %s" % arg}
@@ -1532,7 +1560,6 @@ class _Handler(BaseHTTPRequestHandler):
                     if not msg:
                         res = {"started": False, "output": "say what to tell it"}
                     else:
-                        _log_brain_action("continue", arg)
                         r = _go.continue_agent(arg, msg)
                         res = {"started": bool(r.get("started")),
                                "output": ("continuing %s in its own session" % arg) if r.get("started")
@@ -1544,7 +1571,6 @@ class _Handler(BaseHTTPRequestHandler):
                 # store rows go inactive, the ledger keeps it from resurfacing.
                 try:
                     import campaign as _cp
-                    _log_brain_action(action, arg)
                     why = str(req.get("value") or "").strip()
                     r = (_cp.discard_proposed(arg, reason=why) if action == "discard-proposed"
                          else _cp.discard_goal(arg, reason=why))
@@ -1563,7 +1589,6 @@ class _Handler(BaseHTTPRequestHandler):
                 # (or all with arg "all"): a read-only planner per repo,
                 # cached on the repo's commit. Minutes; runs detached.
                 try:
-                    _log_brain_action("predict-all", arg)
                     cmd = ["python3", os.path.join(SKILL_DIR, "campaign.py"), "predict"]
                     if arg == "all":
                         cmd.append("--all")
@@ -1584,7 +1609,6 @@ class _Handler(BaseHTTPRequestHandler):
                     if not title:
                         res = {"started": False, "output": "which milestone?"}
                     else:
-                        _log_brain_action(action, arg)
                         r = (_cp.accept_predicted(arg, title) if action == "accept-predicted"
                              else _cp.discard_predicted(arg, title))
                         res = {"started": bool(r.get("ok")),
@@ -1599,7 +1623,6 @@ class _Handler(BaseHTTPRequestHandler):
                 # node is a milestone; whatever waited on it can move.
                 try:
                     import campaign as _cp
-                    _log_brain_action("human-done", arg)
                     r = _cp.done(arg, note=str(req.get("value") or "").strip())
                     res = {"started": bool(r.get("ok")),
                            "output": ("done — %d step%s can move now" % (len(r.get("unblocked", [])),
@@ -1611,7 +1634,6 @@ class _Handler(BaseHTTPRequestHandler):
                 # A mined goal becomes a goal file; the next plan brings it in.
                 try:
                     import campaign as _cp
-                    _log_brain_action("accept-goal", arg)
                     r = _cp.accept_goal(arg)
                     res = {"started": bool(r.get("ok")),
                            "output": ("goal written: %s — re-plan to bring it in" % os.path.basename(r.get("path", "")))
@@ -1622,7 +1644,6 @@ class _Handler(BaseHTTPRequestHandler):
                 # An idea becomes a step only when the owner takes it.
                 try:
                     import campaign as _cp
-                    _log_brain_action("accept-idea", arg)
                     r = _cp.accept(arg)
                     res = {"started": bool(r.get("ok")),
                            "output": ("accepted — it runs after the goal's last open step")
@@ -1637,7 +1658,6 @@ class _Handler(BaseHTTPRequestHandler):
                     if not msg:
                         res = {"started": False, "output": "say what to change"}
                     else:
-                        _log_brain_action("steer", arg)
                         r = _cp.steer(arg, msg)
                         res = {"started": bool(r.get("ok")),
                                "output": ("steering %s" % r.get("node")) if r.get("ok")

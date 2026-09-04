@@ -226,20 +226,22 @@ async function act(action, arg, btn, value){
   const was = btn ? btn.textContent : null;
   if(btn){ btn.textContent = "working…"; btn.disabled = true; btn.style.opacity = ".6"; }
   say.textContent = "…";
-  let line = "";
+  let line = "", d = null;
   try{
     const r = await fetch("/api/act", {method:"POST", headers:{...H,"Content-Type":"application/json"},
       body: JSON.stringify({action, arg: arg||"", value: value||""})});
-    const d = await r.json();
+    d = await r.json();
     line = (d.output || d.speech || "done").split("\n")[0];
-    if(d.started === false) line = "refused: " + line;
+    if(d.started === false) line = "nothing sent — " + line;
     // still/threads/settle ARE their output — a session list summarised to
     // its first line tells you nothing. Reading verbs get the whole thing.
     if(READOUT.has(action)) showReadout(action, d.output || d.speech || "");
+    // a refused go names every reason; a 28-character button cannot
+    if(d.started === false && (action === "go" || action === "fix")) showReadout("go", d.output || "");
   }catch(e){ line = "couldn't reach the console"; }
   say.textContent = line;
   if(btn){
-    btn.textContent = line.slice(0, 28);
+    btn.textContent = (d && d.started === false) ? "nothing sent" : line.slice(0, 28);
     setTimeout(() => { btn.textContent = was; btn.disabled = false;
                        btn.style.opacity = ""; }, 4000);
   }
