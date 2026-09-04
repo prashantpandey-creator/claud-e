@@ -538,7 +538,12 @@ def build(goals_dir: Optional[str] = None, meditation_dir: str = MEDITATION_DIR,
             # ID" is real; "Android sign-in repaired" after "iOS subscriptions
             # approved" was a false gate that left the whole run with nothing
             # ready (measured 2026-09-04: ready set empty, 3 items waiting).
-            deps0 = [prev_id] if prev_id else []
+            predicted = "<!-- predicted" in text
+            # A predicted line was appended by the twin, not written in
+            # sequence by the author: it stands alone, and waits only on a
+            # human line it shares a subject with. Chaining them left a CI
+            # gate behind a Russia field test (30 nodes, 2 runnable).
+            deps0 = [prev_id] if (prev_id and not predicted) else []
             for hn in trailing_human:
                 if _share_subject(hn["title"], head):
                     deps0.append(hn["id"])
@@ -595,7 +600,7 @@ def build(goals_dir: Optional[str] = None, meditation_dir: str = MEDITATION_DIR,
             nodes.append(node)
             if human:
                 trailing_human.append(node)
-            else:
+            elif not predicted:
                 prev_id = node["id"]
                 trailing_human = []
         # IDEAS — what the file does not say yet. Proposed, shown, and run

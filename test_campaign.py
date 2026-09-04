@@ -1093,6 +1093,28 @@ def test_campaign_writes_are_SERIALISED_by_a_lock():
             assert os.path.exists(os.path.join(t, "campaign.json.lock"))
 
 
+def test_a_PREDICTED_milestone_is_not_chained_behind_the_line_above_it():
+    """File order is the author's dependency between the steps he wrote.
+    Predicted milestones are appended by the twin and are independent by
+    nature — chaining them left a CI gate waiting on a Russia field test
+    (measured 2026-09-04: 30 mila-live nodes, 2 runnable). A predicted line
+    depends only on a human line it shares a subject with."""
+    with tempfile.TemporaryDirectory() as t:
+        gdir = os.path.join(t, "goals"); os.makedirs(gdir)
+        med = os.path.join(t, "med"); os.makedirs(med)
+        with open(os.path.join(gdir, "g.md"), "w") as f:
+            f.write("---\nname: g\ntitle: G\nproject: g\ncwd: %s\nstatus: active\n---\n## Milestones\n"
+                    "- [ ] Run the field test in Russia\n"
+                    "- [ ] Add a test gate to deploy.yml <!-- predicted 2026-09-04: x; check: y -->\n"
+                    "- [ ] Owner supplies the DNS record for the companion domain\n"
+                    "- [ ] Verify the companion domain answers <!-- predicted 2026-09-04: x; check: y -->\n" % t)
+        g = cp.build(goals_dir=gdir, meditation_dir=med, elaborator=lambda goal, ms: [])
+        by = {n["title"]: n for n in g["nodes"]}
+        assert by["Add a test gate to deploy.yml"]["depends_on"] == [], by["Add a test gate to deploy.yml"]["depends_on"]
+        assert by["Verify the companion domain answers"]["depends_on"] == [by["Owner supplies the DNS record for the companion domain"]["id"]]
+        assert len(cp.ready(g)) == 2, [n["title"] for n in cp.ready(g)]
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

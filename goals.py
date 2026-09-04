@@ -70,6 +70,9 @@ def _headline(text: str) -> str:
     survives one week" became "mitigation in place", which drops the very
     condition that decides whether the milestone is met.
     """
+    # the twin appends `<!-- predicted …; check: … -->` to lines it adds; the
+    # comment is provenance, not the milestone — it stays out of titles
+    text = re.sub(r"<!--.*?-->", "", text or "", flags=re.S).strip()
     cut = len(text)
     for sep in (" — ", " – ", " -- ", "**"):
         i = text.find(sep)
