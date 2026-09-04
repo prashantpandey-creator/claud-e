@@ -290,7 +290,53 @@ def make_worktree(cwd: str, name: str, stamp: str):
         return cwd, "", "no worktree: %s" % str(e)[:80]
     if r.returncode != 0:
         return cwd, "", "no worktree: %s" % (r.stderr.strip() or "git failed")[:80]
+    _bootstrap_worktree(top, path)
     return path, branch, why
+
+
+# Files a repo's own CLAUDE.md already tells an agent to read, gitignored so
+# `git worktree add` (tracked files only) never puts them there. Measured
+# 2026-09-04: a step could not read CLAUDE-secrets.md in its worktree; every
+# repo's CLAUDE.md says to read it before deploy/DB work. This copies exactly
+# those named files — never the age-encrypted vault, never arbitrary .env.
+_WORKTREE_CONFIG_FILES = ("CLAUDE-secrets.md", ".env", ".env.local")
+_BOOTSTRAP_TIMEOUT_S = 45
+
+
+def _bootstrap_worktree(top: str, path: str) -> None:
+    """Best-effort, silent on any failure — the worktree already exists and
+    is usable without this; it only removes walls agents would otherwise
+    spend turns rediscovering."""
+    for name in _WORKTREE_CONFIG_FILES:
+        src = os.path.join(top, name)
+        try:
+            if os.path.isfile(src) and not os.path.exists(os.path.join(path, name)):
+                shutil.copy2(src, os.path.join(path, name))
+        except OSError:
+            pass
+    if not os.path.isfile(os.path.join(top, "package.json")):
+        return
+    src_nm = os.path.join(top, "node_modules")
+    dst_nm = os.path.join(path, "node_modules")
+    try:
+        # a committed symlink (mila-english: -> the parent's node_modules)
+        # resolves OUTSIDE the worktree, where the sandbox denies all access;
+        # a plain 'ln -s' by an agent hits the same wall. Replace it.
+        if os.path.islink(dst_nm) or os.path.isdir(dst_nm):
+            if os.path.islink(dst_nm):
+                os.unlink(dst_nm)
+            elif not os.listdir(dst_nm):
+                os.rmdir(dst_nm)
+            else:
+                return          # a real, populated copy already — leave it
+        if not os.path.isdir(src_nm) or os.path.islink(src_nm) or not os.listdir(src_nm):
+            return              # nothing installed at the source either
+        # hardlink clone: instant, no network, no doubled disk — `cp -al`
+        # is BSD/GNU cp's link-instead-of-copy mode, available on macOS.
+        subprocess.run(["cp", "-al", src_nm, dst_nm], capture_output=True,
+                       timeout=_BOOTSTRAP_TIMEOUT_S)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
 
 
 def _write_header(fh, name, cwd, model, effort, budget_usd, sid, wt, branch,

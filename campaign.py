@@ -929,6 +929,33 @@ def _wall_node(n: Dict[str, Any], g: Dict[str, Any], text: str, why: str) -> Dic
     return wall
 
 
+def requeue(node_id: str, why: str, meditation_dir: str = MEDITATION_DIR) -> Dict[str, Any]:
+    """The twin fixed the gap that raised a wall — not the owner. The node
+    tries again fresh (its own cap, no session to inherit a stale worktree
+    from), and the wall it raised is marked resolved, not done-by-owner."""
+    with _locked(meditation_dir):
+        g = load(meditation_dir)
+        if not g:
+            return {"ok": False, "why": "no campaign"}
+        n = next((m for m in g["nodes"] if m["id"] == node_id or m["name"] == node_id), None)
+        if not n:
+            return {"ok": False, "why": "no node %s" % node_id}
+        n["status"] = "pending"
+        n["session"] = ""
+        n["resume_message"] = ""
+        n["worktree"] = ""
+        n["stuck"] = False
+        n["requeued"] = {"why": why[:200], "ts": _now_iso()}
+        for w in [m for m in g["nodes"] if m.get("from_agent") == n["id"] and m["status"] == "waiting"]:
+            w["status"] = "done"
+            w["done_by"] = "fixed"
+            w["note"] = why[:200]
+        g["events"].append({"ts": _now_iso(), "what": "requeued", "node": n["id"], "why": why[:100]})
+        g["metrics"] = _metrics(g, time.time(), os.path.join(meditation_dir, "spend.jsonl"))
+        save(g, meditation_dir)
+        return {"ok": True, "node": n["id"]}
+
+
 def escalate(n: Dict[str, Any], g: Dict[str, Any], why: str) -> None:
     """Re-run a read-only step under the working role, fresh session, prior
     findings carried by _prompt_for. Once: a second wall is a real wall."""
@@ -1828,7 +1855,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(prog="meditate campaign", description=__doc__.split("\n")[0])
     ap.add_argument("verb", choices=["plan", "replan", "show", "go", "tick", "status", "pause", "steer", "accept",
                                      "accept-goal", "done", "discard", "discard-goal", "restore",
-                                     "predict", "accept-predicted", "discard-predicted", "summary", "escalate"])
+                                     "predict", "accept-predicted", "discard-predicted", "summary", "escalate", "requeue"])
     ap.add_argument("--until", default="", help="go: deadline HH:MM (local) — nothing new after it; summary when the last run ends")
     ap.add_argument("--all", action="store_true", help="predict: every repo, not only those touched in 30 days")
     ap.add_argument("--fresh", action="store_true", help="predict: ignore the commit cache")
@@ -1882,6 +1909,13 @@ def main(argv: Optional[List[str]] = None) -> int:
               % (r.get("id"), r.get("carried", 0), r.get("new", 0),
                  ("\n  " + "\n  ".join(r["notes"])) if r.get("notes") else ""))
         return 0
+    if a.verb == "requeue":
+        if not a.args:
+            print("usage: campaign requeue <node-id> [why...]")
+            return 2
+        r = requeue(a.args[0], " ".join(a.args[1:]) or "retrying under a fix", meditation_dir=md)
+        print(json.dumps(r) if a.json else ("requeued %s" % r["node"] if r.get("ok") else "could not requeue: " + r.get("why", "")))
+        return 0 if r.get("ok") else 1
     if a.verb == "escalate":
         if not a.args:
             print("usage: campaign escalate <node-id>")

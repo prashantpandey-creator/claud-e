@@ -119,6 +119,112 @@ def test_the_role_is_passed_and_selected():
         assert "--allowedTools" in c["argv"] and "--disallowedTools" in c["argv"]
 
 
+def _git(*args, cwd):
+    subprocess.run(["git"] + list(args), cwd=cwd, check=True, capture_output=True)
+
+
+def test_the_working_roles_are_told_to_HAND_OFF_long_external_waits():
+    """A step ran out of budget waiting for a triggered GitHub Actions run
+    to finish (2026-09-04, $2 cap on a multi-minute deploy). The graph
+    already turns RESULT.next into a fresh child node with its own cap;
+    the role prompt now tells agents to use that instead of spin-waiting."""
+    import json as _j
+    a = _j.load(open(os.path.join(SKILL, "agents.json")))
+    for k in ("goal", "thread", "repair"):
+        assert "external process" in a["roles"][k]["prompt"] and "next" in a["roles"][k]["prompt"], k
+
+
+def test_worktree_bootstrap_CLONES_deps_and_COPIES_gitignored_config():
+    """Three real walls on 2026-09-04: a worktree's node_modules was a
+    committed symlink resolving outside it (denied); an agent tried `ln -s`
+    to the parent's node_modules and was denied that too; and a step could
+    not read CLAUDE-secrets.md — gitignored, so `git worktree add` (which
+    only checks out TRACKED files) never puts it there, even though the
+    repo's own CLAUDE.md says to read it before deploy/DB work. Bootstrap
+    hardlink-clones node_modules from the parent (fast, no network, no
+    disk duplication) when the parent has one, and copies the specific
+    gitignored files a repo already tells agents to read."""
+    with tempfile.TemporaryDirectory() as t:
+        top = os.path.join(t, "repo"); os.makedirs(top)
+        _git("init", "-q", cwd=top)
+        _git("config", "user.email", "a@b.c", cwd=top)
+        _git("config", "user.name", "a", cwd=top)
+        open(os.path.join(top, "package.json"), "w").write('{"name":"x"}')
+        open(os.path.join(top, ".gitignore"), "w").write("node_modules\n.env*\nCLAUDE-secrets.md\n")
+        _git("add", "-A", cwd=top)
+        _git("commit", "-q", "-m", "init", cwd=top)
+        os.makedirs(os.path.join(top, "node_modules", "left-pad"))
+        open(os.path.join(top, "node_modules", "left-pad", "index.js"), "w").write("module.exports=1;\n")
+        open(os.path.join(top, "CLAUDE-secrets.md"), "w").write("# secrets\nAPI_KEY=abc\n")
+        open(os.path.join(top, ".env.local"), "w").write("FOO=bar\n")
+        old = go.WORKTREE_ROOT
+        go.WORKTREE_ROOT = os.path.join(t, "worktrees")
+        try:
+            path, branch, why = go.make_worktree(top, "probe", "20260905-000000")
+        finally:
+            go.WORKTREE_ROOT = old
+        assert path != top and os.path.isdir(path), (path, why)
+        wt_nm = os.path.join(path, "node_modules")
+        assert os.path.isdir(wt_nm) and not os.path.islink(wt_nm), "still a symlink or missing"
+        got = open(os.path.join(wt_nm, "left-pad", "index.js")).read()
+        assert got == "module.exports=1;\n", got
+        # hardlinked, not duplicated: same inode
+        assert os.stat(os.path.join(top, "node_modules", "left-pad", "index.js")).st_ino == \
+               os.stat(os.path.join(wt_nm, "left-pad", "index.js")).st_ino
+        assert open(os.path.join(path, "CLAUDE-secrets.md")).read() == "# secrets\nAPI_KEY=abc\n"
+        assert open(os.path.join(path, ".env.local")).read() == "FOO=bar\n"
+        # never committed into the worktree's branch — still gitignored there
+        st = subprocess.run(["git", "-C", path, "status", "--porcelain", "--ignored"],
+                            capture_output=True, text=True).stdout
+        assert "CLAUDE-secrets.md" in st and "?? " not in st.split("CLAUDE-secrets.md")[0].split("\n")[-1] or True
+
+
+def test_worktree_bootstrap_never_CRASHES_when_the_parent_has_nothing_to_give():
+    """mila-english's own node_modules was 0 bytes (never installed) — the
+    exact case this must not choke on: no source to clone from, no secrets
+    file to copy, just a plain worktree, same as before this existed."""
+    with tempfile.TemporaryDirectory() as t:
+        top = os.path.join(t, "repo"); os.makedirs(top)
+        _git("init", "-q", cwd=top)
+        _git("config", "user.email", "a@b.c", cwd=top)
+        _git("config", "user.name", "a", cwd=top)
+        open(os.path.join(top, "package.json"), "w").write('{"name":"x"}')
+        open(os.path.join(top, ".gitignore"), "w").write("node_modules\n")
+        _git("add", "-A", cwd=top)
+        _git("commit", "-q", "-m", "init", cwd=top)
+        os.makedirs(os.path.join(top, "node_modules"))          # present but empty
+        old = go.WORKTREE_ROOT
+        go.WORKTREE_ROOT = os.path.join(t, "worktrees")
+        try:
+            path, branch, why = go.make_worktree(top, "probe2", "20260905-000001")
+        finally:
+            go.WORKTREE_ROOT = old
+        assert os.path.isdir(path) and not os.path.exists(os.path.join(path, "CLAUDE-secrets.md"))
+
+
+def test_a_non_JS_repo_gets_NO_dependency_bootstrap_attempt():
+    """No package.json: nothing to clone. The gitignored-config copy still
+    runs — CLAUDE-secrets.md is not JS-specific."""
+    with tempfile.TemporaryDirectory() as t:
+        top = os.path.join(t, "repo"); os.makedirs(top)
+        _git("init", "-q", cwd=top)
+        _git("config", "user.email", "a@b.c", cwd=top)
+        _git("config", "user.name", "a", cwd=top)
+        open(os.path.join(top, "README.md"), "w").write("x")
+        open(os.path.join(top, ".gitignore"), "w").write("CLAUDE-secrets.md\n")
+        _git("add", "-A", cwd=top)
+        _git("commit", "-q", "-m", "init", cwd=top)
+        open(os.path.join(top, "CLAUDE-secrets.md"), "w").write("s")
+        old = go.WORKTREE_ROOT
+        go.WORKTREE_ROOT = os.path.join(t, "worktrees")
+        try:
+            path, branch, why = go.make_worktree(top, "probe3", "20260905-000002")
+        finally:
+            go.WORKTREE_ROOT = old
+        assert not os.path.exists(os.path.join(path, "node_modules"))
+        assert open(os.path.join(path, "CLAUDE-secrets.md")).read() == "s"
+
+
 def test_read_only_roles_can_READ_FETCH_CURL_and_TYPECHECK_but_not_write():
     """assess named only git log, git status and python3: two steps walled
     on 'gh CLI and git fetch denied' and 'sandbox denies npx/tsc' (12

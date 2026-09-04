@@ -1150,6 +1150,35 @@ def test_a_read_only_step_walled_by_its_OWN_permissions_escalates_instead_of_wai
         assert a["kind"] == "assess" and any(m.get("from_agent") == a["id"] for m in g4["nodes"])
 
 
+def test_requeue_RETRIES_fresh_and_marks_the_wall_FIXED_not_owner():
+    """The node_modules and vault-access walls were the twin's own gaps —
+    once fixed, the step should try again, not sit as a permanent item on
+    the owner's list beside the ones that really are his."""
+    with tempfile.TemporaryDirectory() as t:
+        gdir, med = _world(t)
+        g = cp.build(goals_dir=gdir, meditation_dir=med, elaborator=_elab)
+        cp.save(g, med)
+        cp.go(meditation_dir=med, max_parallel=1, dispatch=lambda n: {"log": "l1", "session": "s1", "worktree": "/tmp/wt1"})
+        node = [n for n in cp.load(med)["nodes"] if n["status"] == "running"][0]
+        cp.tick(meditation_dir=med, dispatch=lambda n: None,
+                read_result=lambda log: _finished(blocked="node_modules is a symlink outside the worktree") if log == "l1" else None)
+        wall = [n for n in cp.load(med)["nodes"] if n.get("from_agent") == node["id"]][0]
+        assert wall["status"] == "waiting"
+        r = cp.requeue(node["id"], "worktree bootstrap now clones node_modules", meditation_dir=med)
+        assert r["ok"], r
+        g2 = cp.load(med)
+        n2 = [n for n in g2["nodes"] if n["id"] == node["id"]][0]
+        w2 = [n for n in g2["nodes"] if n["id"] == wall["id"]][0]
+        assert n2["status"] == "pending" and n2["session"] == "" and n2["worktree"] == "", n2
+        assert w2["status"] == "done" and w2["done_by"] == "fixed", w2
+        # ready again, and dispatches on the next tick
+        assert node["id"] in [x["id"] for x in cp.ready(g2)]
+        sent = []
+        cp.tick(meditation_dir=med, max_parallel=1, dispatch=lambda n: sent.append(n["id"]) or {"log": "l2", "session": "s2"},
+                read_result=lambda log: None)
+        assert sent == [node["id"]], sent
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]
