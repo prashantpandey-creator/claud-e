@@ -30,6 +30,14 @@ jobs:
           python3 --version
           echo "HOME=$HOME"
 
+      - name: Install ruff, the squiggle's checker
+        # The undefined-name squiggle uses ruff when it is present and falls
+        # back to a stdlib AST pass that cannot see inside function bodies.
+        # The runner had no ruff, so the fallback ran and the DELTA test went
+        # red — the feature had no CI coverage at all, the same shape as the
+        # mascot guarantee this workflow exists to keep honest.
+        run: python3 -m pip install --quiet ruff && ruff --version
+
       - name: Install into this runner's HOME
         # launchctl exists on the runner but there is no user session to load
         # an agent into, so the heartbeat step is expected to warn, not fail.

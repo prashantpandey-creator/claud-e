@@ -633,7 +633,13 @@ def test_squiggle_reports_the_DELTA_not_the_file_state():
 
     An agent that sees the same irrelevant line on every edit learns to skip
     the line. That is the exact cost the design exists to avoid."""
-    import tempfile
+    import tempfile, shutil as _sh
+    if not _sh.which("ruff"):
+        # An undefined name INSIDE a function body is only visible to ruff;
+        # the stdlib fallback cannot see there and correctly stays silent.
+        # Without a checker there is no diagnostic to have a delta of.
+        print("      (no ruff here — nothing to report a delta of)", end="")
+        return
     with tempfile.TemporaryDirectory() as d:
         seen = os.path.join(d, "seen.json")
         f = os.path.join(d, "legacy.py")
