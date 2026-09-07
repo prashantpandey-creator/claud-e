@@ -502,6 +502,31 @@ if [ -t 1 ] && [ "$(uname)" = "Darwin" ] && command -v swiftc >/dev/null 2>&1; t
         defaults delete com.meditate.casper hasArrived >/dev/null 2>&1 || true
         open "$SKILL_DIR/mascot/Casper.app" 2>/dev/null \
             && echo "  [ok]  Casper is on your screen, bottom-right. He'll say hello."
+        # ...and again after every login. Without this he is a one-shot: the
+        # installer opened him, the next reboot closed him, and nothing
+        # brought him back — which is exactly how the companion quietly
+        # disappeared from this machine. Every other daemon here has an
+        # agent; he did not.
+        CPLIST="$HOME/Library/LaunchAgents/com.meditate.casper.plist"
+        mkdir -p "$HOME/Library/LaunchAgents"
+        python3 - "$SKILL_DIR" "$CPLIST" <<'PYCASPER'
+import os, plistlib, sys
+skill, plist = sys.argv[1], sys.argv[2]
+# `open` and not the executable directly: the bundle must be launched
+# through LaunchServices or macOS treats it as a second, unregistered
+# instance and the TCC grants (microphone, speech) do not apply to it.
+plistlib.dump({"Label": "com.meditate.casper",
+               "ProgramArguments": ["/usr/bin/open", "-a",
+                                    os.path.join(skill, "mascot", "Casper.app")],
+               "RunAtLoad": True,
+               # `open` returns as soon as the app is handed off, so this is
+               # a one-shot at login, never a restart loop.
+               "KeepAlive": False},
+              open(plist, "wb"))
+PYCASPER
+        launchctl unload "$CPLIST" >/dev/null 2>&1 || true
+        launchctl load "$CPLIST" >/dev/null 2>&1 \
+            && echo "  [ok]  and he comes back after every login."
     else
         echo "  [--]  Casper needs Xcode command line tools; skipped."
         echo "        Run 'meditate casper' once you have them."

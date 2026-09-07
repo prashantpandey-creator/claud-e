@@ -227,6 +227,41 @@ def test_readme_version_matches_VERSION():
     assert v in readme, "README's file tree still claims an older version"
 
 
+def test_no_shell_assignment_DIES_when_its_search_finds_nothing():
+    """This bug class has now bitten twice, both times as "absence read as
+    failure" under `set -euo pipefail`:
+
+      build.sh:  SIGN_ID=$(security find-identity ... | grep "Apple Dev...")
+                 -> no signing identity on a CI runner, grep exits 1,
+                    pipefail propagates, set -e kills the build. CI red.
+      meditate:  LASTCRASH=$(ls .../casper-*.ips 2>/dev/null | head -1)
+                 -> no crash reports, ls exits 1, same chain. The bot was
+                    unstartable BECAUSE it had never crashed.
+
+    Any `VAR=$(... | ...)` whose command can legitimately find nothing must
+    end in `|| true`, or the script dies looking for something optional."""
+    import re as _re
+    for name in ("meditate", os.path.join("mascot", "build.sh"), "install.sh", "heartbeat.sh"):
+        path = os.path.join(SKILL, name)
+        if not os.path.exists(path):
+            continue
+        src = open(path).read()
+        if "set -e" not in src:
+            continue
+        # Only substitutions that SEARCH. `echo "$V" | cut` cannot find
+        # nothing — echo always succeeds — so requiring a guard there would
+        # be noise, and a test that cries wolf gets edited out.
+        searching = _re.compile(r"\$\(\s*(ls|grep|egrep|rg|find|pgrep|security|awk|comm)\b")
+        for m in _re.finditer(r"^\s*[A-Z_][A-Z0-9_]*=\$\((?:[^()]|\\\n)*?\)",
+                              src, _re.M | _re.S):
+            block = m.group(0)
+            if "|" not in block or not searching.search(block):
+                continue
+            assert "|| true" in block or "|| echo" in block, \
+                "%s: `%s` dies under set -e when its search finds nothing" \
+                % (name, " ".join(block.split())[:90])
+
+
 def test_every_inline_python_in_install_sh_COMPILES():
     """CI has been red on every push since at least 2026-09-03 (25 of 25
     runs). One cause: the heartbeat plist block calls os.path.dirname()

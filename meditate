@@ -18,7 +18,12 @@ case "${1:-}" in
     # bundle is not cosmetic: macOS only grants microphone and speech access to
     # a signed bundle with usage strings in its Info.plist, so "he listens"
     # depends on packaging before it depends on code.
-    NEWEST=$(ls -t "$DIR/mascot"/*.swift 2>/dev/null | head -1)
+    # `|| true` is load-bearing under `set -euo pipefail`: when the glob
+    # matches nothing, ls exits 1, pipefail propagates it through head, and
+    # the assignment kills the script. Casper was unstartable on this machine
+    # for exactly that reason — the crash-report check below found no crash
+    # reports, because he had never crashed.
+    NEWEST=$(ls -t "$DIR/mascot"/*.swift 2>/dev/null | head -1 || true)
     CBIN="$DIR/mascot/Casper.app/Contents/MacOS/casper"
     REBUILT=no
     if [ ! -x "$CBIN" ] || [ -n "$NEWEST" -a "$NEWEST" -nt "$CBIN" ]; then
@@ -36,7 +41,7 @@ case "${1:-}" in
     # while the key is sitting right there in the plist. Observed 2026-08-25.
     # If the last launch died that way, clear the record and let macOS re-read
     # the plist. Costs one Allow click, and only after a crash.
-    LASTCRASH=$(ls -t "$HOME/Library/Logs/DiagnosticReports"/casper-*.ips 2>/dev/null | head -1)
+    LASTCRASH=$(ls -t "$HOME/Library/Logs/DiagnosticReports"/casper-*.ips 2>/dev/null | head -1 || true)
     if [ -n "$LASTCRASH" ] && ! pgrep -f "$DIR/mascot/Casper.app/Contents" >/dev/null 2>&1 \
        && grep -q '"namespace":"TCC"' "$LASTCRASH" 2>/dev/null; then
       echo "  his last launch was blocked by a stale privacy record — clearing it"
