@@ -259,6 +259,15 @@ def _containers_holding_this_repo():
     return [os.path.dirname(SKILL_DIR)]
 
 
+def _this_repo_name():
+    """What this checkout is CALLED on this machine.
+
+    Hardcoding "meditate" assumed the author's own directory name. CI clones
+    the repo as `claud-e`, so both commit tests failed there with the right
+    answer — {'claud-e'} — measured against the wrong expectation."""
+    return pj._usable(os.path.basename(SKILL_DIR))
+
+
 def test_a_commit_id_names_exactly_one_repo():
     """The most precise thing a fact can carry: one line of history in one
     repo. 67 facts had a commit locator and nothing looked at it."""
@@ -268,7 +277,7 @@ def test_a_commit_id_names_exactly_one_repo():
     old = pj._CONTAINERS
     pj._CONTAINERS = _containers_holding_this_repo()
     try:
-        assert pj.repo_of_commit(sha) == "meditate", sha
+        assert pj.repo_of_commit(sha) == _this_repo_name(), (sha, _this_repo_name())
         assert pj.repo_of_commit("deadbeef1234") is None
         assert pj.repo_of_commit("") is None
         assert pj.repo_of_commit("not-a-sha!!") is None
@@ -294,7 +303,7 @@ def test_a_fact_carrying_a_commit_is_placed_by_it():
         pj._DIRS_CACHE["at"] = 0.0
         pj._DIRS_CACHE["data"] = {}
         pj._SHA_CACHE.clear()
-    assert names == {"meditate"} and how == "commit", (names, how)
+    assert names == {_this_repo_name()} and how == "commit", (names, how)
 
 
 def test_a_fact_can_inherit_from_the_facts_it_links_to():

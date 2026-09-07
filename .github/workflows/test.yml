@@ -56,7 +56,12 @@ jobs:
             if python3 "$t" > "/tmp/$t.log" 2>&1; then
               echo "ok   $t"
             else
-              echo "FAIL $t"; sed -n '1,40p' "/tmp/$t.log"; fail=1
+              # The FAILING lines, not the first 40 — a suite of 65 tests
+              # printed 40 "ok" lines and truncated away the one that failed,
+              # so a red run said nothing about why it was red.
+              echo "FAIL $t"
+              grep -E "^  (FAIL|ERR)" "/tmp/$t.log" | head -20 || sed -n '1,40p' "/tmp/$t.log"
+              fail=1
             fi
           done
           exit $fail
