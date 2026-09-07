@@ -221,7 +221,8 @@ def digest(g: Optional[Dict[str, Any]], last: Dict[str, Any]) -> Optional[Dict[s
 
 
 def send_digest(meditation_dir: str = MEDITATION_DIR, runner: Optional[Callable] = None,
-                campaign_state: Optional[Dict[str, Any]] = None, now: Optional[float] = None) -> Dict[str, Any]:
+                campaign_state: Optional[Dict[str, Any]] = None, now: Optional[float] = None,
+                conf: str = CONF) -> Dict[str, Any]:
     """The heartbeat's step. Loads the campaign, mails what changed, remembers it."""
     g = campaign_state
     if g is None:
@@ -234,7 +235,7 @@ def send_digest(meditation_dir: str = MEDITATION_DIR, runner: Optional[Callable]
     d = digest(g, st)
     if not d:
         return {"sent": False, "why": "nothing changed"}
-    r = send(d["subject"], d["body"], runner=runner)
+    r = send(d["subject"], d["body"], runner=runner, conf=conf)
     if r.get("sent"):
         st["fingerprint"] = d["fingerprint"]
         st.setdefault("sent", {})[d["nonce"]] = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(now or time.time())),
@@ -245,9 +246,9 @@ def send_digest(meditation_dir: str = MEDITATION_DIR, runner: Optional[Callable]
 
 
 def send_summary(subject: str, text: str, runner: Optional[Callable] = None,
-                 meditation_dir: str = MEDITATION_DIR) -> Dict[str, Any]:
+                 meditation_dir: str = MEDITATION_DIR, conf: str = CONF) -> Dict[str, Any]:
     nonce = new_nonce()
-    r = send(subject_with(nonce, subject), text, runner=runner)
+    r = send(subject_with(nonce, subject), text, runner=runner, conf=conf)
     if r.get("sent"):
         st = load_state(meditation_dir)
         st.setdefault("sent", {})[nonce] = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()),
@@ -445,7 +446,7 @@ def poll_inbox(meditation_dir: str = MEDITATION_DIR, imap=None, conf: str = CONF
 
 
 def send_test(runner: Optional[Callable] = None,
-              meditation_dir: str = MEDITATION_DIR) -> Dict[str, Any]:
+              meditation_dir: str = MEDITATION_DIR, conf: str = CONF) -> Dict[str, Any]:
     """The one-line proof mail — recorded like every other, because it is
     the mail a person is most likely to reply to. Measured 2026-09-07: the
     live proof mail (#644eb874) arrived and then could not be replied to,
@@ -453,7 +454,7 @@ def send_test(runner: Optional[Callable] = None,
     nonce = new_nonce()
     r = send(subject_with(nonce, "CLAUD-E — the mail lane is live"),
              "This is the twin. If you are reading this, mail out works.\n"
-             "Reply with anything and the reply lane will read it.\n", runner=runner)
+             "Reply with anything and the reply lane will read it.\n", runner=runner, conf=conf)
     if r.get("sent"):
         st = load_state(meditation_dir)
         st.setdefault("sent", {})[nonce] = {

@@ -20,6 +20,16 @@ sys.path.insert(0, SKILL)
 import mail as ml
 
 
+def _conf(t):
+    """A config the test owns. CI proved the need on its first real run:
+    three of these tests injected a fake sender but still resolved the
+    RECIPIENT from ~/.sendmail.conf, so they passed only on the owner's
+    machine and failed on a clean one with 'no recipient'."""
+    p = os.path.join(t, "sendmail.conf")
+    open(p, "w").write(json.dumps({"user": "me@gmail.com", "password": "x"}))
+    return p
+
+
 def _g(hands=(), done=(), stopped=0, armed=True, closed=False, hold=0):
     nodes = []
     for i, t in enumerate(hands):
@@ -57,17 +67,17 @@ def test_send_digest_uses_the_runner_and_REMEMBERS_the_nonce():
     with tempfile.TemporaryDirectory() as t:
         calls = []
         runner = lambda argv, body: calls.append((argv, body)) or (True, "")
-        r = ml.send_digest(meditation_dir=t, runner=runner, campaign_state=_g(hands=("Supply the Pixel ID",)))
+        r = ml.send_digest(meditation_dir=t, runner=runner, conf=_conf(t), campaign_state=_g(hands=("Supply the Pixel ID",)))
         assert r["sent"] and calls and calls[0][0][0] == ml.SENDMAIL and calls[0][0][2] == r["subject"], (r, calls)
         assert "Pixel ID" in calls[0][1]
         st = ml.load_state(t)
         assert r["nonce"] in st["sent"] and st["sent"][r["nonce"]]["items"][0]["id"] == "h0"
         # the same state again: nothing
-        r2 = ml.send_digest(meditation_dir=t, runner=runner, campaign_state=_g(hands=("Supply the Pixel ID",)))
+        r2 = ml.send_digest(meditation_dir=t, runner=runner, conf=_conf(t), campaign_state=_g(hands=("Supply the Pixel ID",)))
         assert r2["sent"] is False and len(calls) == 1, r2
         # a failed send is not remembered as sent
         bad = lambda argv, body: (False, "smtp down")
-        r3 = ml.send_digest(meditation_dir=t, runner=bad, campaign_state=_g(hands=("Supply the Pixel ID", "Approve iOS")))
+        r3 = ml.send_digest(meditation_dir=t, runner=bad, conf=_conf(t), campaign_state=_g(hands=("Supply the Pixel ID", "Approve iOS")))
         assert r3["sent"] is False and "smtp down" in r3["why"]
         assert ml.load_state(t)["fingerprint"]["hands"] == ["h0"]
 
@@ -83,7 +93,7 @@ def test_no_recipient_is_a_named_refusal_not_a_crash():
 def test_the_summary_mail_carries_a_nonce_too():
     with tempfile.TemporaryDirectory() as t:
         calls = []
-        r = ml.send_summary("CLAUD-E run summary", "SHIPPED\n  - x", runner=lambda a, b: calls.append(a) or (True, ""), meditation_dir=t)
+        r = ml.send_summary("CLAUD-E run summary", "SHIPPED\n  - x", runner=lambda a, b: calls.append(a) or (True, ""), meditation_dir=t, conf=_conf(t))
         assert r["sent"] and calls[0][2].startswith("[claud-e #") and "summary" in calls[0][2]
         st = ml.load_state(t)
         assert any(v.get("summary") for v in st["sent"].values())
@@ -216,7 +226,7 @@ def test_the_TEST_mail_is_recorded_so_a_reply_to_it_can_be_ACTED_ON():
     was the one reply the lane could never act on."""
     with tempfile.TemporaryDirectory() as t:
         sent = []
-        r = ml.send_test(runner=lambda argv, body: sent.append(argv) or (True, ""), meditation_dir=t)
+        r = ml.send_test(runner=lambda argv, body: sent.append(argv) or (True, ""), meditation_dir=t, conf=_conf(t))
         assert r["sent"], r
         st = ml.load_state(t)
         assert st.get("sent"), "the test mail left no nonce to reply to"
