@@ -1226,6 +1226,147 @@ def test_a_TRANSIENT_external_wait_retries_ITSELF_not_your_list():
             "an external that never finishes must eventually reach the owner"
 
 
+# ---------------------------------------------------------------------------
+# attempting the things parked on the owner — measured against the REAL 16
+# items sitting on his list on 2026-09-07, which is the hardest test set
+# available and the only one that proves the classifier on live wording.
+# ---------------------------------------------------------------------------
+
+NEVER_MINE = [
+    "iOS subscriptions approved",
+    "Run the actual acceptance test from a real Russian mobile network, no VPN",
+    "Run the five-point test on an owned physical iPhone, screen-recorded",
+    "Pick payment provider(s) and get test-mode keys",
+    "Milestone can't be fully ticked headless: the AndroidManifest purangpt://auth "
+    "intent-filter is compiled into the APK, so on-device sign-in needs a fresh APK "
+    "build + install + real Google sign-in",
+    "Live mic round-trip on pia.purangpt.com",          # \bmic\b — word boundary
+    "Submit the app for App Store review",
+    "Rotate the Gmail app password",
+    "Approve the refund in the Stripe dashboard",
+]
+
+WORTH_A_TRY = [
+    "Verify NEXT_PUBLIC_META_PIXEL_ID in /root/stack.env matches the pixel (980984061684331) actually queried",
+    "Page token made permanent",                        # \btoken\b alone, no other hint
+    "Add the Caddy vhost on the Mumbai box",
+    "The App Store build's baseline commit is stale relative to main — need to confirm "
+    "which commit the currently-live TestFlight build was cut from",
+    "Part 3 ('Events Manager shows a live event') needs the Meta System User token, which "
+    "is unreachable from this worktree: vault file access denied",
+    "Whole-project `npx tsc --noEmit` against the wip tree stayed unproven: it needs "
+    "node_modules, the `ln -s` to borrow the main checkout's node_modules was denied",
+]
+
+
+def test_the_never_attempt_class_is_never_attempted():
+    """The asymmetry that decides this feature's design: wrongly attempting a
+    physical or irreversible thing is far worse than wrongly leaving an item
+    on his list. Anything touching a body, a device, another party's
+    decision, money, or a secret is his — no probe, no agent, ever."""
+    for t in NEVER_MINE:
+        verdict = cp.classify_human(t)
+        assert verdict["attempt"] is False, (t, verdict)
+        assert verdict["why"], "a refusal must say which class it fell in"
+
+
+def test_a_credential_or_server_wall_is_WORTH_A_TRY():
+    """These are on his list because an agent hit a wall, not because they
+    need his judgement: an SSH read, a token exchange, a vhost, an API
+    question. Each is work a machine can do."""
+    for t in WORTH_A_TRY:
+        verdict = cp.classify_human(t)
+        assert verdict["attempt"] is True, (t, verdict)
+
+
+def test_the_word_boundary_patterns_SURVIVED_being_written_to_the_file():
+    """Both lists were written to campaign.py through a patch script that
+    interpreted `\\b` as a BACKSPACE before it reached disk, so every
+    word-boundary pattern shipped as \\x08 and matched nothing. The suite
+    stayed green because the affected items each matched some OTHER
+    alternative in the same pattern — 'Live mic round-trip' and 'Page token
+    made permanent' did not, and were misfiled in the live run."""
+    for patterns in (cp._NEVER_ATTEMPT, cp._WORTH_ATTEMPT):
+        for pattern, _why in patterns:
+            assert "\x08" not in pattern, repr(pattern[:60])
+
+
+def test_an_UNRECOGNISED_item_stays_HIS():
+    """Conservative by construction: silence is not consent. An item the
+    classifier cannot place is left alone, and says so."""
+    v = cp.classify_human("Water the plants in the studio")
+    assert v["attempt"] is False and "not recognised" in v["why"].lower(), v
+    assert cp.classify_human("")["attempt"] is False
+
+
+def test_attempt_PROBES_before_it_acts_and_never_ticks_the_item_itself():
+    """A probe is read-only and cheap: it answers 'can this be done from
+    here, and what exactly is missing'. Nothing is ticked by the probe —
+    a human item is only ever closed by proof or by him."""
+    with tempfile.TemporaryDirectory() as t:
+        gdir, med = _world(t)
+        g = cp.build(goals_dir=gdir, meditation_dir=med, elaborator=_elab)
+        n = [x for x in g["nodes"] if x["kind"] == "goal"][0]
+        wall = cp._wall_node(n, g, "Add the Caddy vhost on the Mumbai box", "agent hit it")
+        physical = cp._wall_node(n, g, "Run the five-point test on a physical iPhone", "agent hit it")
+        cp.save(g, med)
+        sent = []
+        out = cp.attempt(meditation_dir=med, dispatch=lambda node: sent.append(node) or {"log": "l1", "session": "s1"})
+        ids = [x["id"] for x in sent]
+        assert wall["id"] in ids, "a vhost is work a machine can do"
+        assert physical["id"] not in ids, "a physical device test must never be dispatched"
+        probe = [x for x in sent if x["id"] == wall["id"]][0]
+        assert probe["kind"] == "assess", "the first move is a read-only probe, not an edit"
+        after = cp.load(med)
+        w = [x for x in after["nodes"] if x["id"] == wall["id"]][0]
+        assert w["status"] == "probing", w["status"]
+        assert w["kind"] == "human", "still his until something proves otherwise"
+        assert out["probed"] == 1 and out["left_alone"] >= 1, out
+
+
+def test_a_probe_that_says_ITS_YOURS_hands_it_back_and_does_not_ask_again():
+    """The falsifier for the whole feature: when the probe reports the item
+    genuinely needs him, it returns to his list with the reason attached and
+    is never probed a second time."""
+    with tempfile.TemporaryDirectory() as t:
+        gdir, med = _world(t)
+        g = cp.build(goals_dir=gdir, meditation_dir=med, elaborator=_elab)
+        n = [x for x in g["nodes"] if x["kind"] == "goal"][0]
+        wall = cp._wall_node(n, g, "Add the DNS record for pia.purangpt.com", "agent hit it")
+        cp.save(g, med)
+        cp.attempt(meditation_dir=med, dispatch=lambda node: {"log": "l1", "session": "s1"})
+        res = _finished(commits=())
+        res["structured_output"]["blocked_on"] = "the registrar has no API token on this machine"
+        res["structured_output"]["did"] = ["checked for a DNS provider token; none present"]
+        cp.tick(meditation_dir=med, dispatch=lambda x: None,
+                read_result=lambda log: res if log == "l1" else None)
+        w = [x for x in cp.load(med)["nodes"] if x["id"] == wall["id"]][0]
+        assert w["status"] == "waiting" and w["kind"] == "human", w
+        assert "no API token" in (w.get("probe_said") or ""), w.get("probe_said")
+        out = cp.attempt(meditation_dir=med, dispatch=lambda node: {"log": "l2"})
+        assert out["probed"] == 0, "a probed item must not be probed again"
+
+
+def test_a_probe_that_DID_it_closes_the_item_with_its_proof():
+    """The other half: the probe reports it done, with what it ran. The item
+    leaves his list marked done-by-probe, and what was waiting on it moves."""
+    with tempfile.TemporaryDirectory() as t:
+        gdir, med = _world(t)
+        g = cp.build(goals_dir=gdir, meditation_dir=med, elaborator=_elab)
+        n = [x for x in g["nodes"] if x["kind"] == "goal"][0]
+        wall = cp._wall_node(n, g, "Verify the pixel id in stack.env matches the one queried", "agent hit it")
+        cp.save(g, med)
+        cp.attempt(meditation_dir=med, dispatch=lambda node: {"log": "l1", "session": "s1"})
+        res = _finished(commits=())
+        res["structured_output"]["blocked_on"] = None
+        res["structured_output"]["did"] = ["ssh'd to the box; stack.env carries 980984061684331, matches"]
+        cp.tick(meditation_dir=med, dispatch=lambda x: None,
+                read_result=lambda log: res if log == "l1" else None)
+        w = [x for x in cp.load(med)["nodes"] if x["id"] == wall["id"]][0]
+        assert w["status"] == "done" and w.get("done_by") == "probe", w
+        assert "stack.env" in (w.get("probe_said") or ""), w.get("probe_said")
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

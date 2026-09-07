@@ -77,6 +77,49 @@ _TRANSIENT_RE = re.compile(
     r"|in progress at|not finished within|historically normal|just incomplete|check (again|back) (later|shortly)"
     r"|poll again|not yet (verified|proven) live", re.I)
 TRANSIENT_RETRY_S = 8 * 60
+# ---------------------------------------------------------------------------
+# Which of the owner's items were never really his.
+#
+# Measured 2026-09-07 on the 16 items parked on his list: about 7 were there
+# because an agent hit a credential or server-access wall, not because they
+# needed his judgement — an SSH read, a token exchange, a Caddy vhost, an
+# App Store Connect question. Nothing ever revisited a human node once it
+# was raised, so they sat there indefinitely with agent steps behind them.
+#
+# The asymmetry that shapes this: wrongly ATTEMPTING a physical or
+# irreversible thing is far worse than wrongly leaving an item alone. So the
+# never-attempt class is checked FIRST and wins, the recognised-work class
+# must match explicitly, and anything unrecognised stays his.
+_NEVER_ATTEMPT = [
+    (r"physical (device|iphone|android|phone)|on[- ]device|real (google |apple )?sign[- ]?in"
+     r"|screen[- ]recorded|install the apk|build \+ install|plug in|in person|by hand",
+     "it needs hands on a device"),
+    (r"\bmic\b|microphone|camera|speak|spoken|voice round[- ]?trip|record(ing)? (a|the) ",
+     "it needs a real microphone or camera"),
+    (r"real (russian |indian )?(mobile |cellular )?network|without a vpn|no vpn|sim card|carrier",
+     "it needs a real network in a real place"),
+    (r"app(le)?[- ]?(store )?review|apple's approval|approved by (apple|google)|play console approval"
+     r"|subscriptions? approved|submit (the app|for review)|testflight submission",
+     "it waits on another company's decision"),
+    (r"payment method|credit card|bank|invoice|refund|pick (a |the )?payment provider"
+     r"|test[- ]mode keys|billing|subscribe|purchase|buy ",
+     "it moves money or opens an account"),
+    (r"rotate|regenerate|new (app )?password|2fa|otp|passphrase|private key|sign up|create an account",
+     "it is a credential only you should handle"),
+    (r"\bdecide\b|decision|choose between|which direction|your call|positioning|pricing strategy",
+     "it is a judgement call, not labour"),
+]
+# Work a machine can actually do, stated as the wall the agent reported.
+_WORTH_ATTEMPT = [
+    (r"\bssh\b|on the (mumbai|hetzner)? ?box|/root/|stack\.env|caddy|vhost|nginx|docker|compose"
+     r"|systemd|reload the|restart the", "server work this machine can reach"),
+    (r"\btoken\b|app secret|long[- ]lived|graph api|\bapi\b|endpoint|curl|webhook|dns record"
+     r"|cloudflare|registrar", "an API call or a credential lookup"),
+    (r"unreachable from this worktree|vault file access|outside the worktree|node_modules"
+     r"|denied|not installed|could not read", "a tooling gap, not a decision"),
+    (r"confirm which commit|baseline commit|which build|app store connect|\bcommit\b.*\bstale\b"
+     r"|verify .* matches|check whether", "a question with a factual answer"),
+]
 MAX_TRANSIENT_RETRIES = 6
 DEFAULT_PARALLEL = 3         # the RAM law: 6+9+8 < 30 GB, from the outage
 ELABORATE_BUDGET_USD = 0.35  # planning is cheap; execution is not
@@ -781,6 +824,11 @@ def _prior_findings(n: Dict[str, Any]) -> str:
 
 
 def _prompt_for(n: Dict[str, Any]) -> str:
+    # A probe asks its own question and must not be handed the ordinary
+    # "move this milestone forward" brief — it is deciding whether the item
+    # belongs to a machine at all.
+    if n.get("prompt_override"):
+        return str(n["prompt_override"])
     lines = ["Goal: %s." % n["goal_title"],
              "Milestone: %s." % n["milestone"]]
     if n["title"] != n["milestone"]:
@@ -940,6 +988,120 @@ def _wall_node(n: Dict[str, Any], g: Dict[str, Any], text: str, why: str) -> Dic
     if wall["id"] not in n["depends_on"]:
         n["depends_on"].append(wall["id"])
     return wall
+
+
+def classify_human(text: str) -> Dict[str, Any]:
+    """Is this item really the owner's, or did an agent just hit a wall?
+
+    Conservative by construction: the never-attempt class is checked first
+    and wins outright, and anything the classifier cannot place stays his.
+    Silence is not consent."""
+    t = (text or "").strip()
+    if not t:
+        return {"attempt": False, "why": "empty item", "kind": "unknown"}
+    low = t.lower()
+    for pattern, why in _NEVER_ATTEMPT:
+        if re.search(pattern, low):
+            return {"attempt": False, "why": why, "kind": "yours"}
+    for pattern, why in _WORTH_ATTEMPT:
+        if re.search(pattern, low):
+            return {"attempt": True, "why": why, "kind": "worth a try"}
+    return {"attempt": False, "why": "not recognised as machine work — left with you",
+            "kind": "unknown"}
+
+
+def _probe_prompt(n: Dict[str, Any]) -> str:
+    return (
+        "This is parked on the owner's list as something only he can do:\n\n  %s\n\n"
+        "It reached that list because an agent hit a wall, and nobody has looked since. "
+        "Find out whether it is actually machine work FROM HERE.\n"
+        "Read only — do not edit, commit, push, or change anything on any server. "
+        "If doing it needs a credential, check whether that credential is reachable "
+        "on this machine and say exactly where you looked.\n"
+        "End with the RESULT object: if you established it is already true or you can "
+        "prove the answer read-only, put the proof in `did` and set blocked_on to null. "
+        "If it genuinely needs him, set blocked_on to the ONE sentence that says why — "
+        "naming what is missing, not what you tried."
+        % (n.get("title") or "")[:400]
+    )
+
+
+def attempt(meditation_dir: str = MEDITATION_DIR,
+            dispatch: Optional[Callable] = None, limit: int = 4) -> Dict[str, Any]:
+    """Probe the items parked on the owner, once each, read-only.
+
+    Nothing here ticks anything: a probe either brings back proof or brings
+    back the reason it is his. The probe runs as `assess`, so its role
+    cannot edit, commit or push even if it decides it wants to."""
+    with _locked(meditation_dir):
+        g = load(meditation_dir)
+        if not g:
+            return {"probed": 0, "left_alone": 0, "why": "no campaign"}
+        dispatch = dispatch or dispatch_real
+        probed, left, sent = 0, 0, []
+        for n in g["nodes"]:
+            if n.get("kind") != "human" or n.get("status") != "waiting":
+                continue
+            if n.get("probed"):
+                left += 1
+                continue
+            verdict = classify_human(n.get("title") or "")
+            n["classified"] = verdict
+            if not verdict["attempt"]:
+                left += 1
+                continue
+            if probed >= limit:
+                left += 1
+                continue
+            probe = dict(n)
+            probe["kind"] = "assess"
+            probe["agent"] = agent_for("assess")
+            probe["name"] = "assess-%s-%s" % (n["goal"][:16], n["id"].replace(".", "_"))
+            probe["prompt_override"] = _probe_prompt(n)
+            r = dispatch(probe) or {}
+            if not r.get("log"):
+                left += 1
+                continue
+            n["status"] = "probing"
+            n["probed"] = _now_iso()
+            n["log"] = r.get("log", "")
+            n["session"] = r.get("session", "")
+            n["started_epoch"] = time.time()
+            probed += 1
+            sent.append(n["id"])
+            g["events"].append({"ts": _now_iso(), "what": "probing", "node": n["id"],
+                                "why": verdict["why"]})
+        g["metrics"] = _metrics(g, time.time(), os.path.join(meditation_dir, "spend.jsonl"))
+        save(g, meditation_dir)
+        return {"probed": probed, "left_alone": left, "sent": sent}
+
+
+def _absorb_probe(n: Dict[str, Any], res: Dict[str, Any], g: Dict[str, Any]) -> None:
+    """What the probe found. Either proof it was never his, or the sentence
+    that says it is — and either way it is not asked again."""
+    so = res.get("structured_output")
+    so = so if isinstance(so, dict) else {}
+    did = [str(x) for x in (so.get("did") or [])]
+    blocked = (so.get("blocked_on") or "").strip()
+    n["kind"] = "human"                     # a probe never promotes anything
+    n["log"] = n.get("log", "")
+    n["probe_cost_usd"] = float(res.get("total_cost_usd") or 0)
+    if blocked or not did:
+        n["status"] = "waiting"
+        n["probe_said"] = blocked or "the probe found nothing it could prove"
+        g["events"].append({"ts": _now_iso(), "what": "still yours", "node": n["id"],
+                            "why": n["probe_said"][:100]})
+        return
+    n["status"] = "done"
+    n["done_by"] = "probe"
+    n["probe_said"] = " · ".join(did)[:400]
+    n["finished"] = _now_iso()
+    for m in g["nodes"]:
+        if n["id"] in m.get("depends_on", []) and m.get("session"):
+            m["resume_message"] = ("This was checked and is already true: %s. Continue."
+                                   % n["probe_said"][:200])
+    g["events"].append({"ts": _now_iso(), "what": "probe closed it", "node": n["id"],
+                        "why": n["probe_said"][:100]})
 
 
 def requeue(node_id: str, why: str, meditation_dir: str = MEDITATION_DIR) -> Dict[str, Any]:
@@ -1520,6 +1682,14 @@ def _tick(meditation_dir: str = MEDITATION_DIR, dispatch: Optional[Callable] = N
         medians = median_duration_by_kind(ledger)
     t = now_f()
     for n in g["nodes"]:
+        if n.get("status") == "probing":
+            # A probe answers one question: is this really his? It never
+            # edits, so its result is not absorbed as work — it either
+            # brings proof, or brings the reason and hands the item back.
+            res = read_result(n.get("log", ""))
+            if res:
+                _absorb_probe(n, res, g)
+            continue
         if n["status"] != "running":
             continue
         res = read_result(n.get("log", ""))
@@ -1889,7 +2059,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(prog="meditate campaign", description=__doc__.split("\n")[0])
     ap.add_argument("verb", choices=["plan", "replan", "show", "go", "tick", "status", "pause", "steer", "accept",
                                      "accept-goal", "done", "discard", "discard-goal", "restore",
-                                     "predict", "accept-predicted", "discard-predicted", "summary", "escalate", "requeue"])
+                                     "predict", "accept-predicted", "discard-predicted", "summary", "escalate", "requeue",
+                                     "attempt"])
     ap.add_argument("--until", default="", help="go: deadline HH:MM (local) — nothing new after it; summary when the last run ends")
     ap.add_argument("--all", action="store_true", help="predict: every repo, not only those touched in 30 days")
     ap.add_argument("--fresh", action="store_true", help="predict: ignore the commit cache")
@@ -1942,6 +2113,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(json.dumps(r) if a.json else "re-planned %s — %d nodes carried, %d new%s"
               % (r.get("id"), r.get("carried", 0), r.get("new", 0),
                  ("\n  " + "\n  ".join(r["notes"])) if r.get("notes") else ""))
+        return 0
+    if a.verb == "attempt":
+        r = attempt(meditation_dir=md, limit=a.max or 4)
+        if a.json:
+            print(json.dumps(r))
+        else:
+            print("probing %d item(s) parked on you; left %d alone%s"
+                  % (r["probed"], r["left_alone"],
+                     ("\n  " + "\n  ".join(r.get("sent", []))) if r.get("sent") else ""))
         return 0
     if a.verb == "requeue":
         if not a.args:
