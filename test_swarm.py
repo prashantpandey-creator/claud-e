@@ -55,13 +55,22 @@ def test_with_no_price_table_the_plan_is_priced_in_TOKENS_and_says_so():
     measured on this machine and certain."""
     old = swarm.PRICING
     swarm.PRICING = os.path.join(tempfile.mkdtemp(), "absent.json")
+    # There must BE work to price: with nothing open the plan renders
+    # "nothing to dispatch" and the refusal line never appears, so the
+    # test proved nothing on the author's quiet days and failed outright
+    # on a clean HOME.
+    items = [{"kind": "goal", "what": "g", "why": ""}]
+    real = swarm.open_work
+    swarm.open_work = lambda: items
     try:
         d = swarm.plan()
+        assert d["agents"], "no agents planned — nothing to price"
         assert d["priced"] is False and d["projected_usd"] is None, d
         text = swarm.render(d)
         assert "will not guess" in text and "TOKENS" in text
     finally:
         swarm.PRICING = old
+        swarm.open_work = real
 
 
 def test_a_price_table_the_owner_wrote_IS_used():
@@ -85,7 +94,17 @@ def test_blocks_are_SHORT_because_the_curve_was_measured():
     """Per-turn cost climbs with session length — 57K cache-read tokens a turn
     at 28 turns, 376K at 5,836; the same work split short cost 334M against
     2,196M. So no block may be open-ended."""
-    d = swarm.plan()
+    # Its own work, not the author's: on a machine with nothing open this
+    # asserted over an empty list and passed by vacancy — and on a clean
+    # HOME it failed instead, which is how CI found it.
+    items = [{"kind": k, "what": k, "why": ""} for k in ("repair", "goal", "thread")]
+    real = swarm.open_work
+    swarm.open_work = lambda: items
+    try:
+        d = swarm.plan()
+    finally:
+        swarm.open_work = real
+    assert d["agents"], "no agents planned — the assertion below would prove nothing"
     for a in d["agents"]:
         assert 0 < a["turns"] <= 25, a
     text = swarm.render(d)

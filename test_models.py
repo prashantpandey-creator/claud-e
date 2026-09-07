@@ -116,14 +116,32 @@ def test_the_CAVEAT_travels_with_the_number():
     assert "per turn" in low
 
 
+def _two_model_fixture():
+    """Transcript rows standing in for the record. The three tests below used
+    to read the author's OWN ~/.claude/projects, so they failed on every
+    machine but his — including CI, for 25 straight runs — while testing
+    nothing a fixture cannot test."""
+    return [{"type": "assistant", "timestamp": "2026-08-30T10:0%d:00Z" % i,
+             "effort": "high",
+             "message": {"model": m,
+                         "usage": {"output_tokens": 100,
+                                   "output_tokens_details": {"thinking_tokens": 30}},
+                         "content": []}}
+            for i, m in enumerate(("claude-opus-5", "claude-opus-5", "claude-sonnet-5"))]
+
+
 def test_the_live_record_attributes_every_turn():
-    d = models.scan(limit=8)
-    assert d["models"], "no models found in the real transcripts"
+    old = models.PROJECTS
+    models.PROJECTS = _fixture(_two_model_fixture())
+    try:
+        d = models.scan(limit=8)
+    finally:
+        models.PROJECTS = old
+    assert d["models"], "no models found in the transcripts"
     for r in d["models"]:
         assert r["model"] not in models._NOT_A_MODEL
         assert r["turns"] > 0
-    print("       live: " + ", ".join("%s %d turns" % (r["model"][:18], r["turns"])
-                                      for r in d["models"][:4]))
+    assert {r["model"] for r in d["models"]} == {"claude-opus-5", "claude-sonnet-5"}, d["models"]
 
 
 
@@ -186,10 +204,15 @@ def test_a_turn_with_NO_effort_recorded_is_not_called_zero():
 
 def test_the_twin_carries_the_model_section():
     import twin
-    titles = [s["title"] for s in twin.build()]
-    assert any(t.startswith("WHO DID THE WORK") for t in titles), titles
-    sec = [s for s in twin.build() if s["title"].startswith("WHO DID THE WORK")][0]
-    assert sec["lines"], "the section is empty on the live record"
+    old = models.PROJECTS
+    models.PROJECTS = _fixture(_two_model_fixture())
+    try:
+        titles = [s["title"] for s in twin.build()]
+        assert any(t.startswith("WHO DID THE WORK") for t in titles), titles
+        sec = [s for s in twin.build() if s["title"].startswith("WHO DID THE WORK")][0]
+    finally:
+        models.PROJECTS = old
+    assert sec["lines"], "the section is empty even with a record to read"
     assert any("thinking tokens" in l for l in sec["lines"])
     assert any("NOT a quality score" in l for l in sec["lines"]),         "the caveat did not travel into the twin"
 
@@ -325,7 +348,12 @@ def test_ZERO_interruptions_is_reported_as_none_not_as_perfect():
 
 def test_the_leash_caveat_reaches_the_TWIN():
     import twin
-    sec = [s for s in twin.build() if s["title"].startswith("WHO DID THE WORK")][0]
+    old = models.PROJECTS
+    models.PROJECTS = _fixture(_two_model_fixture())
+    try:
+        sec = [s for s in twin.build() if s["title"].startswith("WHO DID THE WORK")][0]
+    finally:
+        models.PROJECTS = old
     joined = " ".join(sec["lines"])
     assert "leash is NOT a rating" in joined, joined[-160:]
 

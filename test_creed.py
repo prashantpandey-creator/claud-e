@@ -40,7 +40,13 @@ def test_newest_rule_leads():
     rule from July, because where they conflict the later one is his."""
     rows = creed.rules()
     dated = [r for r in rows if r["date"]]
-    assert dated, "no rule carried a date — recency ordering is doing nothing"
+    if not rows:
+        # No rules file on this machine (a fresh install, or CI): there is
+        # nothing to order. The ordering itself is proven on fixtures by
+        # test_an_UNDATED_rule_never_outranks_a_dated_one either way.
+        print("      (no rules on this machine — nothing to order)", end="")
+        return
+    assert dated, "rules exist but none carried a date — recency ordering is doing nothing"
     assert dated == sorted(dated, key=lambda r: r["date"], reverse=True)
 
 

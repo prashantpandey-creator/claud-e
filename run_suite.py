@@ -18,6 +18,20 @@ if clean:
     home = tempfile.mkdtemp(prefix="suite-clean-home-")
     env["HOME"] = home
     print("clean HOME: %s  (the way CI sees it)" % home)
+    # CI pip-installs the grading engine, so `import nidra` works there. This
+    # machine resolves it from a checkout under the REAL home, which the
+    # clean HOME hides — and the harness then reported 11 failures across
+    # ask/converse/formation that CI does not have. A gate that cries wolf
+    # gets ignored, so hand the engine over the way CI has it.
+    sys.path.insert(0, SKILL)
+    import paths as _paths
+    _root = _paths.nidra_root()
+    if _root:
+        env["MEDITATE_NIDRA_ROOT"] = _root
+        print("grading engine: %s  (CI pip-installs it; same reachability)" % _root)
+    else:
+        print("grading engine: absent here AND in the clean HOME — "
+              "store-backed tests will skip, as they would on a machine without it")
 fails=[]; slow=[]
 files=sorted(glob.glob("test_*.py"))
 t0=time.time()

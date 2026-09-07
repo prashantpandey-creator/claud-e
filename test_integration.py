@@ -244,9 +244,18 @@ def test_edge_heartbeat_runs_all_silent_stages():
 
 
 def test_edge_hook_installed_matches_repo():
-    """the injected surface must be the version the repo tests."""
+    """the injected surface must be the version the repo tests.
+
+    Only where an install exists. On a machine that has never installed
+    (CI's clean HOME, a fresh clone) there is nothing to drift FROM, and
+    raising FileNotFoundError there reports a drift that cannot exist —
+    it failed that way in CI while the two files were identical."""
+    installed = os.path.expanduser("~/.claude/hooks/meditate-hook.sh")
+    if not os.path.exists(installed):
+        print("      (not installed here — nothing to compare)", end="")
+        return
     with open(os.path.join(SKILL, "hooks", "meditate-hook.sh"), "rb") as a, \
-         open(os.path.expanduser("~/.claude/hooks/meditate-hook.sh"), "rb") as b:
+         open(installed, "rb") as b:
         assert a.read() == b.read(), "installed hook drifted from repo source"
 
 

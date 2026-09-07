@@ -78,7 +78,11 @@ def test_who_you_are_QUOTES_the_creed_not_a_rewrite():
 def test_decide_section_is_COUNTED_not_asserted():
     s = twin.how_you_decide()
     assert "recorded interactions" in s["basis"]
-    joined = " ".join(s["lines"])
+    # The count lives in the BASIS ("0 recorded interactions"), which is the
+    # honest rendering on a machine with nothing recorded yet — the lines
+    # then say so in words. Reading only the lines called that a mood and
+    # failed on every machine but the author's.
+    joined = s["basis"] + " " + " ".join(s["lines"])
     assert any(ch.isdigit() for ch in joined), \
         "the decide section carries no number — that is a mood, not a finding"
 

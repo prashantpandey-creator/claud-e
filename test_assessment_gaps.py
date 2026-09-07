@@ -30,6 +30,7 @@ Run: python3 ~/.claude/skills/meditate/test_assessment_gaps.py
 from __future__ import annotations
 
 import os
+import tempfile
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -176,12 +177,19 @@ def test_the_scan_reaches_past_the_first_two_containers():
     why the slice was removed. A test that reads the prose instead of the
     behaviour tells you nothing about the behaviour.
     """
-    sliced = projects._repo_dirs(containers=projects._CONTAINERS[:2])
-    full = projects._repo_dirs()
-    assert len(full) > len(sliced), \
-        "full scan found %d, sliced found %d — the later containers are dark" \
-        % (len(full), len(sliced))
-    assert set(sliced) <= set(full)
+    # Its own containers: on a machine whose HOME holds no repos at all,
+    # full and sliced were both 0 and the comparison proved nothing.
+    with tempfile.TemporaryDirectory() as t:
+        c1, c2, c3 = (os.path.join(t, n) for n in ("first", "second", "third"))
+        for c in (c1, c2, c3):
+            os.makedirs(c, exist_ok=True)
+        os.makedirs(os.path.join(c3, "late-repo", ".git"), exist_ok=True)
+        sliced = projects._repo_dirs(containers=[c1, c2])
+        full = projects._repo_dirs(containers=[c1, c2, c3])
+        assert len(full) > len(sliced), \
+            "full scan found %d, sliced found %d — the later containers are dark" \
+            % (len(full), len(sliced))
+        assert set(sliced) <= set(full)
 
 
 def test_a_third_party_checkout_is_not_called_MY_abandoned_project():
@@ -214,10 +222,25 @@ def test_ownership_survives_MULTIPLE_git_identities():
     The replacement derives identity from repo SPREAD — an address seen in >=3
     of your repos is yours; comfyanonymous has 2416 commits in exactly one.
     """
-    hist = projects.commit_history()
-    ids = projects._my_identities({n: projects._authors(p)
-                                   for n, p in projects._repo_dirs().items()})
+    # Fed directly, not read off this machine. _my_identities is a pure
+    # function of {repo: {email: commits}}, so the RULE and its falsifier are
+    # both testable anywhere — where reading the author's own repos tested
+    # the rule only on his machine, and failed on every other one.
+    per_repo = {
+        "r1": {"owner@gmail.com": 40, "12345+owner@users.noreply.github.com": 12},
+        "r2": {"owner@gmail.com": 8, "12345+owner@users.noreply.github.com": 3},
+        "r3": {"owner@gmail.com": 5, "12345+owner@users.noreply.github.com": 1},
+        "vendored": {"comfyanonymous@example.com": 2416},   # many commits, ONE repo
+    }
+    ids = projects._my_identities(per_repo)
     assert len(ids) >= 2, "only %d identity derived — the multi-email case is unhandled" % len(ids)
+    assert "owner@gmail.com" in ids and "12345+owner@users.noreply.github.com" in ids, ids
+    assert "comfyanonymous@example.com" not in ids, \
+        "2416 commits in a single checkout is a third party, not this machine's owner"
+    # The two repos the single-address rule wrongly dropped, checked against
+    # this machine's real history WHERE IT EXISTS — guarded, so a machine
+    # without them simply has nothing to re-check.
+    hist = projects.commit_history()
     for own in ("flight-postman", "gurugpt-next"):
         h = hist.get(own)
         if h:
@@ -277,11 +300,18 @@ def test_a_REAL_fragment_still_asks_for_its_alias():
 
 
 def test_live_machine_reports_without_crashing():
+    """Not crashing is the claim. How MANY it finds depends on what this
+    machine holds — nonzero here, zero on a fresh one — so requiring a
+    count made a crash-test fail where nothing had crashed."""
     g = projects.assessment_gaps()
     print("       live: %d tracked, %d real, %d assessed, %d unassessed, %d not-projects"
           % (g["tracked"], g["real_projects"], g["assessed"],
              len(g["unassessed"]), len(g["not_projects"])))
-    assert g["tracked"] > 0
+    for k in ("tracked", "real_projects", "assessed"):
+        assert isinstance(g[k], int) and g[k] >= 0, (k, g[k])
+    for k in ("unassessed", "not_projects"):
+        assert isinstance(g[k], (list, tuple, set)), (k, type(g[k]))
+    assert g["assessed"] <= g["tracked"], g
 
 
 def _main():

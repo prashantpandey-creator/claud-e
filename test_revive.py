@@ -232,13 +232,24 @@ def _agenda_items():
     """
     import tempfile
     import voice
+    import projects as pj
     d, s_, g = tempfile.mkdtemp(), tempfile.mkdtemp(), tempfile.mkdtemp()
     with open(os.path.join(d, "STILLNESS.md"), "w") as f:
         f.write("# fresh\n")
+    # A dormant project to be dormant ABOUT. revival_cards reads this
+    # machine's own repos, so on a machine with none — CI's clean HOME, a
+    # fresh install — the agenda had no dormant row and this test asserted
+    # over an empty list, which is the vacuous green it exists to prevent.
+    real = pj.revival_cards
+    pj.revival_cards = lambda limit=3: [{"project": "bro-os",
+                                         "last_commit_date": "2026-06-01",
+                                         "commits": 41, "days_idle": 62}]
     try:
         return voice.agenda(meditation_dir=d, store_dir=s_, goals_dir=g)
     except Exception:
         return []
+    finally:
+        pj.revival_cards = real
 
 
 def _main():

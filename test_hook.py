@@ -115,6 +115,21 @@ def _iso_env(tmp):
             "MEDITATE_STORE_DIR": os.path.join(tmp, "store")}
 
 
+def test_the_hook_FINDS_ITS_OWN_SOURCE_without_the_installed_path_file():
+    """~/.claude/meditation/skill-path is written by install.sh. Before the
+    first install — and in any checkout run in place, which is what CI does
+    — it does not exist, so SKILL_HOME fell back to a directory with no
+    coordination.py and the hook returned {} for EVERY edit: no guard rules,
+    no facts, no collision warnings. Two guard tests failed that way for
+    five days while the Python behind them was correct all along. The hook
+    lives at <skill>/hooks/, so its own location names the skill dir."""
+    with tempfile.TemporaryDirectory() as t:
+        env = _iso_env(t)
+        env["HOME"] = t                       # no skill-path file anywhere
+        _, out, _ = fire(edit("/x/App.swift"), env=env)
+        assert "web app" in context_of(out), "hook is inert without the installed path file"
+
+
 def test_native_paths_fire_case_insensitively():
     with tempfile.TemporaryDirectory() as t:
         for p in ["/x/App.swift", "/x/Foo.SWIFT", "/x/ios/Thing.m", "/x/IOS/Thing.m"]:

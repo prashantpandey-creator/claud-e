@@ -50,6 +50,19 @@ fi
 # hook that silently returned {} forever: no guard rules, no fact serving,
 # no collision warnings — installed, reported healthy, and inert.
 SKILL_HOME="$(cat "$HOME/.claude/meditation/skill-path" 2>/dev/null)"
+# The path file is written by install.sh, so it is absent before the first
+# install and in any checkout run in place — CI hit exactly that: the hook
+# resolved to a directory with no coordination.py and returned {} for every
+# edit, so two guard-rule tests failed for five days while the Python behind
+# them was correct. This hook lives at <skill>/hooks/, so its own location
+# names the skill directory whenever the path file cannot.
+if [ ! -f "${SKILL_HOME:-/nonexistent}/coordination.py" ]; then
+    _SELF="${BASH_SOURCE[0]:-$0}"
+    _HERE="$(cd "$(dirname "$_SELF")/.." 2>/dev/null && pwd)"
+    if [ -n "$_HERE" ] && [ -f "$_HERE/coordination.py" ]; then
+        SKILL_HOME="$_HERE"
+    fi
+fi
 [ -n "$SKILL_HOME" ] || SKILL_HOME="$HOME/.claude/skills/meditate"
 COORD="$SKILL_HOME/coordination.py"
 # PostToolUse on a file write is the squiggly: the file now EXISTS, so it can

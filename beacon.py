@@ -58,7 +58,12 @@ def _known_goal(goal: str) -> bool:
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         import goals as gl
         names = {g.get("name", "") for g in gl.scan()}
-        return (not names) or goal in names
+        # An EMPTY goal set answers this question: nothing can match, so the
+        # name is noise. `not names or ...` treated "no goals on disk" as
+        # "cannot tell" and announced every unknown goal as news — on a fresh
+        # machine, which has no goals at all, that is all of them.
+        # A BROKEN check (below) still fails open; an empty one does not.
+        return goal in names
     except Exception:
         return True          # never let a broken check silence real news
 

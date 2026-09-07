@@ -117,7 +117,11 @@ def test_cli_envelope():
     env = json.loads(r.stdout)
     for k in ("success", "data", "metadata", "errors"):
         assert k in env
-    assert env["data"]["count"] > 0
+    # The envelope is the contract. The COUNT depends on what repos exist
+    # under this HOME — nonzero here, zero on a fresh machine — so asserting
+    # it made the envelope test fail for a reason that has nothing to do
+    # with the envelope.
+    assert isinstance(env["data"]["count"], int) and env["data"]["count"] >= 0, env["data"]
 
 
 # ---- attribution: what was BUILT, not where it was launched ---------------
@@ -243,16 +247,36 @@ def test_generic_directories_are_never_projects():
     assert pj._usable("purangpt") == "purangpt"
 
 
+def _containers_holding_this_repo():
+    """Point the scan at the container this checkout actually lives in.
+
+    _CONTAINERS is derived from HOME, so on any machine but the author's —
+    CI included — the scan found no repos and the two commit tests below
+    could not resolve a sha that is sitting right here."""
+    pj._DIRS_CACHE["at"] = 0.0
+    pj._DIRS_CACHE["data"] = {}
+    pj._SHA_CACHE.clear()
+    return [os.path.dirname(SKILL_DIR)]
+
+
 def test_a_commit_id_names_exactly_one_repo():
     """The most precise thing a fact can carry: one line of history in one
     repo. 67 facts had a commit locator and nothing looked at it."""
     import subprocess
     sha = subprocess.run(["git", "-C", SKILL_DIR, "rev-parse", "HEAD"],
                          capture_output=True, text=True).stdout.strip()[:9]
-    assert pj.repo_of_commit(sha) == "meditate", sha
-    assert pj.repo_of_commit("deadbeef1234") is None
-    assert pj.repo_of_commit("") is None
-    assert pj.repo_of_commit("not-a-sha!!") is None
+    old = pj._CONTAINERS
+    pj._CONTAINERS = _containers_holding_this_repo()
+    try:
+        assert pj.repo_of_commit(sha) == "meditate", sha
+        assert pj.repo_of_commit("deadbeef1234") is None
+        assert pj.repo_of_commit("") is None
+        assert pj.repo_of_commit("not-a-sha!!") is None
+    finally:
+        pj._CONTAINERS = old
+        pj._DIRS_CACHE["at"] = 0.0
+        pj._DIRS_CACHE["data"] = {}
+        pj._SHA_CACHE.clear()
 
 
 def test_a_fact_carrying_a_commit_is_placed_by_it():
@@ -261,7 +285,15 @@ def test_a_fact_carrying_a_commit_is_placed_by_it():
                          capture_output=True, text=True).stdout.strip()[:9]
     mem = {"evidence": [{"locator": "commit:" + sha}], "tags": [],
            "statement": "no project named in these words"}
-    names, how = pj.project_of_fact(mem, known=set())
+    old = pj._CONTAINERS
+    pj._CONTAINERS = _containers_holding_this_repo()
+    try:
+        names, how = pj.project_of_fact(mem, known=set())
+    finally:
+        pj._CONTAINERS = old
+        pj._DIRS_CACHE["at"] = 0.0
+        pj._DIRS_CACHE["data"] = {}
+        pj._SHA_CACHE.clear()
     assert names == {"meditate"} and how == "commit", (names, how)
 
 
