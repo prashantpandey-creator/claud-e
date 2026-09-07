@@ -1649,6 +1649,20 @@ class _Handler(BaseHTTPRequestHandler):
                                if r.get("ok") else r.get("why", "could not")}
                 except Exception as e:
                     res = {"started": False, "output": str(e)[:160]}
+            elif action == "attempt-mine":
+                # "Is this actually mine?" for everything parked on him. Read-only
+                # probes under the assess role; the never-attempt class is never
+                # dispatched. Nothing closes without the probe affirming it.
+                try:
+                    import campaign as _cp
+                    r = _cp.attempt(limit=int(req.get("value") or 4))
+                    res = {"started": r.get("probed", 0) > 0,
+                           "output": ("probing %d item%s — results land on the next tick; left %d with you"
+                                      % (r["probed"], "" if r["probed"] == 1 else "s", r["left_alone"]))
+                           if r.get("probed") else
+                           ("nothing to probe — all %d left with you" % r.get("left_alone", 0))}
+                except Exception as e:
+                    res = {"started": False, "output": str(e)[:160]}
             elif action == "human-done":
                 # The owner did a thing only he could do. arg = node id,
                 # value = an optional note. The goal file's box ticks when the

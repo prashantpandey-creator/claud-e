@@ -1393,6 +1393,36 @@ def test_a_probe_that_DID_it_closes_the_item_with_its_proof():
         assert "stack.env" in (w.get("probe_said") or ""), w.get("probe_said")
 
 
+def test_what_the_probe_LEARNED_reaches_the_page():
+    """status() ships a whitelist of node keys, so a field the twin does not
+    name is invisible no matter how well it was computed — "built, not
+    wired". The classification and what a probe reported are the whole
+    point of the feature on screen: without them YOUR HANDS says what to do
+    and never why it is his."""
+    with tempfile.TemporaryDirectory() as t:
+        gdir, med = _world(t)
+        g = cp.build(goals_dir=gdir, meditation_dir=med, elaborator=_elab)
+        n = [x for x in g["nodes"] if x["kind"] == "goal"][0]
+        wall = cp._wall_node(n, g, "Run the five-point test on a physical iPhone", "agent hit it")
+        cp.save(g, med)
+        cp.attempt(meditation_dir=med, dispatch=lambda node: {"log": "l1"})
+        shipped = {x["id"]: x for x in cp.status(med)["nodes"]}[wall["id"]]
+        assert shipped.get("classified"), "the twin's read never reaches the page"
+        assert shipped["classified"]["attempt"] is False
+        assert "device" in shipped["classified"]["why"]
+        # and a probe's answer travels too
+        g2 = cp.load(med)
+        w = [x for x in g2["nodes"] if x["id"] == wall["id"]][0]
+        w["probe_said"] = "no registrar credential on this machine"
+        cp.save(g2, med)
+        shipped = {x["id"]: x for x in cp.status(med)["nodes"]}[wall["id"]]
+        assert shipped.get("probe_said") == "no registrar credential on this machine"
+        # the page renders both, and offers the button
+        page = open(os.path.join(SKILL, "twin_console.html")).read()
+        assert "attempt-mine" in page, "no way to run it from the twin"
+        assert "probe_said" in page and "classified" in page, "the page never reads them"
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

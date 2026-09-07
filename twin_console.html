@@ -722,15 +722,27 @@ function renderCampaign(d){
   const yours = (d.nodes||[]).filter(x => x.kind === "human" && x.status === "waiting");
   const yoursByGoal = {};
   yours.forEach(x => { (yoursByGoal[x.goal] = yoursByGoal[x.goal] || []).push(x); });
+  // why it is on YOUR list: the twin's own read, and what a probe found if
+  // one ran. Without this the list says what to do and never why it is his.
+  const handWhy = t => {
+    const c = t.classified || {};
+    if (t.probe_said) return `checked: ${esc(t.probe_said).slice(0,150)}`;
+    if (t.status === "probing") return "checking whether this is really yours…";
+    if (c.attempt) return "the twin thinks it can try this — press “check mine”";
+    if (c.why) return `yours: ${esc(c.why)}`;
+    return t.why ? esc(t.why).slice(0,140) : "";
+  };
   const handsCard = t => `<div class="li" style="padding:4px 0">
         <span class="txt" style="font-size:13px"><span style="font-family:ui-monospace,monospace;color:var(--gold)">☐</span> ${esc(t.title)}
-          ${t.why ? `<div style="color:var(--faint);font-size:11px">${esc(t.why).slice(0,140)}</div>` : ""}</span>
+          ${handWhy(t) ? `<div style="color:var(--faint);font-size:11px">${handWhy(t)}</div>` : ""}</span>
         <input class="hand-note" data-node="${esc(t.id)}" placeholder="note (optional)" style="background:#0a0906;border:1px solid var(--line);border-radius:6px;color:var(--fg);padding:3px 8px;font:inherit;font-size:11.5px;width:150px">
         <button class="hand-done" data-node="${esc(t.id)}" title="I did this">done</button>
       </div>`;
   const hands = yours.length ? `<div style="margin:0 0 10px;font-size:12px;color:var(--gold)">
       ☐ ${yours.length} thing${yours.length===1?"":"s"} only you can do, across ${Object.keys(yoursByGoal).length} goal${Object.keys(yoursByGoal).length===1?"":"s"}
-      <span style="color:var(--faint)"> — grouped under each goal below, nothing behind one moves until you tick it</span></div>` : "";
+      <span style="color:var(--faint)"> — grouped under each goal below, nothing behind one moves until you tick it</span>
+      <button data-act="attempt-mine" data-arg="" title="probe the ones that look like machine work — read-only, never a device or a payment"
+        style="margin-left:8px">check which are really mine</button></div>` : "";
   // controls: exactly the verbs that make sense in this state
   const ctl = d.armed
     ? `<button data-act="pause-all" data-arg="paused from the console">pause</button>`

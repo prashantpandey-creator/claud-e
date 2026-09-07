@@ -1929,7 +1929,11 @@ def status(meditation_dir: str = MEDITATION_DIR) -> Dict[str, Any]:
                                               "depends_on", "agent", "blocked_on", "stuck",
                                               "result", "steers", "grown", "name", "log",
                                               "idea", "accepted", "why", "check", "done_by",
-                                              "note", "from_agent", "milestone")}
+                                              "note", "from_agent", "milestone",
+                                              # why an item is on HIS list, and what a
+                                              # probe found — the feature is invisible
+                                              # without them, however well computed
+                                              "classified", "probe_said", "probed")}
                       for n in g["nodes"]],
             "events": g.get("events", [])[-30:]}
 
