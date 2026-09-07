@@ -51,6 +51,43 @@ def owner_address(conf: str = CONF) -> str:
     return str(read_conf(conf).get("user") or "")
 
 
+SMTP_HOST = "smtp.gmail.com"
+SMTP_PORT = 465
+
+
+def check(conf: str = CONF, smtp=None) -> Dict[str, Any]:
+    """Is the credential live? Logs in and hangs up — never sends.
+
+    authgate polls this while the owner regenerates the app password, so it
+    must not fill his inbox, and it must not pass on a config file that
+    merely EXISTS (the dead password of 2026-09-04 did exist). The login
+    is the proof."""
+    c = read_conf(conf)
+    user, pwd = str(c.get("user") or ""), str(c.get("password") or "")
+    if not user or not pwd:
+        return {"ok": False, "why": "not configured: %s has no user/password" % conf}
+    if smtp is None:
+        import smtplib
+        smtp = smtplib.SMTP_SSL
+    try:
+        s = smtp(SMTP_HOST, SMTP_PORT, timeout=20)
+    except Exception as e:
+        return {"ok": False, "why": "cannot reach %s: %s" % (SMTP_HOST, str(e)[:120])}
+    try:
+        s.login(user, pwd)
+    except Exception as e:
+        try:
+            s.quit()
+        except Exception:
+            pass
+        return {"ok": False, "why": str(e)[:160], "user": user}
+    try:
+        s.quit()
+    except Exception:
+        pass
+    return {"ok": True, "why": "", "user": user}
+
+
 def _default_runner(argv: List[str], body: str) -> Tuple[bool, str]:
     try:
         r = subprocess.run(argv, input=body, capture_output=True, text=True, timeout=60)
@@ -129,10 +166,10 @@ def digest(g: Optional[Dict[str, Any]], last: Dict[str, Any]) -> Optional[Dict[s
     items: List[Dict[str, str]] = []
     new_hands = [i for i in fp["hands"] if i not in (prev.get("hands") or [])]
     if new_hands:
-        lines.append("YOUR HANDS — new")
-        for i in new_hands:
+        lines.append("YOUR HANDS — new (reply 'done 2' to tick the second)")
+        for k, i in enumerate(new_hands, 1):
             n = nodes[i]
-            lines.append("  - %s" % n["title"][:140])
+            lines.append("  %d. %s" % (k, n["title"][:140]))
             items.append({"kind": "human", "id": i, "title": n["title"][:80]})
         lines.append("")
     new_done = [i for i in fp["done"] if i not in (prev.get("done") or [])]
@@ -171,8 +208,9 @@ def digest(g: Optional[Dict[str, Any]], last: Dict[str, Any]) -> Optional[Dict[s
                  % (m.get("done", 0), m.get("nodes", 0), m.get("running", 0), m.get("spent_usd", 0) or 0,
                     (" · until " + g["until"]) if g.get("until") else ""))
     lines.append("")
-    lines.append("Reply to this mail to act: 'done' ticks the first YOUR HANDS item above; "
-                 "anything else is sent to the agent as your steer. Open: http://127.0.0.1:7711/twin")
+    lines.append("Reply to this mail to act: 'done 2' ticks the numbered item above "
+                 "('done' alone works when there is only one); anything else is sent to the "
+                 "agent as your steer. Open: http://127.0.0.1:7711/twin")
     nonce = new_nonce()
     head = ("your hands: %d new" % len(new_hands)) if new_hands else \
            ("shipped: %d" % len(new_done)) if new_done else \
@@ -227,7 +265,7 @@ IMAP_HOST = "imap.gmail.com"
 _NONCE_RE = re.compile(r"\[%s #([0-9a-f]{8})\]" % re.escape(TAG))
 
 
-def parse_reply(raw: bytes, owner: str) -> Dict[str, Any]:
+def parse_reply(raw: bytes, owner: str, gmail_sent: bool = False) -> Dict[str, Any]:
     """What a mail is, decided from its own headers and body: the nonce in
     its subject, whether it is from the owner, whether Gmail's own
     Authentication-Results says dkim=pass for gmail.com, and the body with
@@ -264,8 +302,13 @@ def parse_reply(raw: bytes, owner: str) -> Dict[str, Any]:
         if t in ("--", "-- ") or t.startswith("-- "):
             break
         lines.append(t)
+    # A reply carries In-Reply-To/References; our own outbound mail does not.
+    # This is what stops the lane reading its own digest back as an answer
+    # once Gmail's \Sent label is trusted below.
+    is_reply = bool(msg.get("In-Reply-To") or msg.get("References"))
     return {"ok": True, "nonce": nonce, "from": addr, "is_owner": bool(owner) and addr == owner.lower(),
-            "dkim": dkim_ok, "body": "\n".join(lines).strip(), "subject": subject,
+            "dkim": dkim_ok, "gmail_sent": bool(gmail_sent), "is_reply": is_reply,
+            "body": "\n".join(lines).strip(), "subject": subject,
             "message_id": str(msg.get("Message-ID") or "")}
 
 
@@ -283,21 +326,47 @@ def act_on_reply(parsed: Dict[str, Any], st: Dict[str, Any], done_fn: Callable, 
         return {"acted": False, "why": "no nonce we sent"}
     if not parsed.get("is_owner"):
         return {"acted": False, "why": "not from the owner's address"}
-    if not parsed.get("dkim"):
-        return {"acted": False, "why": "no dkim=pass for gmail.com"}
+    # Measured live 2026-09-07: a Gmail message sent from this account to
+    # itself carries NO Authentication-Results, DKIM-Signature or
+    # Received-SPF — it never leaves Google — but Gmail labels it \Sent.
+    # A dkim-only gate refuses every reply the owner sends from his own
+    # account. Gmail's own label is the equivalent attestation: an outsider
+    # cannot make Gmail file their forgery as this account's sent mail, and
+    # a forgery arriving from outside DOES get an Authentication-Results
+    # header, which will not say pass.
+    if not (parsed.get("dkim") or parsed.get("gmail_sent")):
+        return {"acted": False, "why": "no dkim=pass for gmail.com and not this account's own mail"}
+    if not parsed.get("is_reply"):
+        return {"acted": False, "why": "not a reply (no In-Reply-To) — this is our own outbound mail"}
     if parsed.get("message_id") and parsed["message_id"] in (st.get("handled") or []):
         return {"acted": False, "why": "already handled"}
     body = (parsed.get("body") or "").strip()
     if not body:
         return {"acted": False, "why": "empty reply"}
     items = sent.get("items") or []
+    humans = [i for i in items if i.get("kind") == "human"]
     first = body.splitlines()[0].strip().lower().rstrip(".!")
-    if first in ("done", "done.", "ok done", "ticked"):
-        human = next((i for i in items if i.get("kind") == "human"), None)
-        if not human:
+    m = re.match(r"^(?:done|did|ticked)\s*#?(\d+)$", first)
+    if m or first in ("done", "done.", "ok done", "ticked", "did"):
+        if not humans:
             return {"acted": False, "why": "'done' but the mail had no item of yours"}
+        if m:
+            idx = int(m.group(1))
+            if not 1 <= idx <= len(humans):
+                return {"acted": False, "why": "there is no item %d — the mail listed %d"
+                                              % (idx, len(humans))}
+            human = humans[idx - 1]
+        elif len(humans) > 1:
+            # The live digest listed 16. A bare "done" against it would tick
+            # whichever happened to be first, which is not what a person
+            # scanning 16 lines means.
+            return {"acted": False, "why": "which one? the mail listed %d — reply 'done 3' for the third"
+                                          % len(humans)}
+        else:
+            human = humans[0]
         r = done_fn(human["id"])
-        return {"acted": bool(r.get("ok")), "what": "done", "node": human["id"], "why": r.get("why", "")}
+        return {"acted": bool(r.get("ok")), "what": "done", "node": human["id"],
+                "title": human.get("title", ""), "why": r.get("why", "")}
     target = next((i for i in items if i.get("kind") == "node"), None) or \
              next((i for i in items if i.get("kind") == "agent"), None)
     if not target:
@@ -338,15 +407,19 @@ def poll_inbox(meditation_dir: str = MEDITATION_DIR, imap=None, conf: str = CONF
         typ, data = imap.search(None, "UNSEEN", "SUBJECT", '"[%s #"' % TAG)
         ids = (data[0].split() if typ == "OK" and data and data[0] else [])
         for mid in ids[:20]:
-            typ, parts = imap.fetch(mid, "(RFC822)")
+            typ, parts = imap.fetch(mid, "(X-GM-LABELS RFC822)")
             raw = b""
+            meta = ""
             for p_ in parts or []:
                 if isinstance(p_, tuple) and len(p_) > 1 and isinstance(p_[1], (bytes, bytearray)):
                     raw = bytes(p_[1])
+                    meta += p_[0].decode(errors="replace") if isinstance(p_[0], (bytes, bytearray)) else str(p_[0])
+                elif isinstance(p_, (bytes, bytearray)):
+                    meta += p_.decode(errors="replace")
             if not raw:
                 continue
             out["seen"] += 1
-            parsed = parse_reply(raw, owner)
+            parsed = parse_reply(raw, owner, gmail_sent=("\\Sent" in meta))
             r = act_on_reply(parsed, st, done_fn, steer_fn, continue_fn)
             rec = {"nonce": parsed.get("nonce", ""), "from": parsed.get("from", ""), **r}
             (out["acted"] if r.get("acted") else out["refused"]).append(rec)
@@ -371,21 +444,47 @@ def poll_inbox(meditation_dir: str = MEDITATION_DIR, imap=None, conf: str = CONF
     return out
 
 
+def send_test(runner: Optional[Callable] = None,
+              meditation_dir: str = MEDITATION_DIR) -> Dict[str, Any]:
+    """The one-line proof mail — recorded like every other, because it is
+    the mail a person is most likely to reply to. Measured 2026-09-07: the
+    live proof mail (#644eb874) arrived and then could not be replied to,
+    because the send path wrote no nonce into mail-state.json."""
+    nonce = new_nonce()
+    r = send(subject_with(nonce, "CLAUD-E — the mail lane is live"),
+             "This is the twin. If you are reading this, mail out works.\n"
+             "Reply with anything and the reply lane will read it.\n", runner=runner)
+    if r.get("sent"):
+        st = load_state(meditation_dir)
+        st.setdefault("sent", {})[nonce] = {
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()),
+            "items": [], "subject": "the mail lane is live", "test": True}
+        st["last_sent"] = st["sent"][nonce]["ts"]
+        save_state(st, meditation_dir)
+    r["nonce"] = nonce
+    return r
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(prog="meditate mail", description=__doc__.split("\n")[0])
     ap.add_argument("--digest", action="store_true", help="mail what changed in the run since the last mail")
     ap.add_argument("--inbox", action="store_true", help="read replies to our mails and act on the ones that pass the gate")
     ap.add_argument("--test", action="store_true", help="send one line to prove the lane")
+    ap.add_argument("--check", action="store_true", help="log in and hang up — proves the credential, sends nothing")
     ap.add_argument("--quiet", action="store_true")
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
+    if a.check:
+        r = check()
+        print(json.dumps(r) if a.json else ("credential live for %s" % r.get("user") if r["ok"]
+                                            else "credential dead: " + r["why"]))
+        return 0 if r["ok"] else 1
     if not configured():
         if not a.quiet:
             print("mail is not configured: needs ~/bin/sendmail and a user in ~/.sendmail.conf")
         return 0
     if a.test:
-        r = send(subject_with(new_nonce(), "CLAUD-E — the mail lane is live"),
-                 "This is the twin. If you are reading this, mail out works.\n")
+        r = send_test()
         print(json.dumps(r) if a.json else ("sent to %s" % r.get("to") if r.get("sent") else "not sent: " + r.get("why", "")))
         return 0 if r.get("sent") else 1
     if a.inbox:

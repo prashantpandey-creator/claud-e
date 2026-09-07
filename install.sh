@@ -254,7 +254,7 @@ mkdir -p "$HOME/Library/LaunchAgents"
 # raw `>>` and `2>&1` inside <string>, producing a plist launchd tolerated but
 # no parser could read (caught 2026-08-22 when `meditate cadence` tried).
 python3 - "$SKILL_DIR" "$PLIST" <<'PYPLIST'
-import plistlib, sys
+import os, plistlib, sys
 skill, plist = sys.argv[1], sys.argv[2]
 # ONE step, not a chain. The chain used to be spelled out here AND again in
 # the cron fallback below, and the two copies drifted: measured 2026-08-29,

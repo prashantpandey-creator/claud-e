@@ -227,6 +227,83 @@ def test_readme_version_matches_VERSION():
     assert v in readme, "README's file tree still claims an older version"
 
 
+def test_every_inline_python_in_install_sh_COMPILES():
+    """CI has been red on every push since at least 2026-09-03 (25 of 25
+    runs). One cause: the heartbeat plist block calls os.path.dirname()
+    and imports only plistlib, sys, shutil — `NameError: name 'os' is not
+    defined` on a fresh machine, so the heartbeat is never installed and
+    nothing says so. The local suite could not see it: this machine's
+    plist predates the line. Every heredoc that python3 executes gets
+    compiled here, with its own names checked."""
+    import ast
+    src = open(os.path.join(SKILL, "install.sh")).read()
+    blocks = re.findall(r"python3 [^\n]*<<'(\w+)'\n(.*?)\n\1\n", src, re.S)
+    assert blocks, "no inline python found in install.sh — did the syntax change?"
+    for tag, body in blocks:
+        compile(body, "install.sh:%s" % tag, "exec")          # syntax
+        tree = ast.parse(body)
+        import builtins
+        bound = set(dir(builtins)) | {"__name__", "__file__"}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for a in node.names:
+                    bound.add((a.asname or a.name).split(".")[0])
+            elif isinstance(node, ast.ImportFrom):
+                for a in node.names:
+                    bound.add(a.asname or a.name)
+            elif isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+                for t in ([node.target] if hasattr(node, "target") and node.target else getattr(node, "targets", [])):
+                    for nn in ast.walk(t):
+                        if isinstance(nn, ast.Name):
+                            bound.add(nn.id)
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                bound.add(node.name)
+            elif isinstance(node, ast.comprehension):
+                for nn in ast.walk(node.target):
+                    if isinstance(nn, ast.Name):
+                        bound.add(nn.id)
+            elif isinstance(node, ast.For):
+                for nn in ast.walk(node.target):
+                    if isinstance(nn, ast.Name):
+                        bound.add(nn.id)
+            elif isinstance(node, (ast.With, ast.AsyncWith)):
+                for item in node.items:
+                    if item.optional_vars is not None:
+                        for nn in ast.walk(item.optional_vars):
+                            if isinstance(nn, ast.Name):
+                                bound.add(nn.id)
+            elif isinstance(node, ast.ExceptHandler) and node.name:
+                bound.add(node.name)
+            elif isinstance(node, ast.Lambda):
+                for a in node.args.args:
+                    bound.add(a.arg)
+        used = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+        missing = sorted(used - bound)
+        assert not missing, "install.sh:%s uses undefined name(s): %s" % (tag, missing)
+
+
+def test_the_mascot_build_SURVIVES_a_machine_with_no_signing_certificate():
+    """CI's 'Build the mascot' step failed on all 25 runs since 2026-09-03,
+    and because it has no `|| true`, the SUITE STEP NEVER RAN — 25 commits
+    with no gate at all. Cause: build.sh runs `set -euo pipefail`, and the
+    identity lookup is `SIGN_ID=$(security find-identity ... | grep "Apple
+    Development" | ...)`. On a runner with no certificate grep matches
+    nothing, returns 1, pipefail propagates it, and set -e kills the script
+    BEFORE the `else` branch written to sign ad-hoc for exactly that case.
+    Proven locally: the same pipeline with a non-matching pattern exits 1.
+    This runs the real line out of the real file."""
+    import subprocess
+    src = open(os.path.join(SKILL, "mascot", "build.sh")).read()
+    m = re.search(r"^(\s*SIGN_ID=\$\(security find-identity.*?\)\s*)$", src, re.M | re.S)
+    assert m, "the identity lookup in mascot/build.sh no longer looks like this — re-read it"
+    line = m.group(1).replace("Apple Development", "NoSuchIdentity-ZZZ")
+    r = subprocess.run(["bash", "-c", "set -euo pipefail\n" + line + "\necho REACHED"],
+                       capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0 and "REACHED" in r.stdout, (
+        "build.sh dies on a machine with no signing certificate instead of "
+        "falling through to ad-hoc signing (rc=%s)" % r.returncode)
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

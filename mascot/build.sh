@@ -77,9 +77,15 @@ swiftc -O -o "$STAGE/Contents/MacOS/casper" main.swift Casper.swift Voice.swift 
 # consent is given once and stays given.
 SIGN_ID="${MEDITATE_SIGN_ID:-}"
 if [ -z "$SIGN_ID" ]; then
+  # `|| true` is load-bearing under `set -euo pipefail`: on a machine with
+  # no certificate grep matches nothing and returns 1, pipefail propagates
+  # it, and set -e kills the script HERE — before the else branch below that
+  # exists to sign ad-hoc for exactly that machine. That killed every CI run
+  # from 2026-09-03 to 09-07, and because the workflow step has no `|| true`
+  # either, the suite step never ran on 25 commits.
   SIGN_ID=$(security find-identity -v -p codesigning 2>/dev/null \
             | grep "Apple Development" | head -1 \
-            | sed -E 's/.*"(.*)"/\1/')
+            | sed -E 's/.*"(.*)"/\1/' || true)
 fi
 if [ -n "$SIGN_ID" ]; then
   codesign --force --sign "$SIGN_ID" --identifier com.meditate.casper \
