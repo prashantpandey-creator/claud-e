@@ -93,7 +93,7 @@ case "${1:-}" in
     echo "  meditate go [N]     move it forward: a repair agent if knowledge"
     echo "                      broke, plus one per open goal (N caps; 0 = dry run)"
     echo "  meditate fix        repair broken memories only"
-    echo "  meditate pulse      the live console in your browser"
+    echo "  meditate pulse      the live console in your browser (also: twin)"
     echo ""
     echo "  meditate doctor     tests, hook, heartbeat, store"
     echo "  meditate install / uninstall"
@@ -114,6 +114,10 @@ case "${1:-}" in
   fix|repair)
     shift
     python3 "$DIR/go.py" --repair-only "$@"
+    ;;
+  twin)
+    shift
+    python3 "$DIR/brain.py" --path /twin "$@"
     ;;
   pulse|live|sarathi|brain|serve|watch|soul)
     shift

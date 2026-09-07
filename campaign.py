@@ -67,6 +67,17 @@ HOLD_S = 30 * 60
 # the owner's item: it is re-run under the working role, once.
 _DENIED_RE = re.compile(r"denied|sandbox|permission|not allowed|read-only|read only|no network|egress", re.I)
 _LIMIT_RE = re.compile(r"rate.?limit|usage limit|hit your (usage|limit)|overloaded|too many requests|\b429\b|quota", re.I)
+# An external process the agent is only WAITING on — a CI run, a deploy —
+# reported as blocked_on but describing itself as not-yet-a-problem. Live
+# text, 2026-09-05: "deploy job ... still in progress at 12+ min —
+# historically normal (6-21 min range), so not a failure, just incomplete."
+# Nothing here needs the owner; the step retries itself after a delay.
+_TRANSIENT_RE = re.compile(
+    r"not (yet )?(a failure|finished|complete)|still (running|in progress|building|deploying)"
+    r"|in progress at|not finished within|historically normal|just incomplete|check (again|back) (later|shortly)"
+    r"|poll again|not yet (verified|proven) live", re.I)
+TRANSIENT_RETRY_S = 8 * 60
+MAX_TRANSIENT_RETRIES = 6
 DEFAULT_PARALLEL = 3         # the RAM law: 6+9+8 < 30 GB, from the outage
 ELABORATE_BUDGET_USD = 0.35  # planning is cheap; execution is not
 ELABORATE_TIMEOUT_S = 300
@@ -664,10 +675,12 @@ def build(goals_dir: Optional[str] = None, meditation_dir: str = MEDITATION_DIR,
             "metrics": {}}
 
 
-def ready(g: Dict[str, Any]) -> List[Dict[str, Any]]:
+def ready(g: Dict[str, Any], now: Optional[float] = None) -> List[Dict[str, Any]]:
     done = {n["id"] for n in g["nodes"] if n["status"] == "done"}
+    t = now if now is not None else time.time()
     return [n for n in g["nodes"] if n["status"] == "pending" and n.get("kind") != "human"
-            and all(d in done for d in n["depends_on"])]
+            and all(d in done for d in n["depends_on"])
+            and t >= float(n.get("retry_after") or 0)]
 
 
 def waiting_on_you(g: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -1013,7 +1026,7 @@ def _dispatch_ready(g: Dict[str, Any], max_parallel: int,
                     now: Optional[float] = None) -> List[str]:
     running = sum(1 for n in g["nodes"] if n["status"] == "running")
     sent: List[str] = []
-    for n in ready(g):
+    for n in ready(g, now=now):
         if running >= max_parallel:
             break
         r = dispatch(n)
@@ -1345,6 +1358,27 @@ def _absorb(n: Dict[str, Any], res: Dict[str, Any], g: Dict[str, Any],
         n["status"] = "failed"
         n["why_failed"] = str(res.get("subtype") or "error")
         g["events"].append({"ts": _now_iso(), "what": "failed", "node": n["id"], "why": n["why_failed"]})
+        return
+    if so.get("blocked_on") and _TRANSIENT_RE.search(str(so["blocked_on"])):
+        # a wait, not a wall: retry with backoff, capped — an external that
+        # NEVER finishes must still reach the owner eventually.
+        attempts = int(n.get("transient_attempts") or 0) + 1
+        n["transient_attempts"] = attempts
+        n["status"] = "pending"
+        n["stuck"] = False
+        n["blocked_on"] = str(so["blocked_on"]).strip()[:300]
+        if attempts >= MAX_TRANSIENT_RETRIES:
+            _wall_node(n, g, "An external process has not finished after %d checks over ~%d min "
+                             "(last: %s). Look at it directly." % (attempts, attempts * TRANSIENT_RETRY_S // 60,
+                                                                    n["blocked_on"][:100]),
+                       "waited on repeatedly without finishing; a person should look, not another retry")
+            g["events"].append({"ts": _now_iso(), "what": "transient_gave_up", "node": n["id"], "attempts": attempts})
+            return
+        n["retry_after"] = (now or time.time()) + TRANSIENT_RETRY_S
+        if n.get("session"):
+            n["resume_message"] = (so.get("next") or "").strip() or \
+                ("Check the external process again: %s" % n["blocked_on"][:200])
+        g["events"].append({"ts": _now_iso(), "what": "waiting_on_external", "node": n["id"], "attempts": attempts})
         return
     if so.get("blocked_on") and n.get("kind") in ("assess", "revive") and not n.get("escalated") \
             and _DENIED_RE.search(str(so["blocked_on"])):

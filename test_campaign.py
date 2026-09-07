@@ -1179,6 +1179,53 @@ def test_requeue_RETRIES_fresh_and_marks_the_wall_FIXED_not_owner():
         assert sent == [node["id"]], sent
 
 
+def test_a_TRANSIENT_external_wait_retries_ITSELF_not_your_list():
+    """Live text, 2026-09-05: 'External process not finished within polling
+    budget: deploy job of run 33913377913 still in progress at 12+ min —
+    historically normal (6-21 min range), so not a failure, just incomplete
+    for this step.' The agent is not stuck; nothing needs the owner. It
+    must retry after a short delay, not sit under YOUR HANDS forever."""
+    with tempfile.TemporaryDirectory() as t:
+        gdir, med = _world(t)
+        g = cp.build(goals_dir=gdir, meditation_dir=med, elaborator=_elab)
+        cp.save(g, med)
+        cp.go(meditation_dir=med, max_parallel=1, dispatch=lambda n: {"log": "l1", "session": "s1"})
+        node = [n for n in cp.load(med)["nodes"] if n["status"] == "running"][0]
+        text = ("External process not finished within polling budget: deploy job of run "
+                "33913377913 still in progress at 12+ min — historically normal (6-21 min "
+                "range), so not a failure, just incomplete for this step")
+        out = cp.tick(meditation_dir=med, dispatch=lambda n: None, now=lambda: 5_000_000.0,
+                      read_result=lambda log: _finished(blocked=text) if log == "l1" else None)
+        g2 = cp.load(med)
+        n2 = [n for n in g2["nodes"] if n["id"] == node["id"]][0]
+        assert n2["status"] == "pending" and n2.get("transient_attempts") == 1, n2
+        assert not any(m.get("from_agent") == node["id"] for m in g2["nodes"]), "no wall for a wait"
+        assert n2["retry_after"] > 5_000_000.0, n2.get("retry_after")
+        # not ready before the delay, ready after
+        assert node["id"] not in [x["id"] for x in cp.ready(g2, now=5_000_000.0 + 1)]
+        assert node["id"] in [x["id"] for x in cp.ready(g2, now=n2["retry_after"] + 1)]
+        # a real decision wall is NOT treated as transient
+        cp.go(meditation_dir=med, max_parallel=1, dispatch=lambda n: {"log": "l9", "session": "s9"})
+        node2 = [n for n in cp.load(med)["nodes"] if n["status"] == "running" and n["id"] != node["id"]]
+        if node2:
+            n = node2[0]
+            cp.tick(meditation_dir=med, dispatch=lambda x: None,
+                    read_result=lambda log: _finished(blocked="Owner supplies the Pixel ID") if log == "l9" else None)
+            real = [x for x in cp.load(med)["nodes"] if x["id"] == n["id"]][0]
+            assert not real.get("transient_attempts")
+        # capped: enough transient stops in a row and it becomes a real wall
+        for i in range(cp.MAX_TRANSIENT_RETRIES):
+            g3 = cp.load(med)
+            n3 = [x for x in g3["nodes"] if x["id"] == node["id"]][0]
+            n3["status"] = "running"; n3["log"] = "l%d" % (i + 10); cp.save(g3, med)
+            cp.tick(meditation_dir=med, dispatch=lambda n: None, now=lambda: 5_000_000.0 + (i + 1) * 10_000,
+                    read_result=lambda log, ll="l%d" % (i + 10): _finished(blocked=text) if log == ll else None)
+        gN = cp.load(med)
+        nN = [x for x in gN["nodes"] if x["id"] == node["id"]][0]
+        assert any(m.get("from_agent") == node["id"] and m["status"] == "waiting" for m in gN["nodes"]), \
+            "an external that never finishes must eventually reach the owner"
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

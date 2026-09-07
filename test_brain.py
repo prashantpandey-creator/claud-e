@@ -325,6 +325,20 @@ def test_the_brain_ticks_an_ARMED_campaign_every_five_minutes():
     assert br._campaign_armed(p) is False
 
 
+def test_meditate_twin_OPENS_THE_TWIN_PAGE_not_the_mascot_root():
+    """The claud-e-digital-twin memory (2026-08-29) says 'meditate twin' is
+    LIVE. It ran, but opened '/' (the older mascot page) — the verb was not
+    even wired into the dispatcher, so it hit the passthrough and failed,
+    and even fixed to reach brain.py it would still have opened the wrong
+    page. Verified against both layers: the CLI script routes twin to a
+    distinct path, and brain.py builds the right URL from it."""
+    disp = open(os.path.join(SKILL, "meditate")).read()
+    assert '  twin)' in disp and "--path /twin" in disp, "twin not wired to /twin in the dispatcher"
+    assert br._open_url(7711) == "http://127.0.0.1:7711/", br._open_url(7711)
+    assert br._open_url(7711, "/twin") == "http://127.0.0.1:7711/twin", br._open_url(7711, "/twin")
+    assert br._open_url(7711, "twin") == "http://127.0.0.1:7711/twin", "a bare path still works"
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

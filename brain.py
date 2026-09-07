@@ -1960,20 +1960,28 @@ def _warm() -> None:
         pass
 
 
+def _open_url(port: int, path: str = "/") -> str:
+    """The URL `meditate pulse`/`meditate twin` opens. `meditate twin`
+    memory (2026-08-29) claimed this already worked; it opened '/' — the
+    older mascot page — never '/twin'. One flag, not a new route."""
+    return "http://127.0.0.1:%d%s" % (port, path if path.startswith("/") else "/" + path)
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(prog="meditate pulse", description="Live brain server (localhost only)")
     ap.add_argument("--port", type=int, default=DEFAULT_PORT)
     ap.add_argument("--no-open", action="store_true")
+    ap.add_argument("--path", default="/", help="page to open, e.g. /twin")
     args = ap.parse_args(argv)
     try:
         srv = make_server(args.port)
     except OSError:
-        url = "http://127.0.0.1:%d" % args.port
+        url = _open_url(args.port, args.path)
         print("already running at %s — opening it" % url)
         if not args.no_open:
             os.system("open '%s' 2>/dev/null" % url)
         return 0
-    url = "http://127.0.0.1:%d" % srv.server_address[1]
+    url = _open_url(srv.server_address[1], args.path)
     print("brain live at %s  (localhost only — Ctrl-C to stop)" % url)
     if not args.no_open:
         os.system("open '%s' 2>/dev/null" % url)
