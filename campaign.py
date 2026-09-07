@@ -1018,10 +1018,12 @@ def _probe_prompt(n: Dict[str, Any]) -> str:
         "Read only — do not edit, commit, push, or change anything on any server. "
         "If doing it needs a credential, check whether that credential is reachable "
         "on this machine and say exactly where you looked.\n"
-        "End with the RESULT object: if you established it is already true or you can "
-        "prove the answer read-only, put the proof in `did` and set blocked_on to null. "
-        "If it genuinely needs him, set blocked_on to the ONE sentence that says why — "
-        "naming what is missing, not what you tried."
+        "End with the RESULT object. Only if you have ESTABLISHED that the item is "
+        "already satisfied — with something you ran or read this run, not an argument "
+        "about where the item came from — set `milestone_ticked` to its exact text and "
+        "put the evidence in `did`. Anything short of that, including 'probably fine' "
+        "and 'I could not find a problem', leaves it his: set `blocked_on` to the ONE "
+        "sentence naming what is missing. Tracing the item's history is not evidence."
         % (n.get("title") or "")[:400]
     )
 
@@ -1086,9 +1088,16 @@ def _absorb_probe(n: Dict[str, Any], res: Dict[str, Any], g: Dict[str, Any]) -> 
     n["kind"] = "human"                     # a probe never promotes anything
     n["log"] = n.get("log", "")
     n["probe_cost_usd"] = float(res.get("total_cost_usd") or 0)
-    if blocked or not did:
+    # Closing needs an AFFIRMATION, not activity. A probe that read a lot and
+    # simply did not complain used to close the item — measured live on
+    # "Page token made permanent", where the RESULT was archaeology about
+    # where the item came from, not evidence the token is permanent.
+    affirmed = str(so.get("milestone_ticked") or "").strip()
+    if blocked or not affirmed:
         n["status"] = "waiting"
-        n["probe_said"] = blocked or "the probe found nothing it could prove"
+        n["probe_said"] = blocked or (
+            "the probe did not establish this is true — it reported: %s"
+            % (" · ".join(did)[:220] if did else "nothing"))
         g["events"].append({"ts": _now_iso(), "what": "still yours", "node": n["id"],
                             "why": n["probe_said"][:100]})
         return

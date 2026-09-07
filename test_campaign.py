@@ -1324,6 +1324,31 @@ def test_attempt_PROBES_before_it_acts_and_never_ticks_the_item_itself():
         assert out["probed"] == 1 and out["left_alone"] >= 1, out
 
 
+def test_ACTIVITY_is_not_PROOF_a_probe_must_affirm_to_close():
+    """Measured on the first live run: a probe answered 'traced it to
+    campaign.md:85, read the original wall, read the superseding record'
+    with blocked_on unset — archaeology, not proof the token is permanent —
+    and the item closed. Closing on 'did something and did not complain' is
+    how an item leaves his list without being true. The probe must state
+    outright that the item IS satisfied."""
+    with tempfile.TemporaryDirectory() as t:
+        gdir, med = _world(t)
+        g = cp.build(goals_dir=gdir, meditation_dir=med, elaborator=_elab)
+        n = [x for x in g["nodes"] if x["kind"] == "goal"][0]
+        wall = cp._wall_node(n, g, "Add the Caddy vhost on the Mumbai box", "agent hit it")
+        cp.save(g, med)
+        cp.attempt(meditation_dir=med, dispatch=lambda node: {"log": "l1", "session": "s1"})
+        busy = _finished(commits=())
+        busy["structured_output"]["blocked_on"] = None
+        busy["structured_output"]["milestone_ticked"] = None
+        busy["structured_output"]["did"] = ["read the Caddyfile", "read three memories about it"]
+        cp.tick(meditation_dir=med, dispatch=lambda x: None,
+                read_result=lambda log: busy if log == "l1" else None)
+        w = [x for x in cp.load(med)["nodes"] if x["id"] == wall["id"]][0]
+        assert w["status"] == "waiting" and w.get("done_by") != "probe", w
+        assert "did not establish" in (w.get("probe_said") or "").lower(), w.get("probe_said")
+
+
 def test_a_probe_that_says_ITS_YOURS_hands_it_back_and_does_not_ask_again():
     """The falsifier for the whole feature: when the probe reports the item
     genuinely needs him, it returns to his list with the reason attached and
@@ -1359,6 +1384,7 @@ def test_a_probe_that_DID_it_closes_the_item_with_its_proof():
         cp.attempt(meditation_dir=med, dispatch=lambda node: {"log": "l1", "session": "s1"})
         res = _finished(commits=())
         res["structured_output"]["blocked_on"] = None
+        res["structured_output"]["milestone_ticked"] = "Verify the pixel id in stack.env matches the one queried"
         res["structured_output"]["did"] = ["ssh'd to the box; stack.env carries 980984061684331, matches"]
         cp.tick(meditation_dir=med, dispatch=lambda x: None,
                 read_result=lambda log: res if log == "l1" else None)
