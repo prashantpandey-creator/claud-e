@@ -218,6 +218,87 @@ def test_an_EMPTY_branch_still_answers_the_question_asked():
         tree.build = real
 
 
+# ---------------------------------------------------------------------------
+# a question is not an order — and the bot can see what it is doing
+# ---------------------------------------------------------------------------
+
+ASKING = [
+    "what are you running right now?",
+    "what are you working on",
+    "did that start yet",
+    "what did you fix today",
+    "how is the run going",
+    "any updates on what you are doing",
+    "what have you shipped",
+    "is anything still running",
+]
+
+TELLING = [
+    "run the fleet",
+    "go ahead",
+    "start the agents",
+    "fix the broken memories",
+    "do it",
+]
+
+
+def test_a_QUESTION_is_never_an_order():
+    """The owner's own report: 'my bot starts working on things on its own'.
+
+    _COMMAND matched run|launch|start|dispatch|fix|repair anywhere in the
+    text and was checked FIRST, so 'what are you RUNNING?' fired `go` and
+    launched the whole fleet. He was not being disobeyed — his questions
+    were being read as orders."""
+    for q in ASKING:
+        r = cv.turn(q, allow_actions=True, runner=lambda a: (_ for _ in ()).throw(
+            AssertionError("a question dispatched %r" % a)))
+        assert r["intent"] != "command", (q, r["intent"])
+        assert r["executed"] is False, q
+        assert r["action"] is None, (q, r["action"])
+
+
+def test_an_ORDER_is_still_an_order():
+    """The falsifier: this must not become a bot that never acts."""
+    for c in TELLING:
+        ran = []
+        r = cv.turn(c, allow_actions=True,
+                    runner=lambda a: ran.append(a) or {"started": True, "output": "ok"})
+        assert r["intent"] == "command", (c, r["intent"])
+        assert ran, c
+
+
+def test_asking_what_it_is_DOING_answers_from_the_live_run():
+    """'Make it conversational and able to give updates on what it's doing.'
+    converse.py had ZERO references to the campaign or the live agents, so
+    the one question he most wanted to ask was the one it could not answer."""
+    state = {"armed": True,
+             "metrics": {"done": 4, "nodes": 46, "running": 2, "spent_usd": 12.5,
+                         "verified_commits": 3, "human": 8},
+             "nodes": [{"id": "n1", "kind": "goal", "status": "running",
+                        "title": "Add the Caddy vhost", "goal_title": "Mila live"},
+                       {"id": "n2", "kind": "goal", "status": "running",
+                        "title": "Wire the CI gate", "goal_title": "Mila live"}]}
+    said = cv.running_now(status=lambda: state, agents=lambda: [])
+    assert "2" in said, said
+    assert "Caddy" in said or "CI gate" in said, said
+    assert "8" in said, "it must say how many are waiting on him: %s" % said
+    for q in ("what are you running right now?", "what are you working on"):
+        r = cv.turn(q, status=lambda: state, agents=lambda: [])
+        assert r["intent"] == "running", (q, r["intent"])
+        assert "Caddy" in r["speech"] or "CI gate" in r["speech"], r["speech"]
+
+
+def test_it_says_plainly_when_NOTHING_is_running():
+    """Absence rendered as absence, not as silence or a guess."""
+    idle = {"armed": False, "metrics": {"done": 0, "nodes": 0, "running": 0,
+                                        "spent_usd": 0, "verified_commits": 0, "human": 0},
+            "nodes": []}
+    said = cv.running_now(status=lambda: idle, agents=lambda: [])
+    assert "nothing" in said.lower() or "no agents" in said.lower(), said
+    r = cv.turn("what are you doing", status=lambda: idle, agents=lambda: [])
+    assert r["intent"] == "running" and r["speech"], r
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

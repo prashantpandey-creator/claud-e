@@ -1499,8 +1499,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     detail = data.get("launched") or []
     if detail:
         heads = " and ".join(d["title"] for d in detail[:3])
-        print("Started %d agent%s \u2014 %s. Each is in its own Terminal "
-              "window." % (len(detail), "" if len(detail) == 1 else "s", heads))
+        # NOT "in its own Terminal window" — that has been false since
+        # dispatch became headless-only. Every agent runs in the background;
+        # the twin is where you watch them.
+        print("Started %d agent%s \u2014 %s. All in the background; watch them "
+              "on the twin, or ask Casper what they are doing."
+              % (len(detail), "" if len(detail) == 1 else "s", heads))
         for d in detail:
             print("  \u2022 %s \u2014 %s  (in %s)"
                   % (d["title"], d["doing"][:90],

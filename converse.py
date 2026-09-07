@@ -54,6 +54,69 @@ _COMMAND = re.compile(r"\b(run|launch|start|dispatch|fix|repair|grade|"
                       r"go ahead|do it)\b", re.I)
 _PROJECT_Q = re.compile(r"\b(how(?:'s| is| are)|status of|where(?:'s| is)|"
                         r"progress on)\b", re.I)
+# A QUESTION IS NEVER AN ORDER.
+#
+# _COMMAND matches run|launch|start|fix|repair anywhere in the text and used
+# to be checked first, so "what are you RUNNING?" fired `go` and launched the
+# whole fleet, and "did that START yet" did the same. The owner reported it
+# as "my bot starts working on things on its own" — he was not being
+# disobeyed, his questions were being read as orders.
+_ASKING = re.compile(r"^\s*(what|what'?s|how|how'?s|why|when|where|which|who|is|are|was|were|"
+                     r"did|does|do you|can you|could you|have you|has|any|anything|tell me)\b"
+                     r"|\?\s*$", re.I)
+# "what are you doing" — the question he most wanted to ask, and the one
+# converse could not answer at all: it had zero references to the campaign
+# or the live agents.
+_RUNNING = re.compile(r"\b(what are you (doing|working on|running|up to)|what'?s running|"
+                      r"anything running|still running|what have you (done|shipped|finished)|"
+                      r"how(?:'s| is) the (run|campaign|swarm)|any updates?|what did you (do|fix|ship))\b",
+                      re.I)
+
+
+def running_now(status: Optional[Callable] = None,
+                agents: Optional[Callable] = None) -> str:
+    """What the swarm is doing, in one spoken paragraph.
+
+    Reads the campaign and the live agent logs — the two things the bot
+    could not see, which is why it could never say what it was doing."""
+    try:
+        if status is None:
+            import campaign as _cp
+            status = lambda: _cp.status()
+        st = status() or {}
+    except Exception:
+        return "I can't read the run right now."
+    m = st.get("metrics") or {}
+    nodes = st.get("nodes") or []
+    live = [n for n in nodes if n.get("status") == "running"]
+    try:
+        if agents is None:
+            import go as _go
+            agents = lambda: _go.live_agents()
+        alive = [a for a in (agents() or []) if a.get("alive")]
+    except Exception:
+        alive = []
+    bits: List[str] = []
+    if live:
+        what = "; ".join("%s" % (n.get("title") or "")[:70] for n in live[:3])
+        bits.append("%d agent%s working right now — %s."
+                    % (len(live), "" if len(live) == 1 else "s", what))
+    elif st.get("armed"):
+        bits.append("The run is armed but nothing is moving this minute.")
+    else:
+        bits.append("Nothing is running — no agents out.")
+    done, total = m.get("done", 0), m.get("nodes", 0)
+    if total:
+        bits.append("%d of %d steps done, %d commit%s verified, $%.2f spent."
+                    % (done, total, m.get("verified_commits", 0),
+                       "" if m.get("verified_commits", 0) == 1 else "s",
+                       float(m.get("spent_usd") or 0)))
+    hands = m.get("human", 0)
+    if hands:
+        bits.append("%d thing%s waiting on you." % (hands, "" if hands == 1 else "s"))
+    if alive and not live:
+        bits.append("%d agent process%s still open." % (len(alive), "" if len(alive) == 1 else "es"))
+    return " ".join(bits)
 
 
 def _projects(**kw) -> List[Dict[str, Any]]:
@@ -79,7 +142,9 @@ def turn(utterance: str, allow_actions: bool = False,
          runner: Optional[Callable[[str], Dict[str, Any]]] = None,
          meditation_dir: Optional[str] = None, store_dir: Optional[str] = None,
          goals_dir: Optional[str] = None,
-         history_path: Optional[str] = None) -> Dict[str, Any]:
+         history_path: Optional[str] = None,
+         status: Optional[Callable] = None,
+         agents: Optional[Callable] = None) -> Dict[str, Any]:
     """One exchange. Returns what to SAY, plus any action taken."""
     import voice as vc
 
@@ -102,7 +167,13 @@ def turn(utterance: str, allow_actions: bool = False,
         return out
 
     # --- command ----------------------------------------------------------
-    if _COMMAND.search(text):
+    # what it is doing, before anything can mistake the question for an order
+    if _RUNNING.search(text):
+        out["intent"] = "running"
+        out["speech"] = running_now(status=status, agents=agents)
+        return out
+
+    if _COMMAND.search(text) and not _ASKING.search(text):
         act = ("fix" if re.search(r"\b(fix|repair)\b", text, re.I)
                else "grade" if re.search(r"\bgrade\b", text, re.I)
                else "go")
