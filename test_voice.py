@@ -171,6 +171,89 @@ def test_patience_never_overrides_a_meeting():
     assert r["interrupt_ok"] is False and r["state"] == "meeting", r
 
 
+# ---------------------------------------------------------------------------
+# the bot volunteers what changed in the run, without being asked
+# ---------------------------------------------------------------------------
+
+def _run(done=0, running=0, hands=0, commits=0, shipped=(), events=()):
+    nodes = [{"id": "r%d" % i, "kind": "goal", "status": "running",
+              "title": "step %d" % i, "goal_title": "G"} for i in range(running)]
+    nodes += [{"id": "d%d" % i, "kind": "goal", "status": "done", "title": t,
+               "goal_title": "G", "result": {"verified_commits": ["abc1234"]}}
+              for i, t in enumerate(shipped)]
+    nodes += [{"id": "h%d" % i, "kind": "human", "status": "waiting",
+               "title": "yours %d" % i, "goal_title": "G"} for i in range(hands)]
+    return {"armed": True, "nodes": nodes,
+            "events": [{"what": e} for e in events],
+            "metrics": {"done": done, "nodes": 10, "running": running,
+                        "spent_usd": 3.0, "verified_commits": commits, "human": hands}}
+
+
+def test_a_finished_step_is_VOLUNTEERED_once():
+    """"The bot should give us an update on what it's doing." It could
+    answer when asked, but never spoke first — so a step that shipped while
+    he was away was news nobody delivered."""
+    import tempfile, voice as vc
+    with tempfile.TemporaryDirectory() as t:
+        before = _run(done=0, running=1)
+        after = _run(done=1, running=0, commits=1, shipped=("Wire the CI gate",))
+        # first call learns the world; it must not narrate history at him
+        first = vc.run_update(status=lambda: before, meditation_dir=t)
+        assert first is None, first
+        said = vc.run_update(status=lambda: after, meditation_dir=t)
+        assert said and "CI gate" in said, said
+        # and it is said ONCE
+        assert vc.run_update(status=lambda: after, meditation_dir=t) is None
+
+
+def test_a_NEW_thing_on_his_list_is_volunteered_too():
+    import tempfile, voice as vc
+    with tempfile.TemporaryDirectory() as t:
+        vc.run_update(status=lambda: _run(running=1), meditation_dir=t)
+        said = vc.run_update(status=lambda: _run(running=1, hands=2), meditation_dir=t)
+        assert said and ("2" in said or "two" in said.lower()), said
+        assert "you" in said.lower(), said
+
+
+def test_a_QUIET_run_says_nothing_at_all():
+    """The failure mode that kills a notifier: something to say every time.
+    An unchanged run is silence, not a status recital."""
+    import tempfile, voice as vc
+    with tempfile.TemporaryDirectory() as t:
+        state = _run(done=3, running=2, hands=1)
+        vc.run_update(status=lambda: state, meditation_dir=t)
+        for _ in range(3):
+            assert vc.run_update(status=lambda: state, meditation_dir=t) is None
+
+
+def test_the_voice_bookmark_does_not_EAT_the_mail_lane_s_changes():
+    """Both channels read the same fingerprint. If they shared one bookmark
+    whichever ran first would mark the change seen and the other would go
+    silent — the mail digest and the spoken update must each get it."""
+    import tempfile, voice as vc, mail as ml
+    with tempfile.TemporaryDirectory() as t:
+        before, after = _run(running=1), _run(done=1, commits=1, shipped=("Ship it",))
+        # Both lanes take the bookmark first, then the change arrives.
+        # Asserted on SEEING it, not on delivery: a clean HOME has no
+        # ~/.sendmail.conf, so asserting the mail actually sent tested the
+        # machine's mail setup instead of the bookmarks.
+        vc.run_update(status=lambda: before, meditation_dir=t)
+        st = ml.load_state(t)
+        st["fingerprint"] = ml.fingerprint(before)
+        ml.save_state(st, t)
+        assert vc.run_update(status=lambda: after, meditation_dir=t), "voice went silent"
+        assert ml.digest(after, ml.load_state(t)), "mail went silent after voice spoke"
+
+
+def test_the_briefing_LEADS_with_run_news_when_there_is_some():
+    """Casper speaks voice.py's headline — that is the whole delivery path,
+    no Swift changes. So the update has to reach the headline or it is
+    built and not wired."""
+    import inspect, voice as vc
+    src = inspect.getsource(vc.briefing)
+    assert "run_update" in src, "the briefing never asks for run news"
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

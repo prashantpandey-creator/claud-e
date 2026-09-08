@@ -270,6 +270,86 @@ def _greeting(meditation_dir: str = MEDITATION_DIR) -> str:
     return "Late one. "
 
 
+# The bot could answer "what are you doing" but never spoke FIRST, so a step
+# that shipped while he was away was news nobody delivered. Casper polls
+# voice.py --json and speaks its headline, so a lane here IS the delivery
+# path — no Swift, no new daemon, no second notifier.
+RUN_BOOKMARK = ".run-spoken.json"
+
+
+def run_update(status: Optional[Callable] = None,
+               meditation_dir: str = MEDITATION_DIR) -> Optional[str]:
+    """What changed in the run since this lane last spoke, or None.
+
+    Change detection is mail.fingerprint — one computation, two channels.
+    The bookmark is its OWN file: sharing mail's would mean whichever ran
+    first marked the change seen and the other went silent.
+
+    The first call on a fresh machine learns the world and says nothing;
+    narrating history at someone who just walked in is not an update."""
+    try:
+        import mail as _ml
+        if status is None:
+            import campaign as _cp
+            status = lambda: _cp.status(meditation_dir)
+        g = status() or {}
+    except Exception:
+        return None
+    if not g.get("nodes") and not (g.get("metrics") or {}).get("nodes"):
+        return None
+    try:
+        fp = _ml.fingerprint(g)
+    except Exception:
+        return None
+    path = os.path.join(meditation_dir, RUN_BOOKMARK)
+    try:
+        prev = json.load(open(path))
+    except (OSError, ValueError):
+        prev = None
+    try:
+        os.makedirs(meditation_dir, exist_ok=True)
+        with open(path, "w") as fh:
+            json.dump(fp, fh)
+    except OSError:
+        pass
+    if prev is None or prev == fp:
+        return None
+    nodes = {n["id"]: n for n in (g.get("nodes") or [])}
+    bits: List[str] = []
+    _DANGLING = {"on", "the", "a", "an", "in", "at", "to", "for", "of", "with",
+                 "and", "or", "from", "by", "into", "onto", "so", "that", "its"}
+
+    def _short(t: str, n: int = 64) -> str:
+        """Spoken aloud, so it has to END somewhere real.
+
+        A hard slice gave "on the Mumbai b is done"; a word boundary alone
+        gave "for pia.purangpt.com on the is done". Trailing connectives go
+        too, so the sentence lands on a word that carries meaning."""
+        t = (t or "a step").strip()
+        if len(t) <= n:
+            return t
+        words = t[:n].rsplit(" ", 1)[0].split()
+        while words and words[-1].strip(",;:.—-").lower() in _DANGLING:
+            words.pop()
+        return (" ".join(words) or t[:n]).rstrip(",;:—-")
+    shipped = [i for i in fp.get("done", []) if i not in (prev.get("done") or [])]
+    for i in shipped[:2]:
+        bits.append("%s is done" % _short(nodes.get(i, {}).get("title") or "a step"))
+    new_hands = [i for i in fp.get("hands", []) if i not in (prev.get("hands") or [])]
+    if new_hands:
+        bits.append("%d new thing%s needs you"
+                    % (len(new_hands), "" if len(new_hands) == 1 else "s"))
+    if fp.get("stopped", 0) > (prev.get("stopped") or 0):
+        bits.append("an agent stopped without finishing")
+    if fp.get("held") and not prev.get("held"):
+        bits.append("we hit a usage limit, so the run is holding")
+    if fp.get("closed") and not prev.get("closed"):
+        bits.append("the run finished and the summary is written")
+    if not bits:
+        return None
+    return "; ".join(bits) + "."
+
+
 def briefing(meditation_dir: str = MEDITATION_DIR, store_dir: str = STORE_DIR,
              goals_dir: Optional[str] = None,
              history_path: Optional[str] = None) -> Dict[str, Any]:
@@ -282,6 +362,18 @@ def briefing(meditation_dir: str = MEDITATION_DIR, store_dir: str = STORE_DIR,
 
     d = st.gather(meditation_dir=meditation_dir, store_dir=store_dir,
                   goals_dir=goals_dir, history_path=history_path)
+
+    # 0. what just happened in the run he armed. It goes FIRST because it is
+    # the only lane that is genuinely new information — every other lane
+    # describes a standing condition that will still be true in an hour.
+    # Silent unless something actually moved.
+    try:
+        news = run_update(meditation_dir=meditation_dir)
+    except Exception:
+        news = None
+    if news:
+        return {"headline": _greeting(meditation_dir) + news,
+                "action": "", "kind": "run", "next": ""}
 
     # 1. knowledge broke — say WHICH IDEA, in the owner's own words.
     # "23 facts failed" is a metric; "the thing you told me about CarryMate
