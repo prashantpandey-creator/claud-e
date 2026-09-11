@@ -897,6 +897,20 @@ def test_every_role_may_run_the_tools_OWN_cli_and_read_the_goal_files():
         assert not any(d.startswith("--") for d in dirs), "variadic: it must be LAST, or it swallows the next flag"
 
 
+def test_read_only_roles_may_LOOK_at_the_web_and_dns():
+    """Live probes 2026-09-11: 5 of 7 came back 'still yours' because curl,
+    dig and WebFetch were denied to the assess role — reading a DNS record
+    or a public page changes nothing and is exactly what a probe is for."""
+    import go
+    roles = go.roles()["roles"]
+    for kind in ("assess", "revive"):
+        for tool in ("WebFetch", "WebSearch", "Bash(dig:*)", "Bash(nslookup:*)", "Bash(host:*)", "Bash(curl:*)"):
+            assert tool in roles[kind]["allowed"], (kind, tool)
+        # and still no hands: nothing that edits, commits, pushes or reaches a box
+        for tool in ("Edit", "Write", "Bash(git push:*)", "Bash(ssh:*)"):
+            assert tool in roles[kind]["disallowed"], (kind, tool)
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

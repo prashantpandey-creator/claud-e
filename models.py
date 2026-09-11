@@ -259,7 +259,20 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--sessions", action="store_true", help="per-session breakdown")
     ap.add_argument("--limit", type=int, default=40, help="how many transcripts")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--sweep", action="store_true",
+                    help="settle every agent worktree still on disk; say what was kept and why")
     a = ap.parse_args(argv)
+    if a.sweep:
+        res = sweep_worktrees()
+        if a.json:
+            print(json.dumps({"tool_name": "meditate_models_sweep", "success": True,
+                              "data": res, "metadata": {"root": WORKTREE_ROOT}, "errors": []}, indent=2))
+            return 0
+        for k, v in res.items():
+            print("  %-60s %s" % (k[:60], v))
+        print("%d removed, %d kept" % (sum(1 for v in res.values() if v.startswith("removed")),
+                                       sum(1 for v in res.values() if v.startswith("kept"))))
+        return 0
     d = scan(a.limit)
     if a.json:
         print(json.dumps({"tool_name": "meditate_models", "success": True,
@@ -275,9 +288,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(render(d))
     return 0
 
-
-if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
 
 
 # ---------------------------------------------------------------------------
@@ -562,6 +572,68 @@ def _remove_worktree(top: str, wt: str) -> str:
     return "kept: " + err[:200]
 
 
+WORKTREE_ROOT = os.path.expanduser("~/.local/share/meditate/worktrees")
+
+
+def sweep_worktrees(root: str = WORKTREE_ROOT, log_dir: Optional[str] = None) -> Dict[str, str]:
+    """Every agent worktree still on disk, settled by the same rules as a
+    finished run. reconcile() settles a worktree ONCE, when its run's log
+    is first read; a removal that failed then (the bootstrap's own dirt)
+    was never retried — 9 dirs / 3.7 GB by 2026-09-12. Never a main
+    checkout, never a run still going, never real work."""
+    import glob as _g
+    import subprocess as _sp
+    out: Dict[str, str] = {}
+    log_dir = log_dir or AGENT_LOGS
+    if not os.path.isdir(root):
+        return out
+    tops = set()
+    for name in sorted(os.listdir(root)):
+        wt = os.path.join(root, name)
+        if not os.path.isdir(wt):
+            continue
+        try:
+            common = _sp.run(["git", "-C", wt, "rev-parse", "--git-common-dir"],
+                             capture_output=True, text=True, timeout=10)
+            branch = _sp.run(["git", "-C", wt, "rev-parse", "--abbrev-ref", "HEAD"],
+                             capture_output=True, text=True, timeout=10)
+        except (OSError, _sp.TimeoutExpired):
+            out[name] = "skipped: not readable"
+            continue
+        if common.returncode != 0 or branch.returncode != 0:
+            out[name] = "skipped: not a git worktree"
+            continue
+        common_dir = os.path.realpath(os.path.join(wt, common.stdout.strip()))
+        if os.path.dirname(common_dir) == os.path.realpath(wt):
+            # its .git IS here: a main checkout, whoever put it here
+            out[name] = "skipped: a main checkout, not an agent worktree"
+            continue
+        top = os.path.dirname(common_dir)
+        key = ""
+        for p in _g.glob(os.path.join(log_dir, "*.log")):
+            try:
+                head = open(p, errors="replace").read(1500)
+            except OSError:
+                continue
+            if "# worktree: " + wt in head:
+                key = os.path.basename(p)
+                if '"total_cost_usd"' not in open(p, errors="replace").read():
+                    key = "running"
+                break
+        if key == "running":
+            out[name] = "skipped: running"
+            continue
+        out[name] = _settle_worktree({"worktree": wt, "branch": branch.stdout.strip(), "cwd": top},
+                                     log_dir, key)
+        tops.add(top)
+    for top in tops:
+        try:
+            _sp.run(["git", "-C", top, "worktree", "prune"], capture_output=True, timeout=20)
+        except (OSError, _sp.TimeoutExpired):
+            pass
+    return out
+
+
 def reconcile(log_dir: Optional[str] = None,
               ledger: Optional[str] = None) -> Dict[str, Any]:
     """Read finished agent logs and record what each one really cost.
@@ -729,7 +801,12 @@ def _reconcile_locked(log_dir: str, ledger: str) -> Dict[str, Any]:
                     f.write(json.dumps(r) + "\n")
         except OSError:
             pass
-    return {"added": len(added), "pending": pending, "rows": added}
+    swept: Dict[str, str] = {}
+    if log_dir == AGENT_LOGS:
+        # the real machine only — a test's temp log dir must never reach
+        # the real worktrees
+        swept = {k: v for k, v in sweep_worktrees(log_dir=log_dir).items() if v.startswith("removed")}
+    return {"added": len(added), "pending": pending, "rows": added, "swept": swept}
 
 
 def spend(ledger: Optional[str] = None) -> Dict[str, Any]:
@@ -824,3 +901,7 @@ def budget_for(kind: str, headroom: float = 2.0,
                    "every dispatch pays ~26k cache-creation tokens before it "
                    "starts" % (kind, len(same)),
             "runs": len(same), "median": None}
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

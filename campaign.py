@@ -1920,7 +1920,24 @@ def _tick(meditation_dir: str = MEDITATION_DIR, dispatch: Optional[Callable] = N
     if medians is None:
         medians = median_duration_by_kind(ledger)
     t = now_f()
+    done_ids = {m["id"] for m in g["nodes"] if m["status"] == "done"}
     for n in g["nodes"]:
+        if n["status"] == "failed" and not n.get("auto_retried") and n.get("kind") != "human" \
+                and all(d in done_ids for d in n.get("depends_on") or []):
+            # A cleared wall unblocked nothing: ready() only ever looked at
+            # pending, and three failed nodes sat terminal with every
+            # dependency done (one for seven days). One fresh run; a
+            # second failure is a real one.
+            n["auto_retried"] = _now_iso()
+            n["status"] = "pending"
+            n["session"] = ""
+            n["resume_message"] = ""
+            n["worktree"] = ""
+            n["stuck"] = False
+            g["events"].append({"ts": _now_iso(), "what": "retried", "node": n["id"],
+                                "why": "every dependency is done; it had failed on: %s"
+                                       % str(n.get("why_failed") or "")[:80]})
+            continue
         if n.get("status") == "probing":
             # A probe answers one question: is this really his? It never
             # edits, so its result is not absorbed as work — it either

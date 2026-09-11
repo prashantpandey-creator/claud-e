@@ -1717,6 +1717,44 @@ def test_the_tick_falls_through_to_OTHER_work_when_nothing_is_ready():
         assert calls == [], calls
 
 
+def test_a_FAILED_node_whose_walls_have_cleared_runs_again_ONCE():
+    """Three failed nodes sat terminal in the live graph on 2026-09-12 with
+    every dependency done — one had failed on 'dispatch refused' seven days
+    before the wall it waited on cleared. ready() only ever looked at
+    pending, so a cleared wall unblocked nothing. Once: a second failure is
+    a real failure."""
+    with tempfile.TemporaryDirectory() as t:
+        gdir, med = _world(t)
+        g = cp.build(goals_dir=gdir, meditation_dir=med, elaborator=lambda a, b: [])
+        n = [x for x in g["nodes"] if not x["depends_on"]][0]
+        n["status"] = "failed"
+        n["why_failed"] = "dispatch refused"
+        g["armed"] = True
+        cp.save(g, med)
+        sent = []
+        cp.tick(meditation_dir=med, max_parallel=1,
+                dispatch=lambda x: sent.append(x["id"]) or {"log": "l", "session": "s"})
+        g2 = cp.load(med)
+        n2 = _node(g2, n["id"])
+        assert sent == [n["id"]], sent
+        assert n2["status"] == "running" and n2.get("auto_retried"), n2["status"]
+        assert any(e["what"] == "retried" and e["node"] == n["id"] for e in g2["events"])
+        # it fails again: terminal now, no loop
+        cp.tick(meditation_dir=med, max_parallel=1, dispatch=lambda x: {"log": "l2", "session": "s"},
+                read_result=lambda l: ({"type": "result", "subtype": "error_max_budget_usd", "is_error": True,
+                                        "total_cost_usd": 0.1, "num_turns": 1} if l == "l" else None))
+        g3 = cp.load(med)
+        assert _node(g3, n["id"])["status"] == "failed"
+        cp.tick(meditation_dir=med, max_parallel=1, read_result=lambda l: None,
+                death=lambda l: "", log_mtime=lambda l: None,
+                dispatch=lambda x: sent.append(x["id"]) or {"log": "l3", "session": "s"})
+        assert sent.count(n["id"]) == 1, sent
+        # a failed node still waiting on an open wall is left alone
+        g4 = cp.load(med)
+        m = [x for x in g4["nodes"] if x["depends_on"] and x["status"] == "pending"]
+        assert m, "the fixture has a dependent node"
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

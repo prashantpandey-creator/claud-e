@@ -718,6 +718,42 @@ def test_a_worktree_with_REAL_dirt_is_kept_and_the_reason_is_whole():
         assert os.path.isdir(wt)
 
 
+def test_sweep_settles_worktrees_reconcile_never_looked_at_again():
+    """reconcile() settles a worktree once, when its run's log is first
+    read; a removal that failed then was never retried. The sweep applies
+    the same rules to every agent worktree still on disk — and never to a
+    main checkout, whatever directory it finds one in."""
+    with tempfile.TemporaryDirectory() as t:
+        top, wt = _repo_with_pushed_worktree(t)
+        root = os.path.join(t, "wts"); os.makedirs(root)
+        clean = os.path.join(root, os.path.basename(wt)); os.rename(wt, clean)
+        # git must learn the move, or the entry points at the old path
+        import subprocess as sp
+        sp.run(["git", "-C", top, "worktree", "repair", clean], check=True, capture_output=True)
+        # a second worktree with the agent's own uncommitted file
+        dirty = os.path.join(root, "wt-dirty")
+        sp.run(["git", "-C", top, "worktree", "add", "-q", "-b", "agent/y", dirty], check=True, capture_output=True)
+        sp.run(["git", "-C", dirty, "push", "-q", "-u", "origin", "agent/y"], check=True, capture_output=True)
+        open(os.path.join(dirty, "forgotten.js"), "w").write("x")
+        # a MAIN checkout sitting inside the root must be left alone
+        main2 = os.path.join(root, "someone-elses-checkout")
+        sp.run(["git", "clone", "-q", os.path.join(t, "remote.git"), main2], check=True, capture_output=True)
+        logs = os.path.join(t, "logs"); os.makedirs(logs)
+        out = models.sweep_worktrees(root=root, log_dir=logs)
+        assert out[os.path.basename(clean)].startswith("removed"), out
+        assert not os.path.isdir(clean)
+        assert out["wt-dirty"].startswith("kept:") and "forgotten.js" in out["wt-dirty"], out
+        assert out["someone-elses-checkout"].startswith("skipped"), out
+        assert os.path.isdir(main2) and os.path.isdir(dirty)
+        # a worktree whose run is still going is never touched
+        running = os.path.join(root, "wt-running")
+        sp.run(["git", "-C", top, "worktree", "add", "-q", "-b", "agent/z", running], check=True, capture_output=True)
+        open(os.path.join(logs, "k.log"), "w").write("# goal-x\n# cwd: %s\n# model: sonnet effort: \n# session: s\n# worktree: %s\n# branch: agent/z\n" % (top, running))
+        out = models.sweep_worktrees(root=root, log_dir=logs)
+        assert out["wt-running"].startswith("skipped: running"), out
+        assert os.path.isdir(running)
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0
