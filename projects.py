@@ -413,6 +413,80 @@ def known_project_names(ttl_s: float = 300.0) -> set:
     return names
 
 
+# ---------------------------------------------------------------------------
+# "list my active projects, work the top 3, priority by time I spend on them"
+#
+# The ranking data was already collected and never askable: `messages` per
+# project IS the time measure. What it lacked was the second half — measured
+# on the real machine 2026-09-10, of the top three by attention two had
+# nothing open and the third's top task was "iOS subscriptions approved",
+# which is Apple's decision. Ranking on time alone sends agents at nothing.
+# ---------------------------------------------------------------------------
+
+def by_attention(limit: Optional[int] = None,
+                 rows: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
+    """Every project by where the time actually went, each carrying whether
+    there is work a machine could pick up."""
+    rows = rows if rows is not None else rollup()
+    total = sum(r.get("messages", 0) for r in rows) or 1
+    try:
+        import campaign as _cp
+        machine_work = lambda t: _cp.classify_human(t).get("attempt", False) or             not _cp.classify_human(t).get("kind") == "yours"
+    except Exception:
+        machine_work = lambda t: True
+    out: List[Dict[str, Any]] = []
+    for r in sorted(rows, key=lambda x: x.get("messages", 0), reverse=True):
+        open_tasks = r.get("open_tasks") or []
+        doable, yours = [], 0
+        for t in open_tasks:
+            text = str(t.get("task") or "")
+            if machine_work(text):
+                doable.append(t)
+            else:
+                yours += 1
+        out.append({"project": r.get("project", "?"),
+                    "share": round(100.0 * r.get("messages", 0) / total, 1),
+                    "messages": r.get("messages", 0),
+                    "goals": r.get("goals", 0),
+                    "open": len(open_tasks),
+                    "doable": doable,
+                    "blocked_on_you": yours,
+                    "last_touched_days": r.get("last_touched_days"),
+                    "commits_recent": r.get("commits_recent", 0)})
+    return out[:limit] if limit else out
+
+
+def top_actionable(n: int = 3, rows: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
+    """The top N projects by attention THAT HAVE WORK. "Complete the top 3"
+    has to mean three that can be worked, or it is three agents sent at
+    empty projects."""
+    return [r for r in by_attention(rows=rows) if r["doable"]][:n]
+
+
+def speak_attention(rows: Optional[List[Dict[str, Any]]] = None, limit: int = 5) -> str:
+    """The ranked list, out loud. Says which have nothing open — silence
+    about the empty ones is how "work my top 3" becomes a mystery when
+    nothing happens."""
+    ranked = by_attention(rows=rows)[:limit]
+    if not ranked:
+        return "I have no projects on record yet."
+    lead = ", ".join("%s %s%%" % (r["project"], r["share"]) for r in ranked[:3])
+    bits = ["Your time went to " + lead + "."]
+    with_work = [r for r in ranked if r["doable"]]
+    empty = [r for r in ranked if not r["doable"]]
+    if with_work:
+        bits.append("Work I can pick up: " +
+                    ", ".join("%s (%d)" % (r["project"], len(r["doable"])) for r in with_work) + ".")
+    if empty:
+        bits.append(", ".join(r["project"] for r in empty) +
+                    (" has" if len(empty) == 1 else " have") + " nothing open.")
+    waiting = sum(r["blocked_on_you"] for r in ranked)
+    if waiting:
+        bits.append("%d open task%s waits on you, not me."
+                    % (waiting, "" if waiting == 1 else "s"))
+    return " ".join(bits)
+
+
 def _usable(name: Optional[str]) -> Optional[str]:
     if not name or name.startswith(".") or len(name) < 3:
         return None

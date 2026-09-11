@@ -299,6 +299,21 @@ def test_it_says_plainly_when_NOTHING_is_running():
     assert r["intent"] == "running" and r["speech"], r
 
 
+def test_asking_for_the_PROJECT_LIST_answers_with_the_ranking():
+    """He asked: "can i ask the twin for a list of active projects?" — and
+    all three phrasings fell through to the generic brief. The ranking was
+    collected all along and had never been askable."""
+    rows = [{"project": "meditate", "messages": 2585, "goals": 2, "open_tasks": []},
+            {"project": "purangpt", "messages": 1399, "goals": 3,
+             "open_tasks": [{"goal": "g", "task": "Add the Caddy vhost on the box", "pct": 50}]}]
+    for q in ("what are my active projects", "list my projects",
+              "where am i spending my time", "what am i spending most time on"):
+        r = cv.turn(q, rows=rows)
+        assert r["intent"] == "projects", (q, r["intent"])
+        assert "meditate" in r["speech"] and "purangpt" in r["speech"], (q, r["speech"])
+        assert "%" in r["speech"], r["speech"]
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

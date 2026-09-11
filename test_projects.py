@@ -390,6 +390,70 @@ def test_commit_cache_keeps_hits_and_not_misses():
         pj._SHA_LOADED = False
 
 
+# ---------------------------------------------------------------------------
+# "list my active projects, work the top 3, priority = where my time goes"
+# ---------------------------------------------------------------------------
+
+def _rows():
+    return [
+        {"project": "meditate", "messages": 2585, "goals": 2, "open_tasks": [],
+         "last_touched_days": 0, "commits_recent": 9},
+        {"project": "purangpt", "messages": 1399, "goals": 3, "last_touched_days": 1,
+         "commits_recent": 4,
+         "open_tasks": [{"goal": "purangpt-mobile-live", "task": "iOS subscriptions approved", "pct": 75.0},
+                        {"goal": "meta-ads-india", "task": "Add the Caddy vhost on the Mumbai box", "pct": 55.6}]},
+        {"project": "web", "messages": 438, "goals": 0, "open_tasks": [],
+         "last_touched_days": 12, "commits_recent": 0},
+        {"project": "tutor", "messages": 135, "goals": 1, "last_touched_days": 3,
+         "commits_recent": 1,
+         "open_tasks": [{"goal": "tutor-live", "task": "Wire the success path", "pct": 20.0}]},
+    ]
+
+
+def test_projects_rank_by_where_the_TIME_actually_went():
+    """His own definition of priority: 'priority it decides by time i am
+    spending on them'. messages per project is that measure, and it is
+    already collected — it had just never been askable or actionable."""
+    got = pj.by_attention(rows=_rows())
+    assert [r["project"] for r in got][:3] == ["meditate", "purangpt", "web"], got
+    assert got[0]["share"] > got[1]["share"] > got[2]["share"]
+    assert abs(sum(r["share"] for r in got) - 100.0) < 0.5
+
+
+def test_attention_is_not_the_same_as_ACTIONABLE_work():
+    """The finding that decides the feature, measured on his real machine:
+    of the top three by time, two had nothing open and the third's top task
+    was 'iOS subscriptions approved' — Apple's decision. Ranking on time
+    alone would send agents at nothing, twice, then at a wall."""
+    got = {r["project"]: r for r in pj.by_attention(rows=_rows())}
+    assert got["meditate"]["doable"] == [], "no open tasks is not work"
+    assert got["web"]["doable"] == []
+    doable = [t["task"] for t in got["purangpt"]["doable"]]
+    assert "Add the Caddy vhost on the Mumbai box" in doable
+    assert "iOS subscriptions approved" not in doable, "Apple's decision is not machine work"
+    assert got["purangpt"]["blocked_on_you"] == 1, got["purangpt"]
+
+
+def test_top_actionable_SKIPS_the_ones_with_nothing_to_do():
+    """'Complete the top 3' has to mean the top 3 that can be worked, or it
+    is three agents sent at empty projects."""
+    top = pj.top_actionable(3, rows=_rows())
+    assert [r["project"] for r in top] == ["purangpt", "tutor"], top
+    assert top[0]["doable"][0]["task"] == "Add the Caddy vhost on the Mumbai box"
+
+
+def test_the_ranked_list_is_SPEAKABLE_and_says_what_has_no_work():
+    """He asks the bot for this out loud. Silence about the empty ones is
+    how 'work my top 3' becomes a mystery when nothing happens."""
+    said = pj.speak_attention(rows=_rows(), limit=3)
+    assert "meditate" in said and "purangpt" in said
+    # a share, not a specific number: the fixture's percentages are its own,
+    # and pinning the live machine's 41% here would fail everywhere else
+    import re as _re
+    assert _re.search(r"\d+(\.\d+)?%", said), said
+    assert "nothing open" in said.lower() or "no open work" in said.lower(), said
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

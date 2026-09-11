@@ -67,6 +67,12 @@ _ASKING = re.compile(r"^\s*(what|what'?s|how|how'?s|why|when|where|which|who|is|
 # "what are you doing" — the question he most wanted to ask, and the one
 # converse could not answer at all: it had zero references to the campaign
 # or the live agents.
+# "list my active projects" / "where is my time going" — the ranking has
+# been collected since the beginning and was never askable: all three
+# phrasings fell through to the generic status brief.
+_PROJECT_LIST = re.compile(r"\b(my (active )?projects|list (my |the )?projects|"
+                           r"what projects|which projects|spending[\w\s]{0,14}time|"
+                           r"where(?:'s| is| am i spending) my time|where my time)\b", re.I)
 _RUNNING = re.compile(r"\b(what are you (doing|working on|running|up to)|what'?s running|"
                       r"anything running|still running|what have you (done|shipped|finished)|"
                       r"how(?:'s| is) the (run|campaign|swarm)|any updates?|what did you (do|fix|ship))\b",
@@ -144,7 +150,8 @@ def turn(utterance: str, allow_actions: bool = False,
          goals_dir: Optional[str] = None,
          history_path: Optional[str] = None,
          status: Optional[Callable] = None,
-         agents: Optional[Callable] = None) -> Dict[str, Any]:
+         agents: Optional[Callable] = None,
+         rows: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     """One exchange. Returns what to SAY, plus any action taken."""
     import voice as vc
 
@@ -167,6 +174,19 @@ def turn(utterance: str, allow_actions: bool = False,
         return out
 
     # --- command ----------------------------------------------------------
+    # the project list, ranked by where his time went. Before _COMMAND for
+    # the same reason as _RUNNING: "list my projects" contains no command
+    # word today, but "start" or "run" in the same breath would have fired
+    # the fleet.
+    if _PROJECT_LIST.search(text):
+        out["intent"] = "projects"
+        try:
+            import projects as pj
+            out["speech"] = pj.speak_attention(rows=rows)
+        except Exception as e:
+            out["speech"] = "I couldn't read the project list: %s" % str(e)[:90]
+        return out
+
     # what it is doing, before anything can mistake the question for an order
     if _RUNNING.search(text):
         out["intent"] = "running"
