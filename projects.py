@@ -431,16 +431,24 @@ def by_attention(limit: Optional[int] = None,
     total = sum(r.get("messages", 0) for r in rows) or 1
     try:
         import campaign as _cp
-        machine_work = lambda t: _cp.classify_human(t).get("attempt", False) or             not _cp.classify_human(t).get("kind") == "yours"
+        # The SAME gate go.py refuses with. Two gates meant this list offered
+        # work the dispatcher then turned down.
+        machine_work = lambda t: not _cp.needs_hands(t)
     except Exception:
         machine_work = lambda t: True
     out: List[Dict[str, Any]] = []
     for r in sorted(rows, key=lambda x: x.get("messages", 0), reverse=True):
         open_tasks = r.get("open_tasks") or []
-        doable, yours = [], 0
+        doable, yours, paused = [], 0, 0
         for t in open_tasks:
             text = str(t.get("task") or "")
-            if machine_work(text):
+            if str(t.get("status") or "") in ("paused", "done"):
+                # Switched off, not blocked: go refuses a paused goal outright,
+                # so offering its next line as work is the same defect as
+                # offering the owner's own tasks, one layer down. Measured
+                # live — two of three picks came back "the goal is paused".
+                paused += 1
+            elif machine_work(text):
                 doable.append(t)
             else:
                 yours += 1
@@ -450,6 +458,7 @@ def by_attention(limit: Optional[int] = None,
                     "goals": r.get("goals", 0),
                     "open": len(open_tasks),
                     "doable": doable,
+                    "paused": paused,
                     "blocked_on_you": yours,
                     "last_touched_days": r.get("last_touched_days"),
                     "commits_recent": r.get("commits_recent", 0)})
@@ -485,6 +494,98 @@ def speak_attention(rows: Optional[List[Dict[str, Any]]] = None, limit: int = 5)
         bits.append("%d open task%s waits on you, not me."
                     % (waiting, "" if waiting == 1 else "s"))
     return " ".join(bits)
+
+
+def work_top(n: int = 3,
+             rows: Optional[List[Dict[str, Any]]] = None,
+             dispatch: Optional[Any] = None,
+             **go_kwargs: Any) -> List[Dict[str, Any]]:
+    """"Complete the top 3" — send one agent at each of the top N projects
+    by where his time went, at that project's own next task.
+
+    Nothing new dispatches here: each pick is handed to go.run(only_goal=…),
+    which already carries the roles, the tool allowlists and the worktrees.
+    This only decides WHICH, in his order instead of go's.
+
+    Two lines it holds itself: a project with no machine-workable task is
+    not sent at (and says so), and two goals sharing one checkout collapse
+    to one agent — go enforces one-per-directory inside a single run, and
+    these are separate runs that cannot see each other."""
+    picks = top_actionable(n, rows=rows)
+    if dispatch is None:
+        def dispatch(goal, cwd=None):
+            import go
+            return go.run(only_goal=goal, n=1, **go_kwargs)
+    out: List[Dict[str, Any]] = []
+    taken: Dict[str, str] = {}
+    for r in picks:
+        task = r["doable"][0]
+        goal = task.get("goal") or ""
+        # NOT realpath("") — that resolves to whatever directory this process
+        # happens to be in, so every goal missing a cwd would collide with
+        # every other one and only the first would ever be sent.
+        raw_cwd = task.get("cwd") or ""
+        cwd = os.path.realpath(raw_cwd) if raw_cwd else ""
+        row = {"project": r["project"], "goal": goal,
+               "task": task.get("task") or "", "share": r["share"],
+               "sent": False, "why": ""}
+        if cwd and cwd in taken:
+            row["why"] = "%s is already working in that directory" % taken[cwd]
+            out.append(row)
+            continue
+        try:
+            res = dispatch(goal, cwd) or {}
+        except Exception as e:
+            row["why"] = "dispatch failed: %s" % (str(e)[:90])
+            out.append(row)
+            continue
+        if res.get("sent"):
+            row["sent"] = True
+            if cwd:
+                taken[cwd] = goal
+        else:
+            # A refusal is named, never rendered as a start. Nine console
+            # clicks once answered a hidden refusal with started:true.
+            refusals = (res.get("skipped") or []) + (res.get("deferred") or [])
+            row["why"] = (refusals[0].get("why") if refusals
+                          else (str(res.get("errors")[0])[:90] if res.get("errors")
+                                else "go sent nothing and gave no reason"))
+        out.append(row)
+    return out
+
+
+def render(rows: Optional[List[Dict[str, Any]]] = None) -> str:
+    """The ranked table as text. Every open task carries whose it is — the
+    old table listed them all alike, so the ones no agent can touch read
+    as queued work."""
+    raw_rows = rows if rows is not None else rollup()
+    ranked = by_attention(rows=raw_rows)
+    lines = ["Projects — where your attention actually went",
+             "=" * 72,
+             "  %-14s %6s %7s %7s %6s %7s  %s"
+             % ("project", "share", "msgs", "chats", "facts", "goals", "last")]
+    src = {r.get("project"): r for r in raw_rows}
+    for r in ranked:
+        raw = src.get(r["project"], {})
+        if r["share"] < 0.5 and not r["goals"]:
+            continue                      # noise floor: unnamed one-offs
+        last = ("%.0fd" % r["last_touched_days"]) if r.get("last_touched_days") is not None else "—"
+        pct = raw.get("pct")
+        gp = ("%d (%.0f%%)" % (r["goals"], pct)) if r["goals"] and pct is not None \
+            else (str(r["goals"]) if r["goals"] else "—")
+        lines.append("  %-14s %5.1f%% %7d %7d %6d %7s  %s"
+                     % (r["project"][:14], r["share"], r["messages"],
+                        raw.get("sessions", 0), raw.get("facts", 0), gp, last))
+        doable = {id(t) for t in r["doable"]}
+        for t in (raw.get("open_tasks") or []):
+            mine = id(t) in doable
+            lines.append("       %s %s%s" % ("↳" if mine else "·",
+                                             str(t.get("task") or "")[:62],
+                                             "" if mine else "   (yours)"))
+        if raw.get("repair_items"):
+            lines.append("       ! %d fact(s) failed verification" % raw["repair_items"])
+    lines += ["", "  " + speak_attention(rows=raw_rows)]
+    return "\n".join(lines)
 
 
 def _usable(name: Optional[str]) -> Optional[str]:
@@ -822,7 +923,8 @@ def rollup(sessions: Optional[List[Dict]] = None,
         r["milestones_total"] += g["total"]
         if g["next"]:
             r["open_tasks"].append({"goal": g["name"], "task": g["next"],
-                                    "pct": g["pct"]})
+                                    "pct": g["pct"], "cwd": g.get("cwd") or "",
+                                    "status": g.get("status") or ""})
 
     out = list(proj.values())
     for r in out:
@@ -1115,7 +1217,60 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="what you started and left — dormant repos, quoted from disk")
     ap.add_argument("--revive-open", metavar="PROJECT",
                     help="open a session in one of them")
+    ap.add_argument("--top", nargs="?", type=int, const=3, metavar="N",
+                    help="the top N projects by your time that have work I can pick up")
+    ap.add_argument("--work", nargs="?", type=int, const=3, metavar="N",
+                    help="send an agent at each of those N — the dispatching half of --top")
     args = ap.parse_args(argv)
+    if args.top is not None or args.work is not None:
+        rows = rollup()
+        n = args.work if args.work is not None else args.top
+        picks = top_actionable(n, rows=rows)
+        said = speak_attention(rows=rows)
+        sent = work_top(n, rows=rows) if args.work is not None else []
+        # A dry run that hides a hold is a lie of omission: the armed campaign
+        # owns some of these goals and go will refuse them, so say it HERE
+        # rather than after he presses send.
+        def _held(goal):
+            try:
+                import go as _go
+                return _go._campaign_holds(goal, _go.MEDITATION_DIR)
+            except Exception:
+                return ""
+        data = {"said": said,
+                "top": [{"project": p["project"], "share": p["share"],
+                         "goal": p["doable"][0].get("goal", ""),
+                         "task": p["doable"][0].get("task", ""),
+                         "held_by_campaign": _held(p["doable"][0].get("goal", ""))}
+                        for p in picks],
+                "sent": sent}
+        if args.json:
+            print(json.dumps({"tool_name": "meditate_projects_top", "success": True,
+                              "data": data, "metadata": {"n": n}, "errors": []}, indent=2))
+            return 0
+        print(said + "\n")
+        if not picks:
+            print("Nothing I can pick up on my own right now.")
+            return 0
+        if args.work is None:
+            print("Top %d I would work, in your order:" % len(picks))
+            for p, d in zip(picks, data["top"]):
+                print("  %-12s %5.1f%%  %s" % (p["project"], p["share"],
+                                               p["doable"][0].get("task", "")[:56]))
+                if d["held_by_campaign"]:
+                    print("               the armed campaign already has this one (%s)"
+                          % d["held_by_campaign"])
+            free = [d for d in data["top"] if not d["held_by_campaign"]]
+            print("\n  meditate top --work %d   sends %s"
+                  % (len(picks), "them" if free else "nothing — the campaign is on all of these"))
+            return 0
+        for s in sent:
+            print("  %s %-12s %s" % ("→" if s["sent"] else "×", s["project"],
+                                     s["task"][:52] if s["sent"] else s["why"][:70]))
+        live = sum(1 for s in sent if s["sent"])
+        print("\n%d agent%s running. `meditate` or the /twin page shows them."
+              % (live, "" if live == 1 else "s"))
+        return 0
     if args.revive_open:
         r = open_revival(args.revive_open)
         print("opened a session in %s" % r["cwd"] if r["opened"]
@@ -1150,24 +1305,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                           "metadata": {"store_dir": STORE_DIR}, "errors": []},
                          indent=2))
         return 0
-    total_msgs = sum(r["messages"] for r in rows) or 1
-    print("Projects — where your attention actually went")
-    print("=" * 72)
-    print("  %-14s %6s %7s %7s %6s %7s  %s"
-          % ("project", "share", "msgs", "chats", "facts", "goals", "last"))
-    for r in rows:
-        share = 100.0 * r["messages"] / total_msgs
-        if share < 0.5 and not r["goals"]:
-            continue                      # noise floor: unnamed one-offs
-        last = ("%.0fd" % r["last_touched_days"]) if r["last_touched_days"] is not None else "—"
-        gp = ("%d (%.0f%%)" % (r["goals"], r["pct"])) if r["goals"] else "—"
-        print("  %-14s %5.1f%% %7d %7d %6d %7s  %s"
-              % (r["project"][:14], share, r["messages"], r["sessions"],
-                 r["facts"], gp, last))
-        for t in r["open_tasks"]:
-            print("       ↳ %s" % t["task"][:64])
-        if r["repair_items"]:
-            print("       ! %d fact(s) failed verification" % r["repair_items"])
+    print(render(rows=rows))
     return 0
 
 

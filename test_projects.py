@@ -454,6 +454,144 @@ def test_the_ranked_list_is_SPEAKABLE_and_says_what_has_no_work():
     assert "nothing open" in said.lower() or "no open work" in said.lower(), said
 
 
+def test_ONE_gate_decides_whose_work_it_is():
+    """projects offered work that go then refused: two different gates.
+    campaign.is_human (go's) and classify_human (this file's) disagreed on
+    1 of the 5 live goals — 'Run the Russia acceptance test from a real
+    Russian mobile network', which go would have dispatched an agent at.
+    needs_hands is the union: either one recognising hands wins."""
+    import campaign as cp
+    russia = "Run the Russia acceptance test from a real Russian mobile network without a VPN"
+    assert cp.is_human(russia) is False, "go's own gate misses this"
+    assert cp.needs_hands(russia) is True, "the union catches it"
+    # and the union must not swallow the reverse case: is_human catches lines
+    # classify_human calls machine work
+    pixel = "Owner supplies the Pixel/Dataset ID and a System User token"
+    assert cp.classify_human(pixel)["kind"] != "yours"
+    assert cp.needs_hands(pixel) is True
+    # real work stays dispatchable
+    assert cp.needs_hands("Add the Caddy vhost on the Mumbai box") is False
+
+
+def test_a_PAUSED_goal_is_not_open_work():
+    """Measured live: `meditate top --work 3` refused all three — one held
+    by the campaign, TWO because the goal is paused. A ranker that offers
+    work the dispatcher will always refuse is the same defect as offering
+    the owner's own tasks, one layer down."""
+    rows = [{"project": "p", "messages": 100, "goals": 2, "open_tasks": [
+        {"goal": "gp", "task": "wire the endpoint", "status": "paused"},
+        {"goal": "ga", "task": "wire the other endpoint", "status": "active"}]}]
+    got = pj.by_attention(rows=rows)[0]
+    assert [t["goal"] for t in got["doable"]] == ["ga"], got["doable"]
+    assert got["paused"] == 1, got
+    # and it is not counted as waiting on him either — nobody is blocked,
+    # the goal is simply switched off
+    assert got["blocked_on_you"] == 0, got
+
+
+def test_work_top_dispatches_ONLY_where_there_is_work():
+    """'complete the top 3' = the top 3 that CAN be worked. The empty and
+    the owner-only ones are not dispatched at, and are named — a silent
+    skip is how 'nothing happened' becomes a mystery."""
+    sent = []
+
+    def fake(goal, cwd=None):
+        sent.append(goal)
+        return {"sent": [goal], "goals_launched": 1}
+
+    out = pj.work_top(3, rows=_rows(), dispatch=fake)
+    assert sent == ["meta-ads-india", "tutor-live"], sent
+    assert "purangpt-mobile-live" not in sent, "Apple's decision is not machine work"
+    assert all(r["sent"] for r in out), out
+    assert [r["project"] for r in out] == ["purangpt", "tutor"]
+
+
+def test_work_top_NAMES_the_refusal_instead_of_claiming_it_started():
+    """go answers a goal it will not send with skipped[{goal,why}] and an
+    empty sent. Nine console clicks once read exactly that as started:true."""
+    def refusing(goal, cwd=None):
+        return {"sent": [], "goals_launched": 0,
+                "skipped": [{"goal": goal, "why": "the goal is paused"}]}
+
+    out = pj.work_top(1, rows=_rows(), dispatch=refusing)
+    assert out[0]["sent"] is False, out
+    assert "paused" in out[0]["why"], out
+
+
+def test_work_top_sends_ONE_agent_per_DIRECTORY():
+    """Two projects can share a checkout. go keys its own one-per-cwd rule
+    inside a single run; separate runs cannot see each other, so the batch
+    has to hold that line itself."""
+    rows = [
+        {"project": "a", "messages": 900, "goals": 1,
+         "open_tasks": [{"goal": "ga", "task": "wire the endpoint", "cwd": "/tmp/shared"}]},
+        {"project": "b", "messages": 800, "goals": 1,
+         "open_tasks": [{"goal": "gb", "task": "wire the other endpoint", "cwd": "/tmp/shared"}]},
+    ]
+    sent = []
+
+    def fake(goal, cwd=None):
+        sent.append(goal)
+        return {"sent": [goal], "goals_launched": 1}
+
+    out = pj.work_top(2, rows=rows, dispatch=fake)
+    assert sent == ["ga"], sent
+    assert out[1]["sent"] is False and "already" in out[1]["why"], out[1]
+
+
+def test_work_top_reaches_the_REAL_go_run_not_only_a_fake():
+    """Every unit above injects a fake dispatch, which proves the picking
+    and nothing about the wiring. This one goes through go.run itself —
+    only the final subprocess is stubbed — so "built" cannot pass for
+    "wired". Live on this machine the send path could not be shown green:
+    every real candidate is held by the armed campaign."""
+    import go
+    launched = []
+    with tempfile.TemporaryDirectory() as d:
+        gdir = os.path.join(d, "goals")
+        os.makedirs(gdir)
+        with open(os.path.join(gdir, "demo.md"), "w") as f:
+            f.write("---\nname: demo-goal\ntitle: Demo\nproject: demo\n"
+                    "cwd: %s\nstatus: active\n---\n## Milestones\n"
+                    "- [x] first\n- [ ] wire the demo endpoint\n" % d)
+        rows = [{"project": "demo", "messages": 500, "goals": 1,
+                 "open_tasks": [{"goal": "demo-goal", "task": "wire the demo endpoint",
+                                 "cwd": d, "status": "active"}]}]
+        out = pj.work_top(1, rows=rows, goals_dir=gdir,
+                          meditation_dir=d, store_dir=d,
+                          history_path=os.path.join(d, "h.jsonl"),
+                          ledger_path=os.path.join(d, "l.jsonl"),
+                          launcher=lambda cwd, prompt, name, *a, **k:
+                              (launched.append(name) or True))
+    assert launched == ["goal-demo-goal"], launched   # go's own kind-prefixed name
+    assert out[0]["sent"] is True and out[0]["project"] == "demo", out
+
+
+def test_cli_top_names_the_goals_it_would_send():
+    """The read-only half of the command, on the real machine."""
+    r = subprocess.run([sys.executable, os.path.join(SKILL, "projects.py"),
+                        "--top", "3", "--json"],
+                       capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, r.stderr[-400:]
+    env = json.loads(r.stdout)
+    for k in ("success", "data", "metadata", "errors"):
+        assert k in env
+    assert "said" in env["data"] and isinstance(env["data"]["top"], list), env["data"]
+    for row in env["data"]["top"]:
+        assert row["goal"] and row["task"], row
+
+
+def test_the_printed_table_says_which_tasks_are_YOURS():
+    """The old table listed every open task the same way, so the ones no
+    agent can touch looked like queued work."""
+    out = pj.render(rows=_rows())
+    assert "iOS subscriptions approved" in out
+    line = [l for l in out.splitlines() if "iOS subscriptions" in l][0]
+    assert "yours" in line.lower(), line
+    caddy = [l for l in out.splitlines() if "Caddy vhost" in l][0]
+    assert "yours" not in caddy.lower(), caddy
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

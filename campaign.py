@@ -161,6 +161,30 @@ def is_human(text: str) -> bool:
     return bool(_HUMAN_RE.search(text or ""))
 
 
+def needs_hands(text: str) -> bool:
+    """Does this milestone need the owner's own hands?
+
+    THE one gate. There were two, and they disagreed: go.py asked
+    `is_human` (a keyword regex for credentials and approvals) while the
+    project ranker asked `classify_human` (the richer never-attempt list —
+    physical places, devices, money). On the five live goals they split on
+    one: "Run the Russia acceptance test from a real Russian mobile network
+    without a VPN" — go would have sent an agent at it, because no keyword
+    in that sentence is a credential.
+
+    A straight swap to the richer one was worse, not better: `classify_human`
+    reads "Owner supplies the Pixel/Dataset ID" as machine work. So neither
+    gate contains the other, and the answer is the union — either one
+    recognising hands wins. Measured across all 58 milestone lines on this
+    machine: 5 lines correctly move to his side, 0 move to the machine's,
+    and dispatchable goals go 4 -> 3, the one removed being the trip to
+    Russia."""
+    t = text or ""
+    if _HUMAN_RE.search(t):
+        return True
+    return classify_human(t).get("kind") == "yours"
+
+
 _SUBJ_STOP = {"the", "and", "for", "with", "from", "into", "that", "this", "owner", "supplies",
               "approved", "live", "done", "set", "made", "first", "new", "via", "env", "deploy"}
 

@@ -4,6 +4,8 @@
 #   meditate           health check (doctor)
 #   meditate grade     scan sessions → grade into nidra → sleep pass
 #   meditate sessions  show all sessions ranked by sprawl
+#   meditate projects  every project by where your time went
+#   meditate top [N]   the N I can work, in that order (--work sends them)
 #   meditate launch    see live threads (add --open to open Terminal windows)
 #   meditate install   run the installer
 #   meditate help      this message
@@ -115,6 +117,13 @@ case "${1:-}" in
   go|run|work|act)
     shift
     python3 "$DIR/go.py" "$@"
+    ;;
+  top)
+    # "list my active projects and work the top 3, priority by the time I
+    # spend on them" — his order, not the dispatcher's. Read-only; add
+    # --work to send them.
+    shift
+    python3 "$DIR/projects.py" --top "$@"
     ;;
   fix|repair)
     shift

@@ -1377,7 +1377,10 @@ def _campaign_holds(goal: str, meditation_dir: str) -> str:
 def _human_next(text: str) -> bool:
     try:
         import campaign as _cp
-        return bool(_cp.is_human(text))
+        # needs_hands, not is_human: the keyword gate alone would dispatch an
+        # agent at "Run the Russia acceptance test from a real Russian mobile
+        # network" — no credential word in the line, no hands in the fleet.
+        return bool(_cp.needs_hands(text))
     except Exception:
         return False
 
