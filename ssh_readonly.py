@@ -14,22 +14,27 @@ This is the tool-level guarantee instead. `Bash(meditate:*)` is already
 granted to every role, so a probe can run `meditate ssh-ro run <name>` — but
 `<name>` is checked against COMMANDS below BEFORE anything is built, and
 the actual remote command string for each name is authored ONCE, here, by a
-human. An agent can select from three fixed questions; it cannot ask a
-fourth, and it cannot ask this file's questions with a different host or key
-either — HOST and KEY are constants, not parameters.
+human. An agent can select from a fixed, short list of questions; it cannot
+compose a new one, and it cannot ask this file's questions with a different
+host or key either — HOST and KEY are constants, not parameters.
 
-What is deliberately NOT here: the Meta System User token and the page
-token are secrets, not read-only facts, and no command in this file
-prints one — "Page token made permanent" stays a wall a human clears,
-not a question this wrapper answers.
+`page-token-status` is the one command that touches a real secret (the
+Facebook Page access token) without ever printing it: it runs INSIDE the
+backend's own growth-engine container, decrypts the token with the
+backend's own vault code, calls Meta's own `debug_token` endpoint using the
+token to inspect itself, and prints only the verdict fields — `is_valid`,
+`expires_at`, `type`, `scopes`. The token string itself never leaves the
+container, never reaches this file, never reaches an agent's context.
+Verified live 2026-09-11: `is_valid: true, expires_at: 0` — permanent.
 
-    meditate ssh-ro list                 # the three questions, and why
-    meditate ssh-ro run pixel-id         # ask one
+    meditate ssh-ro list                    # the questions, and why
+    meditate ssh-ro run pixel-id            # ask one
     meditate ssh-ro run pixel-id --json
 """
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import subprocess
@@ -43,15 +48,74 @@ HOST = "root@209.182.233.163"
 SSH_TIMEOUT_S = 20.0
 MAX_OUTPUT_CHARS = 4000
 
-# Every value is a LITERAL string, verified against the repo's own source —
-# never built from a caller-supplied fragment:
-#   pixel-id      — the goal file names this exact path/var (meta-ads-india.md)
-#   docker-ps     — universally safe, no argument
-#   caddy-config  — the SAME container-discovery the owner's own
-#                   scripts/configure-gia-proxy.sh uses (Caddy runs in a
-#                   container with a bind-mounted Caddyfile; there is no
-#                   fixed container name to hardcode). The Caddyfile is
-#                   routing config, not a secret — no TLS key material in it.
+# The vault row this box actually has (verified live 2026-09-11 via
+# `meditate ssh-ro run docker-ps` + one manual discovery round-trip, not
+# guessed): ge_channel_connections WHERE user_id='purangpt-owner' AND
+# channel='facebook' AND status='active'. Single-tenant deployment — one
+# owner, one row.
+
+# Readable Python, not a shell one-liner: base64-shipped over ssh+docker exec
+# so no quoting layer (ssh's argv, the remote shell, docker exec's argv, `-c`)
+# gets a chance to mangle a nested quote. The source below IS what runs —
+# nothing is generated from it beyond base64-encoding the literal text.
+_PAGE_TOKEN_CHECK_PY = '''
+import json
+import growth_engine.db as gdb
+from backend.db_client import decrypt_keys
+
+conn = gdb.get_db_conn()
+cur = conn.cursor()
+cur.execute(
+    "SELECT enc_keys FROM ge_channel_connections "
+    "WHERE user_id = %s AND channel = %s AND status = 'active'",
+    ("purangpt-owner", "facebook"),
+)
+row = cur.fetchone()
+if not row:
+    print(json.dumps({"connection": "none"}))
+else:
+    keys = decrypt_keys(row["enc_keys"])
+    token = keys.get("page_access_token")
+    if not token:
+        print(json.dumps({"connection": "found", "page_access_token": "missing"}))
+    else:
+        import requests
+        r = requests.get(
+            "https://graph.facebook.com/v21.0/debug_token",
+            params={"input_token": token, "access_token": token},
+            timeout=15,
+        )
+        body = r.json()
+        d = body.get("data") or body.get("error") or {}
+        # NEVER the token itself — only facts ABOUT it.
+        print(json.dumps({
+            "connection": "found",
+            "is_valid": d.get("is_valid"),
+            "expires_at": d.get("expires_at"),
+            "data_access_expires_at": d.get("data_access_expires_at"),
+            "type": d.get("type"),
+            "scopes": d.get("scopes"),
+            "error": d.get("message"),
+        }))
+'''
+
+
+def _page_token_cmd() -> str:
+    b64 = base64.b64encode(_PAGE_TOKEN_CHECK_PY.encode()).decode()
+    return ("docker exec purangpt_growth_api python3 -c "
+            "\"import base64;exec(base64.b64decode('%s').decode())\"" % b64)
+
+
+# Every value is a LITERAL string, verified against the repo's own source or
+# a live round-trip — never built from a caller-supplied fragment:
+#   pixel-id          — the goal file names this exact path/var (meta-ads-india.md)
+#   docker-ps         — universally safe, no argument
+#   caddy-config      — the SAME container-discovery the owner's own
+#                       scripts/configure-gia-proxy.sh uses (Caddy runs in a
+#                       container with a bind-mounted Caddyfile; there is no
+#                       fixed container name to hardcode). Routing only, no
+#                       TLS key material.
+#   page-token-status — see _PAGE_TOKEN_CHECK_PY above; never prints the token
 COMMANDS: Dict[str, Dict[str, str]] = {
     "pixel-id": {
         "about": "The NEXT_PUBLIC_META_PIXEL_ID line in /root/stack.env — a tracking id, not a secret.",
@@ -67,6 +131,11 @@ COMMANDS: Dict[str, Dict[str, str]] = {
                "awk 'tolower($0) ~ /caddy/ {print $1; exit}'); "
                "if [ -z \"$cid\" ]; then echo 'no caddy container found' >&2; exit 1; fi; "
                "docker exec \"$cid\" cat /etc/caddy/Caddyfile"),
+    },
+    "page-token-status": {
+        "about": ("Whether the Facebook Page token is valid and permanent (expires_at 0) — "
+                 "verdict only, the token itself never leaves the box."),
+        "cmd": _page_token_cmd(),
     },
 }
 
@@ -147,7 +216,7 @@ def main(argv: Optional[list] = None) -> int:
         return 0 if ok else 1
 
     for name, about in data["commands"].items():
-        print("  %-14s %s" % (name, about))
+        print("  %-18s %s" % (name, about))
     return 0
 
 

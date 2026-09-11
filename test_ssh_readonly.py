@@ -63,7 +63,7 @@ def test_the_allowlist_is_closed_and_every_entry_is_a_FIXED_string():
     """Every command is a literal string authored in this file — nothing here
     is built with .format/% against caller input."""
     names = sr.list_commands()
-    assert set(names) == {"pixel-id", "docker-ps", "caddy-config"}, names
+    assert set(names) == {"pixel-id", "docker-ps", "caddy-config", "page-token-status"}, names
     for name, about in names.items():
         assert about and isinstance(about, str)
         assert isinstance(sr.COMMANDS[name]["cmd"], str) and sr.COMMANDS[name]["cmd"]
@@ -132,6 +132,47 @@ def test_an_OSError_launching_ssh_is_reported_not_raised():
 
 
 # ---------------------------------------------------------------------------
+# page-token-status — the one command that touches a real secret
+# ---------------------------------------------------------------------------
+
+def test_the_page_token_check_runs_INSIDE_the_growth_container_never_locally():
+    """The token is decrypted and inspected on the box; nothing about it is
+    ever built here, and no token value ever appears in this file's own
+    source or in the command string this file sends."""
+    cmd = sr.COMMANDS["page-token-status"]["cmd"]
+    assert cmd.startswith("docker exec purangpt_growth_api python3 -c"), cmd
+    assert "page_access_token" not in cmd, "the field name may leak, the VALUE never can (it isn't here)"
+    # the actual check is base64-shipped so no quoting layer can mangle a
+    # nested quote — decode it back and confirm what really runs
+    import base64
+    import re
+    b64 = re.search(r"b64decode\('([^']+)'\)", cmd).group(1)
+    decoded = base64.b64decode(b64).decode()
+    assert decoded == sr._PAGE_TOKEN_CHECK_PY
+    assert "debug_token" in decoded and "purangpt-owner" in decoded and '"facebook"' in decoded
+
+
+def test_the_page_token_check_source_NEVER_prints_the_token_itself():
+    """Read the actual multi-line json.dumps blocks the script prints: the
+    bare `token` variable never appears inside one — only key NAMES like
+    "page_access_token" (a label, not the secret) and verdict fields."""
+    import re
+    src = sr._PAGE_TOKEN_CHECK_PY
+    for block in re.findall(r"print\(json\.dumps\(\{.*?\}\)\)", src, re.S):
+        assert not re.search(r"(?<![\"\w])token(?![\"\w])", block), block
+
+
+def test_page_token_status_dispatches_over_ssh_like_every_other_command():
+    P = _fake('{"connection": "found", "is_valid": true, "expires_at": 0, "type": "PAGE"}\n')
+    out = sr.run("page-token-status", popen=P)
+    assert out["ok"] is True
+    argv = _FakePopen.calls[-1]["argv"]
+    assert argv[-1] == sr.COMMANDS["page-token-status"]["cmd"]
+    assert "980984061684331" not in out["output"]  # no pixel/id bleed-through, sanity
+    assert '"is_valid": true' in out["output"]
+
+
+# ---------------------------------------------------------------------------
 # the CLI (`meditate ssh-ro list|run <name>`)
 # ---------------------------------------------------------------------------
 
@@ -142,7 +183,7 @@ def test_cli_list_is_JSON_and_names_every_command():
     env = json.loads(r.stdout)
     for k in ("success", "data", "metadata", "errors"):
         assert k in env
-    assert set(env["data"]["commands"]) == {"pixel-id", "docker-ps", "caddy-config"}
+    assert set(env["data"]["commands"]) == {"pixel-id", "docker-ps", "caddy-config", "page-token-status"}
 
 
 def test_cli_run_of_an_unknown_name_exits_nonzero_and_never_touches_the_network():
