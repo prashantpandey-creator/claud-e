@@ -713,7 +713,7 @@ function renderCampaign(d){
       <span style="color:${(m.stuck||0)?'#c0392b':'inherit'}">${m.stuck||0} stuck</span>
       <span><b style="color:var(--gold);font-weight:500">$${(m.spent_usd||0).toFixed(2)}</b> of up to $${(m.est_usd||0).toFixed(2)}${
         m.burn_usd_per_h!=null ? ` · $${m.burn_usd_per_h.toFixed(2)}/h` : ""}</span>
-      <span>${m.pushed||0} pushed · ${m.verified_commits||0} commits verified</span>
+      <span>${m.pushed||0} pushed · ${m.verified_commits||0} commits verified · ${m.verified_green||0} suite-green${m.usd_per_green!=null?` · $${m.usd_per_green} per green`:""}${m.harness?` · <span style="color:#c0392b">${m.harness} the twin's own wall${m.harness===1?"":"s"}</span>`:""}</span>
       <span>${m.grown||0} steps grown · ${m.steers||0} steers</span></div>`;
   // YOUR HANDS moved INTO each goal's own card (below) — a flat 17-item
   // list mixing three unrelated goals was the exact complaint: to know
@@ -776,6 +776,13 @@ function renderCampaign(d){
               x.status==="blocked" ? ` · <span style="color:#c0392b">BLOCKED: ${esc(x.blocked_on||"")}</span>` : ""}${
               x.stuck ? ` · <span style="color:#c0392b">STUCK</span>` : ""}${
               r.did && r.did.length ? ` · did: ${esc(r.did.slice(0,2).join("; ")).slice(0,120)}` : ""}${
+              // the HARNESS's verdict, beside the agent's own account: the suite it
+              // ran in the worktree, or the step's check — never the agent's word
+              x.verified && x.verified.suite && x.verified.suite!=="none"
+                ? ` · <span style="color:${x.verified.suite==="green"?"#2e8b57":"#c0392b"}">suite ${esc(x.verified.suite)}${x.verify_attempts?` (fix ${x.verify_attempts})`:""}</span>`
+                : (x.verified && x.verified.check==="pass" ? ` · <span style="color:#2e8b57">check ✓</span>`
+                   : (x.verified && x.verified.check==="fail" ? ` · <span style="color:#c0392b">check ✗</span>` : ""))}${
+              x.status==="harness" ? ` · <span style="color:#c0392b">THE TWIN'S OWN WALL: ${esc(x.harness_wall||"")}</span>` : ""}${
               r.cost_usd!=null ? ` · $${r.cost_usd.toFixed(2)}` : ""}</div>
           </span>${can ? `<input class="steer" data-node="${esc(x.id)}" placeholder="steer…" style="background:#0a0906;border:1px solid var(--line);border-radius:6px;color:var(--fg);padding:3px 8px;font:inherit;font-size:11.5px;width:180px">` : ""}
         </div>`;
