@@ -143,6 +143,9 @@ def _parse(path: str) -> Optional[Dict[str, Any]]:
             "project": meta.get("project", ""), "cwd": meta.get("cwd", ""),
             "status": meta.get("status", "active"),
             "model": meta.get("model", ""),
+            # `verify: <command>` — the repo's own suite as the goal author
+            # names it; the harness runs it after every agent return
+            "verify": meta.get("verify", ""),
             "done": done, "total": total,
             "pct": round(100.0 * done / total, 1), "next": nxt, "file": path,
             "milestones": milestones,

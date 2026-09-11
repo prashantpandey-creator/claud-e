@@ -274,6 +274,18 @@ def test_closing_refuses_rather_than_guessing():
         assert open(os.path.join(gdir, "wrapped.md")).read().count("[x]") == 1
 
 
+def test_verify_command_passes_through_the_frontmatter():
+    """`verify: <cmd>` is the goal author's own suite; the harness runs it
+    after every agent return. Absent stays absent — not a guess."""
+    md = GOAL_MD.replace("status: evolving\n", "status: evolving\nverify: make check\n")
+    with tempfile.TemporaryDirectory() as t:
+        gdir, hist = _world(t, md=md)
+        g = gl.scan(goals_dir=gdir, history_path=hist)[0]
+        assert g["verify"] == "make check", g
+        gdir2, hist2 = _world(os.path.join(t, "b"))
+        assert gl.scan(goals_dir=gdir2, history_path=hist2)[0]["verify"] == ""
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

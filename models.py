@@ -330,9 +330,36 @@ _DEFAULTS = {
 }
 
 
-def shipped(row: Dict[str, Any]) -> bool:
+VERIFY_LEDGER = os.path.expanduser("~/.claude/meditation/verify.jsonl")
+
+
+def verdicts(path: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
+    """log -> the harness's LAST verdict on that run (campaign.verify),
+    from verify.jsonl. Empty when nothing has been verified."""
+    out: Dict[str, Dict[str, Any]] = {}
+    try:
+        with open(path or VERIFY_LEDGER, errors="replace") as f:
+            for ln in f:
+                try:
+                    r = json.loads(ln)
+                except ValueError:
+                    continue
+                if r.get("log"):
+                    out[r["log"]] = r
+    except OSError:
+        pass
+    return out
+
+
+def shipped(row: Dict[str, Any], verdicts_by_log: Optional[Dict[str, Dict[str, Any]]] = None) -> bool:
     """Did this run leave something the world can see? Verified commits or
-    a ticked milestone. Exit status and cost are not outcomes."""
+    a ticked milestone — AND, when the harness ran the suite on that run,
+    a green one. A commit that left the suite red is not production; it is
+    the thing the next resume has to fix."""
+    if verdicts_by_log:
+        v = verdicts_by_log.get(row.get("log") or "")
+        if v and (v.get("suite") in ("red", "timeout") or v.get("check") in ("fail", "timeout")):
+            return False
     if row.get("verified_commits"):
         return True
     prod = row.get("produced") or {}
@@ -364,6 +391,7 @@ def evidence_for(kind: str, limit: int = 40) -> Dict[str, Any]:
     # it ticked. The claim alone is not enough; the check is.
     rows = 0
     seen: Dict[str, Dict[str, int]] = {}
+    vd = verdicts()
     for r in spend()["rows"]:
         if not (r.get("name") or "").startswith(kind):
             continue
@@ -371,7 +399,7 @@ def evidence_for(kind: str, limit: int = 40) -> Dict[str, Any]:
         rows += 1
         s = seen.setdefault(m, {"dispatched": 0, "produced": 0})
         s["dispatched"] += 1
-        if shipped(r):
+        if shipped(r, vd):
             s["produced"] += 1
     return {"kind": kind, "rows": rows, "by_model": seen,
             "enough": rows >= 6}
@@ -483,26 +511,55 @@ def _settle_worktree(head: Dict[str, str], log_dir: str, key: str) -> str:
                            capture_output=True, text=True, timeout=10)
             dirty = _sp.run(["git", "-C", wt, "status", "--porcelain"],
                             capture_output=True, text=True, timeout=10).stdout.strip()
-            if uniq.returncode == 0 and uniq.stdout.strip() == "0" and not dirty:
-                r = _sp.run(["git", "-C", cwd or wt, "worktree", "remove", wt],
-                            capture_output=True, text=True, timeout=30)
-                if r.returncode == 0:
+            if uniq.returncode == 0 and uniq.stdout.strip() == "0" and not _real_dirt(dirty):
+                state = _remove_worktree(cwd or wt, wt)
+                if state.startswith("removed"):
                     # the BRANCH stays: a Claude session is bound to the
                     # directory it ran in, and `go --continue` re-adds the
                     # worktree at the same path from this branch. Deleting
                     # it made every finished agent un-continuable.
                     return "removed (nothing on the branch; branch kept for continue)"
-                return "kept: " + (r.stderr.strip()[:60] or "remove failed")
+                return state
             return "kept: unpushed (no upstream, %s unique commit%s%s)" % (
                 uniq.stdout.strip() or "?", "" if uniq.stdout.strip() == "1" else "s",
                 ", dirty" if dirty else "")
         if up.stdout.strip() != "0":
             return "kept: unpushed (%s ahead)" % up.stdout.strip()
-        r = _sp.run(["git", "-C", cwd or wt, "worktree", "remove", wt],
-                    capture_output=True, text=True, timeout=30)
-        return "removed" if r.returncode == 0 else "kept: " + (r.stderr.strip()[:60] or "remove failed")
+        return _remove_worktree(cwd or wt, wt)
     except (OSError, _sp.TimeoutExpired) as e:
-        return "kept: " + str(e)[:60]
+        return "kept: " + str(e)[:200]
+
+
+def _real_dirt(porcelain: str) -> bool:
+    """Dirt the AGENT made, as opposed to dirt the bootstrap made: every
+    stranded worktree on 2026-09-12 (9 dirs, 3.7 GB) showed exactly
+    ` D node_modules` — the bootstrap swaps a committed symlink for a real
+    directory (mila-english), git reads that as a deletion, and `worktree
+    remove` refused a tree the harness itself dirtied."""
+    for ln in (porcelain or "").splitlines():
+        path = ln[3:].strip().rstrip("/") if len(ln) > 3 else ln.strip()
+        if path and path != "node_modules" and not path.startswith("node_modules/"):
+            return True
+    return False
+
+
+def _remove_worktree(top: str, wt: str) -> str:
+    """Remove, forcing ONLY over the bootstrap's own change; keep anything
+    the agent left and say what, whole — the ledger used to cut the reason
+    at 60 characters, so 10 rows read `kept: fatal: '/Users/badenath/.loc`
+    and the cause was unrecorded."""
+    import subprocess as _sp
+    dirty = _sp.run(["git", "-C", wt, "status", "--porcelain"],
+                    capture_output=True, text=True, timeout=10).stdout
+    if _real_dirt(dirty):
+        left = ", ".join(ln.strip()[:60] for ln in dirty.splitlines()[:4])
+        return "kept: the agent left uncommitted work — %s" % left
+    argv = ["git", "-C", top, "worktree", "remove"] + (["--force"] if dirty.strip() else []) + [wt]
+    r = _sp.run(argv, capture_output=True, text=True, timeout=30)
+    if r.returncode == 0:
+        return "removed" + (" (forced over the bootstrap's node_modules)" if dirty.strip() else "")
+    err = (r.stderr.strip().splitlines() or ["remove failed"])[0]
+    return "kept: " + err[:200]
 
 
 def reconcile(log_dir: Optional[str] = None,

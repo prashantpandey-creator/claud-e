@@ -121,6 +121,17 @@ _WORTH_ATTEMPT = [
      r"|verify .* matches|check whether", "a question with a factual answer"),
 ]
 MAX_TRANSIENT_RETRIES = 6
+# THE HARNESS DECIDES DONE. Measured 2026-09-12: 37 of 43 goal runs never ran
+# a test; a node was marked done whose own RESULT said tests {ran:107,
+# green:false}; the node's `check` was printed into the prompt and executed
+# by nothing. Now the suite and the check run HERE, in the worktree, after
+# every return. Red continues the same session with the raw failure, three
+# times at most, under a spend ceiling of two runs' worth; then the failure
+# itself is what reaches the owner.
+MAX_VERIFY_ATTEMPTS = 3
+VERIFY_TIMEOUT_S = 180
+VERIFY_LEDGER = "verify.jsonl"
+_WORKING_KINDS = ("goal", "thread", "repair")
 DEFAULT_PARALLEL = 3         # the RAM law: 6+9+8 < 30 GB, from the outage
 ELABORATE_BUDGET_USD = 0.35  # planning is cheap; execution is not
 ELABORATE_TIMEOUT_S = 300
@@ -630,6 +641,7 @@ def build(goals_dir: Optional[str] = None, meditation_dir: str = MEDITATION_DIR,
                     deps0.append(hn["id"])
             node = {"id": mid, "goal": g["name"], "goal_title": g.get("title") or g["name"],
                     "cwd": g.get("cwd") or "", "milestone": head, "title": head,
+                    "verify": g.get("verify") or "",
                     "why": ("only you can do this" if human else
                             "an open milestone of " + (g.get("title") or g["name"])),
                     "kind": "human" if human else "goal", "check": "",
@@ -668,6 +680,7 @@ def build(goals_dir: Optional[str] = None, meditation_dir: str = MEDITATION_DIR,
                 deps = [ids[d] for d in (s.get("depends_on") or []) if d in ids] + list(deps0)
                 subs.append({"id": sid, "goal": g["name"], "goal_title": node["goal_title"],
                              "cwd": node["cwd"], "milestone": head, "title": str(s["title"]).strip(),
+                             "verify": node.get("verify", ""),
                              "why": str(s.get("why") or "").strip(), "kind": kind,
                              "check": str(s.get("check") or "").strip(), "depends_on": deps,
                              "status": "waiting" if kind == "human" else "pending",
@@ -707,6 +720,7 @@ def build(goals_dir: Optional[str] = None, meditation_dir: str = MEDITATION_DIR,
                 iid = _nid(g["name"], "idea", t_)
                 nodes.append({"id": iid, "goal": g["name"], "goal_title": g.get("title") or g["name"],
                               "cwd": g.get("cwd") or "", "milestone": t_, "title": t_,
+                              "verify": g.get("verify") or "",
                               "why": str(idea.get("why") or "").strip(), "kind": kind,
                               "check": str(idea.get("check") or "").strip(),
                               "depends_on": [prev_id] if prev_id else [],
@@ -859,8 +873,18 @@ def _prompt_for(n: Dict[str, Any]) -> str:
         lines.append("This step: %s." % n["title"])
     if n.get("why"):
         lines.append("Why: %s" % n["why"])
-    if n.get("check"):
-        lines.append("Done means: %s" % n["check"])
+    # The agent is told exactly what the harness will run after it finishes,
+    # so it runs the same thing — not "the tests", these commands.
+    cmd = verify_command(n)
+    chk = (n.get("check") or "").strip()
+    runnable = bool(chk) and _runnable(chk)
+    if cmd or runnable:
+        parts = (["`%s` exits 0" % cmd] if cmd else []) + (["`%s` exits 0" % chk] if runnable else [])
+        lines.append("Done means: " + " and ".join(parts) + ". The harness runs exactly "
+                     "these in your worktree after you finish; if either fails you get the "
+                     "output back and the step is not done.")
+    elif chk:
+        lines.append("Done means: %s" % chk)
     lines.append("You are one node of a planned run across every goal; other agents "
                  "hold the other steps, each in its own worktree. Do this step only, "
                  "prove it with the check, and put the single next step in `next`.")
@@ -1516,9 +1540,127 @@ def _verified_commits(n: Dict[str, Any], commits: List[str]) -> List[str]:
     return out
 
 
+def _runnable(cmd: str) -> bool:
+    """A check the harness can RUN: its first word is a program on PATH or a
+    path. "confirm the page looks right" is prose, and prose cannot pass."""
+    import shutil
+    tok = (cmd or "").strip().split()
+    if not tok:
+        return False
+    head = tok[0]
+    if head.startswith(("./", "/", "~")):
+        return True
+    return shutil.which(head) is not None
+
+
+def verify_command(n: Dict[str, Any]) -> str:
+    """The repo's own suite, as the goal file names it (`verify:`) or as the
+    repo declares it; "" when neither does — never a guess."""
+    v = str(n.get("verify") or "").strip()
+    if v:
+        return v
+    where = n.get("worktree") or n.get("cwd") or ""
+    if not where or not os.path.isdir(where):
+        return ""
+    try:
+        import go
+        return go.detect_verify(where)
+    except Exception:
+        return ""
+
+
+def _run_in(where: str, cmd: str, timeout_s: float):
+    """('pass'|'fail'|'timeout', last 60 lines of output)."""
+    try:
+        r = subprocess.run(cmd, shell=True, cwd=where, capture_output=True, text=True,
+                           timeout=timeout_s, stdin=subprocess.DEVNULL)
+    except subprocess.TimeoutExpired:
+        return "timeout", "timed out after %ds: %s" % (timeout_s, cmd)
+    except OSError as e:
+        return "fail", str(e)[:200]
+    out = (r.stdout or "") + (r.stderr or "")
+    tail = "\n".join(out.strip().splitlines()[-60:])
+    return ("pass" if r.returncode == 0 else "fail"), tail
+
+
+def verify(n: Dict[str, Any], timeout_s: float = VERIFY_TIMEOUT_S) -> Dict[str, Any]:
+    """The harness's own verdict on a finished node, in its worktree: the
+    repo's suite (working kinds only — a read-only step changed nothing the
+    suite could see) and the step's check as a command. Absence is reported
+    as absence: `none` is not green, and a prose check is `not runnable`,
+    not passed."""
+    where = n.get("worktree") or ""
+    out: Dict[str, Any] = {"suite": "none", "suite_cmd": "", "suite_tail": "",
+                           "check": "none", "check_cmd": "", "check_tail": "", "where": where}
+    if not where or not os.path.isdir(where):
+        out["why"] = "no worktree to verify in"
+        return out
+    if n.get("kind") in _WORKING_KINDS:
+        cmd = verify_command(n)
+        if cmd:
+            out["suite_cmd"] = cmd
+            verdict, tail = _run_in(where, cmd, timeout_s)
+            out["suite"] = {"pass": "green", "fail": "red", "timeout": "timeout"}[verdict]
+            out["suite_tail"] = tail
+    chk = str(n.get("check") or "").strip()
+    if chk:
+        out["check_cmd"] = chk
+        if not _runnable(chk):
+            out["check"] = "not runnable"
+        else:
+            verdict, tail = _run_in(where, chk, timeout_s)
+            out["check"] = verdict
+            out["check_tail"] = tail
+    return out
+
+
+def _verify_failed(v: Dict[str, Any]) -> bool:
+    return v.get("suite") in ("red", "timeout") or v.get("check") in ("fail", "timeout")
+
+
+def _failure_text(v: Dict[str, Any]) -> str:
+    bits = []
+    if v.get("suite") in ("red", "timeout"):
+        bits.append("The suite is %s in your worktree (`%s`):\n%s"
+                    % (v["suite"], v.get("suite_cmd"), v.get("suite_tail") or "(no output)"))
+    if v.get("check") in ("fail", "timeout"):
+        bits.append("The step's check failed (`%s`):\n%s"
+                    % (v.get("check_cmd"), v.get("check_tail") or "(no output)"))
+    return "\n".join(bits)
+
+
+def _record_verify(meditation_dir: str, n: Dict[str, Any], v: Dict[str, Any]) -> None:
+    """One row per verdict, keyed by the run's log — what models.shipped()
+    reads so a commit that left the suite red never counts as produced."""
+    try:
+        with open(os.path.join(meditation_dir, VERIFY_LEDGER), "a") as f:
+            f.write(json.dumps({"ts": _now_iso(), "log": os.path.basename(n.get("log") or ""),
+                                "name": n.get("name", ""), "node": n.get("id", ""),
+                                "suite": v.get("suite"), "check": v.get("check"),
+                                "suite_cmd": v.get("suite_cmd", ""), "check_cmd": v.get("check_cmd", ""),
+                                "attempts": int(n.get("verify_attempts") or 0)}) + "\n")
+    except OSError:
+        pass
+
+
+def _park_harness(n: Dict[str, Any], g: Dict[str, Any], why: str) -> None:
+    """A working role denied a tool twice: the twin's own wall. Parked where
+    the status page shows it under the twin's walls — never on the owner's
+    list. 11 of the 25 human nodes in the live campaign (2026-09-12) were
+    denials, sandbox walls and budget cuts filed as his."""
+    n["status"] = "harness"
+    n["harness_wall"] = why[:300]
+    n["resume_message"] = ""
+    n["stuck"] = False
+    g["events"].append({"ts": _now_iso(), "what": "harness_wall", "node": n["id"], "why": why[:120]})
+
+
 def _absorb(n: Dict[str, Any], res: Dict[str, Any], g: Dict[str, Any],
-            now: Optional[float] = None) -> None:
-    """A finished node: record what it did, and grow the graph by its next."""
+            now: Optional[float] = None, verifier: Optional[Callable] = None,
+            meditation_dir: Optional[str] = None) -> None:
+    """A finished node: record what it did, VERIFY it, and grow the graph by
+    its next. `verifier` is injectable so the graph runs with no suite and
+    no money in tests; the real one is verify()."""
     so = res.get("structured_output")
     so = so if isinstance(so, dict) else {}
     commits = [c for c in (so.get("commits") or []) if isinstance(c, str)]
@@ -1575,11 +1717,18 @@ def _absorb(n: Dict[str, Any], res: Dict[str, Any], g: Dict[str, Any],
                 ("Check the external process again: %s" % n["blocked_on"][:200])
         g["events"].append({"ts": _now_iso(), "what": "waiting_on_external", "node": n["id"], "attempts": attempts})
         return
-    if so.get("blocked_on") and n.get("kind") in ("assess", "revive") and not n.get("escalated") \
-            and _DENIED_RE.search(str(so["blocked_on"])):
-        # a read-only role denied a tool it needed: the twin's gap, not the
-        # owner's item. Re-run under the working role with what was found.
-        escalate(n, g, str(so["blocked_on"]).strip()[:200])
+    if so.get("blocked_on") and n.get("kind") != "human" and _DENIED_RE.search(str(so["blocked_on"])):
+        # ANY role denied a tool it needed: the twin's gap, never the owner's
+        # item. Once, a fresh run under the working role with what was found
+        # (a read-only role gains its hands; a working role sheds a session
+        # that may have talked itself into a corner). Twice is structural:
+        # park it as the twin's wall. This branch was assess/revive-only,
+        # and a goal agent's denial became a task on his list.
+        why = str(so["blocked_on"]).strip()[:200]
+        if not n.get("escalated"):
+            escalate(n, g, why)
+        else:
+            _park_harness(n, g, why)
         return
     if so.get("blocked_on"):
         # The agent found the wall; the wall is the owner's. It becomes a
@@ -1593,9 +1742,38 @@ def _absorb(n: Dict[str, Any], res: Dict[str, Any], g: Dict[str, Any],
         n["resume_message"] = ""
         g["events"].append({"ts": _now_iso(), "what": "blocked", "node": n["id"], "why": wall_text[:80]})
         return
+    # THE VERDICT — the harness's, not the agent's.
+    v = (verifier or verify)(n)
+    n["verified"] = v
+    if meditation_dir:
+        _record_verify(meditation_dir, n, v)
+    if _verify_failed(v):
+        attempts = int(n.get("verify_attempts") or 0) + 1
+        n["verify_attempts"] = attempts
+        cap = 2.0 * float((n.get("agent") or {}).get("budget_usd") or 0)
+        over = bool(cap) and float(n.get("spent_usd") or 0) >= cap
+        if attempts >= MAX_VERIFY_ATTEMPTS or over:
+            why = ("out of budget: $%.2f spent of a $%.2f ceiling" % (n["spent_usd"], cap)) if over \
+                else "still red after %d attempts" % attempts
+            head = (v.get("suite_tail") or v.get("check_tail") or "").strip().splitlines()
+            _wall_node(n, g, ("Still red after %d attempt%s — %s"
+                              % (attempts, "" if attempts == 1 else "s", (head[0] if head else "no output")[:160])),
+                       why + "; look at the failure, not another retry")
+            n["status"] = "pending"
+            n["resume_message"] = ""
+            g["events"].append({"ts": _now_iso(), "what": "verify_gave_up", "node": n["id"],
+                                "attempts": attempts, "why": why})
+            return
+        n["status"] = "pending"
+        n["resume_message"] = _failure_text(v) + "\nFix it and run it again; end with the RESULT object."
+        g["events"].append({"ts": _now_iso(), "what": "verify_red", "node": n["id"], "attempts": attempts,
+                            "suite": v.get("suite"), "check": v.get("check")})
+        return
     n["status"] = "done"
     g["events"].append({"ts": _now_iso(), "what": "done", "node": n["id"],
-                        "commits": len(n["result"]["verified_commits"])})
+                        "commits": len(n["result"]["verified_commits"]),
+                        "verified": (v.get("suite") if v.get("suite") != "none"
+                                     else ("check" if v.get("check") == "pass" else "none"))})
     nxt = n["result"]["next"]
     if nxt and nxt.lower().strip(". ") not in ("", "none", "nothing", "done", "n/a"):
         same_goal = [m for m in g["nodes"] if m["goal"] == n["goal"]]
@@ -1610,7 +1788,7 @@ def _absorb(n: Dict[str, Any], res: Dict[str, Any], g: Dict[str, Any],
                                "status": "pending", "agent": agent_for(n["kind"]),
                                "name": "%s-%s-%s" % (n["kind"], n["goal"][:16], nid.replace(".", "_")),
                                "steers": [], "log": "", "session": "", "result": None,
-                               "grown": True})
+                               "verify": n.get("verify", ""), "grown": True})
             g["events"].append({"ts": _now_iso(), "what": "grew", "node": nid, "title": nxt[:60]})
 
 
@@ -1668,8 +1846,12 @@ def _metrics(g: Dict[str, Any], now: float, ledger: Optional[str] = None) -> Dic
         elif n["status"] == "running":
             pg["running"] += 1
     hours = (now - g["armed_epoch"]) / 3600.0 if g.get("armed_epoch") else 0.0
+    green = [n for n in fin if n["status"] == "done" and (n.get("verified") or {}).get("suite") == "green"]
     return {"nodes": len(ns), "done": by.get("done", 0), "running": by.get("running", 0),
             "blocked": by.get("blocked", 0), "failed": by.get("failed", 0),
+            "harness": by.get("harness", 0),
+            "verified_green": len(green),
+            "usd_per_green": round(spent / len(green), 2) if green else None,
             "pending": by.get("pending", 0), "ready": len(ready(g)),
             "stuck": sum(1 for n in ns if n.get("stuck")),
             "spent_usd": spent, "est_usd": g["totals"]["est_usd"],
@@ -1690,9 +1872,33 @@ def tick(meditation_dir: str = MEDITATION_DIR, dispatch: Optional[Callable] = No
          now: Optional[Callable[[], float]] = None,
          max_parallel: Optional[int] = None, death: Optional[Callable] = None,
          kill: Optional[Callable] = None, medians: Optional[Dict[str, float]] = None,
-         mailer: Optional[Callable] = None) -> Dict[str, Any]:
+         mailer: Optional[Callable] = None, verifier: Optional[Callable] = None,
+         fallthrough: Optional[Callable] = None) -> Dict[str, Any]:
     with _locked(meditation_dir):
-        return _tick(meditation_dir=meditation_dir, dispatch=dispatch, read_result=read_result, log_mtime=log_mtime, now=now, max_parallel=max_parallel, death=death, kill=kill, medians=medians, mailer=mailer)
+        out = _tick(meditation_dir=meditation_dir, dispatch=dispatch, read_result=read_result, log_mtime=log_mtime, now=now, max_parallel=max_parallel, death=death, kill=kill, medians=medians, mailer=mailer, verifier=verifier)
+    # NEVER IDLE WHILE WORK EXISTS. Measured 2026-09-12: armed seven days,
+    # ready()=0 the whole time, agents busy 2.0% of the wall clock — the
+    # graph waited on the owner while `go --auto` deferred to the campaign.
+    # Free slots go to the other sources (threads, repair, unheld goals).
+    # Outside the lock: go.run reads campaign.json and must not wait on us.
+    out["fell_through"] = []
+    free = int(out.get("free") or 0)
+    if out.get("armed") and free > 0 and not out.get("held") and not out.get("past_deadline") \
+            and not out.get("paused"):
+        try:
+            r = (fallthrough or _fallthrough_real)(free) or {}
+        except Exception as e:
+            r = {"errors": [str(e)[:120]]}
+        out["fell_through"] = list(r.get("sent") or [])
+        if r.get("errors"):
+            out["fallthrough_errors"] = r["errors"]
+    return out
+
+
+def _fallthrough_real(free: int) -> Dict[str, Any]:
+    import go
+    r = go.run(n=free, unattended=True)
+    return {"sent": r.get("sent") or [], "errors": r.get("errors") or []}
 
 
 def _tick(meditation_dir: str = MEDITATION_DIR, dispatch: Optional[Callable] = None,
@@ -1700,7 +1906,7 @@ def _tick(meditation_dir: str = MEDITATION_DIR, dispatch: Optional[Callable] = N
          now: Optional[Callable[[], float]] = None,
          max_parallel: Optional[int] = None, death: Optional[Callable] = None,
          kill: Optional[Callable] = None, medians: Optional[Dict[str, float]] = None,
-         mailer: Optional[Callable] = None) -> Dict[str, Any]:
+         mailer: Optional[Callable] = None, verifier: Optional[Callable] = None) -> Dict[str, Any]:
     """Advance the campaign one step. The heartbeat calls this every pass."""
     g = load(meditation_dir)
     if not g:
@@ -1727,7 +1933,7 @@ def _tick(meditation_dir: str = MEDITATION_DIR, dispatch: Optional[Callable] = N
             continue
         res = read_result(n.get("log", ""))
         if res:
-            _absorb(n, res, g, now=t)
+            _absorb(n, res, g, now=t, verifier=verifier, meditation_dir=meditation_dir)
             continue
         dead = death(n.get("log", ""))
         if dead:
@@ -1748,9 +1954,11 @@ def _tick(meditation_dir: str = MEDITATION_DIR, dispatch: Optional[Callable] = N
     deadline = float(g.get("until_epoch") or 0)
     held = float(g.get("hold_until") or 0) > t
     past = bool(deadline) and t >= deadline
+    free = 0
     if g.get("armed") and not g.get("paused_why") and not held and not past:
-        sent = _dispatch_ready(g, max_parallel or g.get("max_parallel") or DEFAULT_PARALLEL,
-                               dispatch or dispatch_real, now=t)
+        mp = max_parallel or g.get("max_parallel") or DEFAULT_PARALLEL
+        sent = _dispatch_ready(g, mp, dispatch or dispatch_real, now=t)
+        free = max(0, int(mp) - sum(1 for n in g["nodes"] if n["status"] == "running"))
     if g.get("armed") and past:
         if any(n["status"] == "running" for n in g["nodes"]):
             if not g.get("closing"):
@@ -1762,7 +1970,7 @@ def _tick(meditation_dir: str = MEDITATION_DIR, dispatch: Optional[Callable] = N
     g["last_tick"] = _now_iso()
     save(g, meditation_dir)
     return {"armed": bool(g.get("armed")), "dispatched": sent, "metrics": g["metrics"],
-            "held": held, "past_deadline": past}
+            "held": held, "past_deadline": past, "paused": bool(g.get("paused_why")), "free": free}
 
 
 def steer(node_id: str, message: str, meditation_dir: str = MEDITATION_DIR,
@@ -1957,7 +2165,9 @@ def status(meditation_dir: str = MEDITATION_DIR) -> Dict[str, Any]:
                                               # why an item is on HIS list, and what a
                                               # probe found — the feature is invisible
                                               # without them, however well computed
-                                              "classified", "probe_said", "probed")}
+                                              "classified", "probe_said", "probed",
+                                              # the harness's verdict and its own walls
+                                              "verified", "verify_attempts", "harness_wall", "verify")}
                       for n in g["nodes"]],
             "events": g.get("events", [])[-30:]}
 
@@ -1967,7 +2177,7 @@ def status(meditation_dir: str = MEDITATION_DIR) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 _GLYPH = {"done": "✓", "running": "▶", "blocked": "■", "failed": "✗", "pending": "·", "idea": "?",
-          "waiting": "☐"}
+          "waiting": "☐", "harness": "⊘"}
 
 
 def render(g: Dict[str, Any], predictions: Optional[Dict[str, Any]] = None) -> str:

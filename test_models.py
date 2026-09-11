@@ -656,6 +656,68 @@ def test_spend_and_budget_for_are_not_each_others_BASE_CASE():
     assert models.budget_for("anything")["basis"] == "default"
 
 
+def test_a_commit_that_left_the_suite_RED_is_not_shipped():
+    """The harness's verdict outranks the commit: a commit that breaks the
+    suite is the thing the next resume has to fix, not production."""
+    row = {"log": "x.log", "verified_commits": ["abc"], "produced": {}}
+    assert models.shipped(row) is True
+    assert models.shipped(row, {"x.log": {"suite": "red"}}) is False
+    assert models.shipped(row, {"x.log": {"suite": "green"}}) is True
+    assert models.shipped(row, {"x.log": {"suite": "none", "check": "fail"}}) is False
+    assert models.shipped(row, {"other.log": {"suite": "red"}}) is True
+    # the ledger loader keeps the LAST verdict per log; absence is empty
+    d = tempfile.mkdtemp()
+    p = os.path.join(d, "verify.jsonl")
+    open(p, "w").write(json.dumps({"log": "x.log", "suite": "red"}) + "\n"
+                       + json.dumps({"log": "x.log", "suite": "green"}) + "\n")
+    assert models.verdicts(p)["x.log"]["suite"] == "green"
+    assert models.verdicts(os.path.join(d, "missing.jsonl")) == {}
+
+
+def _repo_with_pushed_worktree(t):
+    """A repo whose node_modules is a COMMITTED SYMLINK (mila-english), a
+    remote it is pushed to, and a worktree on a pushed branch."""
+    import subprocess as sp
+    bare = os.path.join(t, "remote.git"); sp.run(["git", "init", "-q", "--bare", bare], check=True)
+    top = os.path.join(t, "repo"); sp.run(["git", "clone", "-q", bare, top], check=True, capture_output=True)
+    env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
+    open(os.path.join(top, "package.json"), "w").write("{}")
+    os.symlink("../node_modules", os.path.join(top, "node_modules"))
+    sp.run(["git", "-C", top, "add", "package.json", "node_modules"], check=True)
+    sp.run(["git", "-C", top, "commit", "-q", "-m", "base"], check=True, env=env)
+    sp.run(["git", "-C", top, "push", "-q", "-u", "origin", "HEAD:main"], check=True, capture_output=True)
+    wt = os.path.join(t, "wt-agent")
+    sp.run(["git", "-C", top, "worktree", "add", "-q", "-b", "agent/x", wt], check=True, capture_output=True)
+    sp.run(["git", "-C", wt, "push", "-q", "-u", "origin", "agent/x"], check=True, capture_output=True)
+    # the bootstrap's own change: the symlink becomes a real directory
+    os.unlink(os.path.join(wt, "node_modules")); os.makedirs(os.path.join(wt, "node_modules", "x"))
+    return top, wt
+
+
+def test_a_worktree_dirtied_only_by_the_BOOTSTRAP_is_still_removed():
+    """9 worktrees / 3.7 GB stranded on 2026-09-12, every one showing
+    ` D node_modules`: the bootstrap swaps the committed symlink for a real
+    dir, git reads a deletion, `worktree remove` refuses the tree the
+    harness itself dirtied — and the ledger cut the reason at 60 chars."""
+    with tempfile.TemporaryDirectory() as t:
+        top, wt = _repo_with_pushed_worktree(t)
+        logs = os.path.join(t, "logs"); os.makedirs(logs)
+        state = models._settle_worktree({"worktree": wt, "branch": "agent/x", "cwd": top}, logs, "k.log")
+        assert state.startswith("removed"), state
+        assert not os.path.isdir(wt)
+
+
+def test_a_worktree_with_REAL_dirt_is_kept_and_the_reason_is_whole():
+    with tempfile.TemporaryDirectory() as t:
+        top, wt = _repo_with_pushed_worktree(t)
+        open(os.path.join(wt, "forgotten.js"), "w").write("x")
+        logs = os.path.join(t, "logs"); os.makedirs(logs)
+        state = models._settle_worktree({"worktree": wt, "branch": "agent/x", "cwd": top}, logs, "k.log")
+        assert state.startswith("kept:"), state
+        assert "forgotten.js" in state, "the reason names the file, not a 60-char stub: %s" % state
+        assert os.path.isdir(wt)
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

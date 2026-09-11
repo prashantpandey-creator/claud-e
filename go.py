@@ -235,7 +235,56 @@ def role_argv(kind: str) -> List[str]:
     schema = r.get("result_schema")
     if schema:
         out += ["--json-schema", json.dumps(schema)]
+    # The goal file and the ledger live outside every worktree, and the
+    # agent is told to read both. Measured 2026-09-12 across 62 recorded
+    # runs: 7 Read denials on ~/claude-sync (the goal file itself), 6 on
+    # ~/.claude — each a turn spent hitting a wall the harness built.
+    # LAST: `--add-dir` is variadic and would swallow whatever followed it.
+    try:
+        import paths as _paths
+        goals_dir = _paths.goals_dir()
+    except Exception:
+        goals_dir = ""
+    extra = [d for d in (goals_dir, MEDITATION_DIR) if d and os.path.isdir(d)]
+    if extra:
+        out += ["--add-dir"] + extra
     return out
+
+
+def detect_verify(top: str) -> str:
+    """The repo's own test command, from what the repo declares — or "".
+
+    Never a guess dressed as a verdict: a repo with test files but no pytest
+    configuration is not offered `pytest` (purangpt's bare collection crashes
+    on legacy smoke scripts, so that would be red forever and every node
+    would wall on a false failure). The goal file's `verify:` overrides.
+    """
+    if not top or not os.path.isdir(top):
+        return ""
+    if os.path.isfile(os.path.join(top, "run_suite.py")):
+        return "python3 run_suite.py"
+    pj = os.path.join(top, "package.json")
+    if os.path.isfile(pj):
+        try:
+            scripts = json.load(open(pj)).get("scripts") or {}
+        except (OSError, ValueError, AttributeError):
+            scripts = {}
+        parts = []
+        if scripts.get("test"):
+            parts.append("npm test")
+        if os.path.isfile(os.path.join(top, "tsconfig.json")):
+            parts.append("npx tsc --noEmit")
+        if parts:
+            return " && ".join(parts)
+    configured = any(os.path.isfile(os.path.join(top, f)) for f in ("pytest.ini", "conftest.py"))
+    if not configured:
+        try:
+            configured = "[tool.pytest" in open(os.path.join(top, "pyproject.toml"), errors="replace").read()
+        except OSError:
+            configured = False
+    if configured:
+        return "python3 -m pytest -q"
+    return ""
 
 
 def _repo_top(cwd: str) -> Optional[str]:

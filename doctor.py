@@ -589,6 +589,19 @@ def _check_warranty() -> Dict[str, Any]:
         return {"checked": False, "error": str(e)[:120]}
 
 
+# A check that fails every hour, forever, carries no information — and it
+# hides the ones that would. Measured 2026-09-12: 317 of 317 verdicts since
+# 09-03 were unhealthy on exactly these two, both routed to "you". They are
+# advisories now: printed as a line, never a failure, never the verdict.
+ADVISORY = ("memory_index_stale", "stillness_overdue")
+
+
+def split_advisories(issues: List[str]):
+    """(issues that decide health, advisories that only inform)."""
+    return ([i for i in issues if i not in ADVISORY],
+            [i for i in issues if i in ADVISORY])
+
+
 def run(run_tests: bool = True) -> Dict[str, Any]:
     """run_tests=False returns the same envelope without executing 26 suites.
     test_doctor.py calls run() three times to check STRUCTURE; making it
@@ -659,11 +672,13 @@ def run(run_tests: bool = True) -> Dict[str, Any]:
     elif stillness.get("never_run"):
         pass          # new install, nothing owed yet
 
+    issues, advisories = split_advisories(issues)
     healthy = len(issues) == 0
     data = {
         "version": VERSION,
         "healthy": healthy,
         "issues": issues,
+        "advisories": advisories,
         "prereqs": prereqs,
         "tests": tests,
         "hook": hook,
@@ -814,6 +829,8 @@ def main(argv: List[str]) -> int:
     else:
         print(f"\n{'=' * 40}")
         print(f"Issues: {', '.join(d['issues'])}")
+    if d.get("advisories"):
+        print(f"Advisory (not a failure): {', '.join(d['advisories'])}")
 
     return 0 if d["healthy"] else 1
 

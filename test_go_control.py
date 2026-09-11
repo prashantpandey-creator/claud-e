@@ -849,6 +849,54 @@ def test_worktrees_live_OUTSIDE_the_claude_config_tree():
     assert not go.WORKTREE_ROOT.startswith(os.path.expanduser("~/.claude")), go.WORKTREE_ROOT
 
 
+def test_detect_verify_reads_what_the_repo_DECLARES_never_a_guess():
+    import go
+    with tempfile.TemporaryDirectory() as t:
+        a = os.path.join(t, "a"); os.makedirs(a)
+        open(os.path.join(a, "run_suite.py"), "w").write("")
+        assert go.detect_verify(a) == "python3 run_suite.py"
+        b = os.path.join(t, "b"); os.makedirs(b)
+        open(os.path.join(b, "package.json"), "w").write(json.dumps({"scripts": {"test": "vitest"}}))
+        open(os.path.join(b, "tsconfig.json"), "w").write("{}")
+        assert go.detect_verify(b) == "npm test && npx tsc --noEmit"
+        c = os.path.join(t, "c"); os.makedirs(c)
+        open(os.path.join(c, "package.json"), "w").write(json.dumps({"scripts": {}}))
+        open(os.path.join(c, "tsconfig.json"), "w").write("{}")
+        assert go.detect_verify(c) == "npx tsc --noEmit"
+        # test files alone are NOT pytest: purangpt's bare collection crashes
+        # on legacy smoke scripts and would be red forever
+        d = os.path.join(t, "d"); os.makedirs(d)
+        open(os.path.join(d, "test_x.py"), "w").write("")
+        assert go.detect_verify(d) == ""
+        open(os.path.join(d, "pytest.ini"), "w").write("[pytest]\n")
+        assert go.detect_verify(d) == "python3 -m pytest -q"
+        assert go.detect_verify(os.path.join(t, "nope")) == ""
+        assert go.detect_verify("") == ""
+
+
+def test_every_role_may_run_the_tools_OWN_cli_and_read_the_goal_files():
+    """Measured 2026-09-12: `meditate` denied 13 times inside goal runs (the
+    agent is told to run `meditate progress`; no role allowed it) and the
+    goal file itself denied to Read 7 times (it lives outside every
+    worktree)."""
+    import go
+    roles = go.roles()["roles"]
+    for kind, role in roles.items():
+        assert "Bash(meditate:*)" in role["allowed"], kind
+    with tempfile.TemporaryDirectory() as t:
+        old = go.MEDITATION_DIR
+        go.MEDITATION_DIR = t
+        try:
+            argv = go.role_argv("goal")
+        finally:
+            go.MEDITATION_DIR = old
+        assert "--add-dir" in argv, argv
+        i = argv.index("--add-dir")
+        dirs = argv[i + 1:]
+        assert t in dirs and all(os.path.isdir(d) for d in dirs), dirs
+        assert not any(d.startswith("--") for d in dirs), "variadic: it must be LAST, or it swallows the next flag"
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

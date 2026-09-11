@@ -1138,11 +1138,15 @@ def test_a_read_only_step_walled_by_its_OWN_permissions_escalates_instead_of_wai
         assert sent == [(node["id"], "goal", "")], sent
         assert not any(m.get("from_agent") == node["id"] and m["status"] == "waiting" for m in g2["nodes"])
         assert any(e["what"] == "escalated" for e in g2["events"])
-        # walled again, now as goal: a real wall for the owner
+        # denied again, now as goal: STILL the twin's wall — parked as such,
+        # never handed to the owner (2026-09-12: 11 of his 25 "human" items
+        # were exactly this)
         out = cp.tick(meditation_dir=med, dispatch=lambda n: None,
                       read_result=lambda log: _finished(blocked="Sandbox denies git push") if log == "l2" else None)
         g3 = cp.load(med)
-        assert any(m.get("from_agent") == node["id"] and m["status"] == "waiting" for m in g3["nodes"])
+        n3 = [n for n in g3["nodes"] if n["id"] == node["id"]][0]
+        assert n3["status"] == "harness", n3["status"]
+        assert not any(m.get("from_agent") == node["id"] and m["status"] == "waiting" for m in g3["nodes"])
         # and a non-permission wall on a read-only step was always the owner's
         g4 = cp.build(goals_dir=gdir, meditation_dir=med, elaborator=_elab)
         a = [n for n in g4["nodes"] if n["kind"] == "assess"][0]
@@ -1421,6 +1425,296 @@ def test_what_the_probe_LEARNED_reaches_the_page():
         page = open(os.path.join(SKILL, "twin_console.html")).read()
         assert "attempt-mine" in page, "no way to run it from the twin"
         assert "probe_said" in page and "classified" in page, "the page never reads them"
+
+
+# ---------------------------------------------------------------------------
+# the machine grades the machine — done is the harness's verdict, not the
+# agent's word. Measured 2026-09-12: 37 of 43 goal runs never ran a test; a
+# node was marked done whose own RESULT said tests {ran:107, green:false};
+# the node's `check` string was printed into the prompt and executed by
+# nothing.
+# ---------------------------------------------------------------------------
+
+def _one_running(t, check=""):
+    """A campaign with one running goal node whose worktree is a real dir."""
+    gdir, med = _world(t)
+    g = cp.build(goals_dir=gdir, meditation_dir=med, elaborator=lambda goal, ms: [])
+    if check:
+        for n in g["nodes"]:
+            n["check"] = check
+    cp.save(g, med)
+    wt = os.path.join(t, "wt")
+    os.makedirs(wt, exist_ok=True)
+    cp.go(meditation_dir=med, max_parallel=1,
+          dispatch=lambda n: {"log": "l-" + n["id"], "session": "s-" + n["id"], "worktree": wt})
+    g2 = cp.load(med)
+    run = [n for n in g2["nodes"] if n["status"] == "running"][0]
+    return med, run, wt
+
+
+RED = {"suite": "red", "suite_cmd": "python3 run_suite.py",
+       "suite_tail": "FAIL test_x: assert 1 == 2", "check": "none", "check_tail": ""}
+GREEN = {"suite": "green", "suite_cmd": "python3 run_suite.py", "suite_tail": "",
+         "check": "none", "check_tail": ""}
+
+
+def _node(g, nid):
+    return [x for x in g["nodes"] if x["id"] == nid][0]
+
+
+def test_done_is_the_SUITES_verdict_not_the_agents():
+    """Red means the SAME session continues with the raw failure — not a
+    fresh agent, not a task for the owner, not 'done'."""
+    with tempfile.TemporaryDirectory() as t:
+        med, run, wt = _one_running(t)
+        sent = []
+
+        def disp(n):
+            sent.append(dict(n))
+            return {"log": "l2-" + n["id"], "session": n.get("session", "")}
+
+        cp.tick(meditation_dir=med, dispatch=disp,
+                read_result=lambda log: _finished() if log == run["log"] else None,
+                verifier=lambda n: dict(RED))
+        g = cp.load(med)
+        n = _node(g, run["id"])
+        assert n["status"] == "running" and n["verify_attempts"] == 1, (n["status"], n.get("verify_attempts"))
+        assert sent and sent[0]["id"] == run["id"], "the same node was resumed, not a fresh one"
+        assert "assert 1 == 2" in sent[0]["resume_message"], sent[0].get("resume_message")
+        assert sent[0]["session"] == run["session"], "resume = the same session"
+        assert not [x for x in g["nodes"] if x["kind"] == "human" and x.get("from_agent") == run["id"]], \
+            "a red suite is the agent's to fix, not the owner's"
+        assert any(e["what"] == "verify_red" for e in g["events"]), [e["what"] for e in g["events"]]
+        # the fix run comes back and the suite is green: NOW it is done
+        cp.tick(meditation_dir=med, dispatch=lambda n: {"log": "zz", "session": "zz"},
+                read_result=lambda log: _finished() if log == "l2-" + run["id"] else None,
+                verifier=lambda n: dict(GREEN))
+        g = cp.load(med)
+        n = _node(g, run["id"])
+        assert n["status"] == "done", n["status"]
+        assert n["verified"]["suite"] == "green" and n["verify_attempts"] == 1, n["verified"]
+
+
+def test_three_red_verifies_WALL_it_with_the_failure_not_a_fourth_agent():
+    with tempfile.TemporaryDirectory() as t:
+        med, run, wt = _one_running(t)
+        cur = run["log"]
+        for i in range(3):
+            nxt = "l%d-%s" % (i, run["id"])
+            cp.tick(meditation_dir=med,
+                    dispatch=lambda n, nxt=nxt: {"log": nxt, "session": n.get("session", "")},
+                    read_result=lambda l, cur=cur: _finished() if l == cur else None,
+                    verifier=lambda n: dict(RED))
+            cur = nxt
+        g = cp.load(med)
+        n = _node(g, run["id"])
+        assert n["status"] == "pending" and n["verify_attempts"] == 3, (n["status"], n.get("verify_attempts"))
+        wall = [x for x in g["nodes"] if x["kind"] == "human" and x.get("from_agent") == n["id"]]
+        assert len(wall) == 1 and "assert 1 == 2" in wall[0]["title"], wall
+        assert wall[0]["id"] in n["depends_on"]
+        assert n["id"] not in [x["id"] for x in cp.ready(g)], "walled, not re-sent"
+        assert any(e["what"] == "verify_gave_up" for e in g["events"])
+
+
+def test_a_node_OUT_OF_BUDGET_walls_instead_of_resuming():
+    """Resumes add cost to the same node. Two runs' worth is the ceiling."""
+    with tempfile.TemporaryDirectory() as t:
+        med, run, wt = _one_running(t)
+        g = cp.load(med)
+        n = _node(g, run["id"])
+        n["agent"]["budget_usd"] = 0.5
+        n["spend_by_run"] = {"earlier": 0.7}
+        cp.save(g, med)
+        sent = []
+        cp.tick(meditation_dir=med, dispatch=lambda n: sent.append(n["id"]) or {"log": "x", "session": "x"},
+                read_result=lambda l: _finished() if l == run["log"] else None,     # costs 0.4 -> 1.1 >= 1.0
+                verifier=lambda n: dict(RED))
+        g = cp.load(med)
+        n = _node(g, run["id"])
+        assert run["id"] not in sent, "no resume past the cap"
+        wall = [x for x in g["nodes"] if x["kind"] == "human" and x.get("from_agent") == n["id"]]
+        assert wall and "budget" in wall[0]["why"].lower(), wall
+        assert any(e["what"] == "verify_gave_up" and "budget" in e.get("why", "") for e in g["events"])
+
+
+def test_verify_runs_the_repos_OWN_suite_and_the_check_in_the_worktree():
+    """The real verifier, on a real directory: the repo's suite as the repo
+    defines it, the node's check as a command, both in the worktree."""
+    with tempfile.TemporaryDirectory() as t:
+        wt = os.path.join(t, "wt")
+        os.makedirs(wt)
+        open(os.path.join(wt, "run_suite.py"), "w").write(
+            "import os, sys\nprint('FAIL test_x: assert 1 == 2' if not os.path.exists('fixed') else 'ok')\n"
+            "sys.exit(0 if os.path.exists('fixed') else 1)\n")
+        n = {"kind": "goal", "worktree": wt, "cwd": wt, "check": "test -f marker", "goal": "x", "verify": ""}
+        v = cp.verify(n)
+        assert v["suite"] == "red" and v["suite_cmd"] == "python3 run_suite.py", v
+        assert "assert 1 == 2" in v["suite_tail"], v
+        assert v["check"] == "fail", v
+        open(os.path.join(wt, "fixed"), "w").close()
+        open(os.path.join(wt, "marker"), "w").close()
+        v = cp.verify(n)
+        assert v["suite"] == "green" and v["check"] == "pass", v
+        # a prose check cannot pass, and is not pretended to
+        n["check"] = "confirm the page looks right"
+        assert cp.verify(n)["check"] == "not runnable"
+        # the goal file's own command wins over detection
+        n["verify"] = "python3 -c 'import sys; sys.exit(3)'"
+        v = cp.verify(n)
+        assert v["suite"] == "red" and v["suite_cmd"] == n["verify"], v
+        # a read-only kind never runs the suite; no worktree means nothing to verify in
+        assert cp.verify(dict(n, kind="assess"))["suite"] == "none"
+        assert cp.verify(dict(n, worktree=""))["suite"] == "none"
+        # detection is honest about absence
+        empty = os.path.join(t, "empty")
+        os.makedirs(empty)
+        assert cp.verify({"kind": "goal", "worktree": empty, "cwd": empty, "check": ""})["suite"] == "none"
+
+
+def test_a_failing_CHECK_alone_keeps_a_node_open():
+    """No suite in the repo, but the planner gave the step a check that
+    fails: that is red too."""
+    with tempfile.TemporaryDirectory() as t:
+        med, run, wt = _one_running(t)
+        v = {"suite": "none", "suite_cmd": "", "suite_tail": "", "check": "fail",
+             "check_tail": "test: marker: No such file", "check_cmd": "test -f marker"}
+        sent = []
+        cp.tick(meditation_dir=med, dispatch=lambda n: sent.append(dict(n)) or {"log": "x", "session": n.get("session", "")},
+                read_result=lambda l: _finished() if l == run["log"] else None, verifier=lambda n: v)
+        g = cp.load(med)
+        n = _node(g, run["id"])
+        assert n["status"] == "running" and n["verify_attempts"] == 1
+        assert "test -f marker" in sent[0]["resume_message"] and "No such file" in sent[0]["resume_message"]
+
+
+def test_a_node_without_a_verifier_is_done_but_says_UNVERIFIED():
+    """Not every step has a suite (poll a deploy, read a state). Done stays
+    done — but the record says on whose word."""
+    with tempfile.TemporaryDirectory() as t:
+        med, run, wt = _one_running(t)
+        cp.tick(meditation_dir=med, dispatch=lambda n: {"log": "x", "session": "x"},
+                read_result=lambda l: _finished() if l == run["log"] else None,
+                verifier=lambda n: {"suite": "none", "suite_cmd": "", "suite_tail": "", "check": "none", "check_tail": ""})
+        g = cp.load(med)
+        n = _node(g, run["id"])
+        assert n["status"] == "done" and n["verified"]["suite"] == "none"
+        ev = [e for e in g["events"] if e["what"] == "done" and e["node"] == n["id"]][0]
+        assert ev.get("verified") == "none", ev
+
+
+def test_the_verdict_is_written_to_a_LEDGER_the_models_read():
+    with tempfile.TemporaryDirectory() as t:
+        med, run, wt = _one_running(t)
+        cp.tick(meditation_dir=med, dispatch=lambda n: {"log": "x", "session": "x"},
+                read_result=lambda l: _finished() if l == run["log"] else None,
+                verifier=lambda n: dict(GREEN))
+        rows = [json.loads(l) for l in open(os.path.join(med, "verify.jsonl")) if l.strip()]
+        assert rows and rows[-1]["log"] == run["log"] and rows[-1]["suite"] == "green", rows
+        assert rows[-1]["node"] == run["id"] and rows[-1]["name"] == run["name"]
+
+
+def test_the_brief_tells_the_agent_what_the_harness_will_run():
+    n = {"goal_title": "G", "milestone": "M", "title": "M", "why": "", "check": "test -f marker",
+         "verify": "make check", "kind": "goal", "cwd": "/nonexistent", "steers": []}
+    p = cp._prompt_for(n)
+    assert "make check" in p and "exits 0" in p and "test -f marker" in p, p
+    # no command known: the brief does not invent one
+    q = cp._prompt_for(dict(n, verify="", check=""))
+    assert "exits 0" not in q, q
+
+
+def test_the_goal_files_verify_command_reaches_EVERY_node_of_that_goal():
+    with tempfile.TemporaryDirectory() as t:
+        gdir = os.path.join(t, "goals")
+        os.makedirs(gdir)
+        open(os.path.join(gdir, "v.md"), "w").write(
+            "---\nname: v-goal\ntitle: V\nproject: v\ncwd: %s\nstatus: active\nverify: make check\n---\n"
+            "## Milestones\n- [ ] first\n- [ ] second\n" % t)
+        med = os.path.join(t, "med")
+        os.makedirs(med)
+        g = cp.build(goals_dir=gdir, meditation_dir=med, elaborator=_elab)
+        assert g["nodes"] and all(n.get("verify") == "make check" for n in g["nodes"]), \
+            [(n["title"], n.get("verify")) for n in g["nodes"]]
+        # and a grown node inherits it
+        n = g["nodes"][0]
+        cp._absorb(n, _finished(next_step="then the next thing"), g,
+                   verifier=lambda n: {"suite": "none", "suite_cmd": "", "suite_tail": "", "check": "none", "check_tail": ""})
+        grown = [x for x in g["nodes"] if x.get("grown")]
+        assert grown and grown[0]["verify"] == "make check"
+
+
+# ---------------------------------------------------------------------------
+# a denial is the twin's wall, never the owner's task. Measured 2026-09-12:
+# 11 of the 25 human nodes in the live campaign were denials, sandbox walls
+# and budget cuts. escalate() knew — for assess/revive only.
+# ---------------------------------------------------------------------------
+
+def test_a_working_agents_DENIAL_is_the_twins_wall_never_the_owners():
+    with tempfile.TemporaryDirectory() as t:
+        med, run, wt = _one_running(t)
+        denied = _finished(blocked="Bash tool is denied session-wide (don't-ask mode); cannot run npm test")
+        cp.tick(meditation_dir=med, dispatch=lambda n: {"log": "l2-" + n["id"], "session": ""},
+                read_result=lambda l: denied if l == run["log"] else None)
+        g = cp.load(med)
+        n = _node(g, run["id"])
+        assert not [x for x in g["nodes"] if x["kind"] == "human" and x.get("from_agent") == n["id"]], \
+            "a denied tool is not a task for the owner"
+        assert n.get("escalated"), "first bounce: a fresh run carrying the findings"
+        assert n["status"] == "running", n["status"]
+        # the fresh run hits the same wall: parked as the twin's, still not his
+        cp.tick(meditation_dir=med, dispatch=lambda n: {"log": "l3", "session": ""},
+                read_result=lambda l: denied if l == "l2-" + run["id"] else None)
+        g = cp.load(med)
+        n = _node(g, run["id"])
+        assert n["status"] == "harness", n["status"]
+        assert "denied" in n["harness_wall"].lower()
+        assert not [x for x in g["nodes"] if x["kind"] == "human" and x.get("from_agent") == n["id"]]
+        assert n["id"] not in [x["id"] for x in cp.ready(g)]
+        assert any(e["what"] == "harness_wall" for e in g["events"])
+        # and the status page lists it under the twin's own walls, not yours
+        st = cp.status(med)
+        assert st["metrics"].get("harness", 0) == 1, st["metrics"]
+        assert any(x["id"] == n["id"] for x in st["nodes"]), "parked nodes stay visible"
+
+
+# ---------------------------------------------------------------------------
+# never idle while work exists. Measured 2026-09-12: armed 7 days, ready()=0
+# the whole time, agents busy 2.0% of the wall clock — the campaign waited on
+# the owner while go --auto deferred to the campaign.
+# ---------------------------------------------------------------------------
+
+def test_the_tick_falls_through_to_OTHER_work_when_nothing_is_ready():
+    with tempfile.TemporaryDirectory() as t:
+        gdir, med = _world(t)
+        g = cp.build(goals_dir=gdir, meditation_dir=med, elaborator=lambda a, b: [])
+        for n in list(g["nodes"]):
+            cp._wall_node(n, g, "Only you: sign the thing", "test")
+        g["armed"] = True
+        cp.save(g, med)
+        assert cp.ready(g) == []
+        calls = []
+        out = cp.tick(meditation_dir=med, dispatch=lambda n: None, max_parallel=3,
+                      fallthrough=lambda free: calls.append(free) or {"sent": ["thread-x"]})
+        assert calls == [3], calls
+        assert out["fell_through"] == ["thread-x"], out
+        # one running: only the remaining slots are offered
+        g = cp.load(med)
+        g["nodes"][0]["status"] = "running"
+        cp.save(g, med)
+        calls.clear()
+        cp.tick(meditation_dir=med, dispatch=lambda n: None, max_parallel=3,
+                read_result=lambda l: None, death=lambda l: "", log_mtime=lambda l: None,
+                fallthrough=lambda free: calls.append(free) or {})
+        assert calls == [2], calls
+        # not armed: the campaign's clock is off, nothing falls through
+        g = cp.load(med)
+        g["armed"] = False
+        cp.save(g, med)
+        calls.clear()
+        cp.tick(meditation_dir=med, dispatch=lambda n: None, max_parallel=3,
+                read_result=lambda l: None, death=lambda l: "", log_mtime=lambda l: None,
+                fallthrough=lambda free: calls.append(free) or {})
+        assert calls == [], calls
 
 
 def _main():

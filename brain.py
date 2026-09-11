@@ -559,8 +559,11 @@ def _tick_campaign_loop() -> None:
         try:
             _sp.run([sys.executable, "-c", "import sys; sys.path.insert(0, %r); import models; models.reconcile()" % SKILL_DIR],
                     capture_output=True, text=True, timeout=120)
+            # A tick now RUNS the repo's suite for each node that finished
+            # (up to VERIFY_TIMEOUT_S each) before it calls anything done;
+            # 240 s was the whole tick's budget when it only read logs.
             _sp.run([sys.executable, os.path.join(SKILL_DIR, "campaign.py"), "tick", "--json"],
-                    capture_output=True, text=True, timeout=240)
+                    capture_output=True, text=True, timeout=900)
         except Exception as e:
             print("campaign tick failed: %s" % str(e)[:120], flush=True)
 

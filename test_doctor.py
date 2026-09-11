@@ -70,6 +70,19 @@ def test_discovers_every_suite_without_running_them():
     assert len(listed) >= 20, listed
 
 
+def test_the_two_perpetual_checks_are_ADVISORIES_not_failures():
+    """317 of 317 verdicts since 2026-09-03 were unhealthy on the same two
+    checks, both routed to 'you'. A verdict that is always red carries no
+    information; these become a line, not a failure."""
+    issues, adv = doctor.split_advisories(["memory_index_stale", "tests", "stillness_overdue"])
+    assert issues == ["tests"] and adv == ["memory_index_stale", "stillness_overdue"]
+    env = doctor.run(run_tests=False)
+    d = env["data"]
+    assert isinstance(d.get("advisories"), list)
+    assert "memory_index_stale" not in d["issues"] and "stillness_overdue" not in d["issues"]
+    assert d["healthy"] == (len(d["issues"]) == 0)
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0
