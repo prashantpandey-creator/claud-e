@@ -1739,9 +1739,10 @@ def test_a_FAILED_node_whose_walls_have_cleared_runs_again_ONCE():
         assert sent == [n["id"]], sent
         assert n2["status"] == "running" and n2.get("auto_retried"), n2["status"]
         assert any(e["what"] == "retried" and e["node"] == n["id"] for e in g2["events"])
-        # it fails again: terminal now, no loop
+        # it fails again (not at the cap — that gets one salvage of its own):
+        # terminal now, no loop
         cp.tick(meditation_dir=med, max_parallel=1, dispatch=lambda x: {"log": "l2", "session": "s"},
-                read_result=lambda l: ({"type": "result", "subtype": "error_max_budget_usd", "is_error": True,
+                read_result=lambda l: ({"type": "result", "subtype": "error_during_execution", "is_error": True,
                                         "total_cost_usd": 0.1, "num_turns": 1} if l == "l" else None))
         g3 = cp.load(med)
         assert _node(g3, n["id"])["status"] == "failed"
@@ -1753,6 +1754,113 @@ def test_a_FAILED_node_whose_walls_have_cleared_runs_again_ONCE():
         g4 = cp.load(med)
         m = [x for x in g4["nodes"] if x["depends_on"] and x["status"] == "pending"]
         assert m, "the fixture has a dependent node"
+
+
+def test_verify_RE_ADDS_a_removed_worktree_from_its_branch():
+    """Live 2026-09-11: reconcile removed a finished run's worktree before
+    the campaign verified in it — `no worktree to verify in`. The branch
+    survives removal by design (continue_agent re-adds from it); verify
+    does the same, so the verdict never depends on who ran first."""
+    import subprocess as sp
+    with tempfile.TemporaryDirectory() as t:
+        top = os.path.join(t, "repo")
+        sp.run(["git", "init", "-q", "-b", "main", top], check=True)
+        env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t",
+                   GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
+        open(os.path.join(top, "run_suite.py"), "w").write("import sys; sys.exit(0)\n")
+        sp.run(["git", "-C", top, "add", "run_suite.py"], check=True)
+        sp.run(["git", "-C", top, "commit", "-q", "-m", "green suite"], check=True, env=env)
+        wt = os.path.join(t, "wts", "goal-x-1")
+        os.makedirs(os.path.dirname(wt))
+        sp.run(["git", "-C", top, "worktree", "add", "-q", "-b", "agent/x", wt], check=True, capture_output=True)
+        # the agent's work lives on the branch; then the worktree is removed
+        open(os.path.join(wt, "run_suite.py"), "w").write("import sys; sys.exit(0)\n")
+        sp.run(["git", "-C", top, "worktree", "remove", "--force", wt], check=True, capture_output=True)
+        assert not os.path.isdir(wt)
+        log = os.path.join(t, "k.log")
+        open(log, "w").write("# goal-x\n# cwd: %s\n# model: sonnet effort: \n# session: s\n# worktree: %s\n# branch: agent/x\n" % (top, wt))
+        n = {"kind": "goal", "worktree": wt, "cwd": top, "check": "", "verify": "", "log": log}
+        v = cp.verify(n)
+        assert v["suite"] == "green" and v["suite_cmd"] == "python3 run_suite.py", v
+        assert os.path.isdir(wt), "re-added from the branch, and left for the sweep"
+        # no branch to re-add from: the honest answer, not a crash
+        v2 = cp.verify({"kind": "goal", "worktree": os.path.join(t, "nowhere"), "cwd": top,
+                        "check": "", "verify": "", "log": ""})
+        assert v2["suite"] == "none" and "no worktree" in v2.get("why", ""), v2
+
+
+def test_a_run_cut_by_the_spend_cap_is_asked_ONCE_to_commit_what_it_has():
+    """Live 2026-09-11: 53 turns, $2.89, `error_max_budget_usd`, no RESULT,
+    no commit — the second time this exact node died at the cap with
+    nothing to show. The session is still there; one small resume that
+    commits the work already done costs cents and saves the run."""
+    with tempfile.TemporaryDirectory() as t:
+        med, run, wt = _one_running(t)
+        cut = {"type": "result", "subtype": "error_max_budget_usd", "is_error": True,
+               "total_cost_usd": 2.89, "num_turns": 53}
+        sent = []
+
+        def disp(n):
+            sent.append(dict(n))
+            return {"log": "l2-" + n["id"], "session": n.get("session", "")}
+
+        cp.tick(meditation_dir=med, dispatch=disp, read_result=lambda l: cut if l == run["log"] else None)
+        g = cp.load(med)
+        n = _node(g, run["id"])
+        assert n["status"] == "running" and n.get("salvaged"), (n["status"], n.get("salvaged"))
+        assert sent and sent[0]["id"] == run["id"] and sent[0]["session"] == run["session"]
+        assert "commit" in sent[0]["resume_message"].lower() and "RESULT" in sent[0]["resume_message"]
+        assert sent[0].get("resume_budget_usd") == cp.SALVAGE_BUDGET_USD
+        assert any(e["what"] == "salvaging" for e in g["events"])
+        # the salvage run returns a RESULT: absorbed like any other
+        cp.tick(meditation_dir=med, dispatch=lambda n: {"log": "zz", "session": "zz"},
+                read_result=lambda l: _finished() if l == "l2-" + run["id"] else None,
+                verifier=lambda n: dict(GREEN))
+        assert _node(cp.load(med), run["id"])["status"] == "done"
+        # cut a second time: failed, no loop
+        med2, run2, wt2 = _one_running(os.path.join(t, "two"))
+        g2 = cp.load(med2)
+        _node(g2, run2["id"])["salvaged"] = "already"
+        cp.save(g2, med2)
+        cp.tick(meditation_dir=med2, dispatch=lambda n: {"log": "x", "session": "x"},
+                read_result=lambda l: cut if l == run2["log"] else None)
+        assert _node(cp.load(med2), run2["id"])["status"] == "failed"
+
+
+def test_a_check_that_starts_with_a_program_but_reads_as_PROSE_is_not_runnable():
+    """Live 2026-09-11: the planner's check was 'git diff main...x --stat
+    lists the touched files; npx tsc --noEmit and the existing
+    companion.test.ts / visualScenes.test.ts pass when run against that
+    tree.' It starts with `git`, so the shell ran the English — TS6053
+    File 'companion.test.ts' not found — and the node walled on it."""
+    prose = ("git diff main...wip/tree-snapshot-20260723 --stat lists the touched files; npx tsc "
+             "--noEmit and the existing companion.test.ts / visualScenes.test.ts pass when run against that tree.")
+    assert cp._runnable(prose) is False
+    assert cp._runnable("confirm the page looks right") is False
+    assert cp._runnable("npx tsc --noEmit") is True
+    assert cp._runnable("git diff --stat main...wip/x") is True
+    assert cp._runnable("test -f marker") is True
+    assert cp._runnable("python3 -m pytest -q test_x.py") is True
+    assert cp._runnable("") is False
+
+
+def test_a_wall_headlines_the_FAILING_part_not_the_green_suite():
+    """The first live wall read 'Still red after 1 attempt — ✔ Mia is an
+    owned travel product…' — a passing test line, because the suite was
+    green and only the check had failed."""
+    with tempfile.TemporaryDirectory() as t:
+        med, run, wt = _one_running(t)
+        g = cp.load(med)
+        n = _node(g, run["id"])
+        n["agent"]["budget_usd"] = 0.1          # the ceiling walls it on the first red
+        cp.save(g, med)
+        v = {"suite": "green", "suite_cmd": "npm test", "suite_tail": "✔ Mia is an owned travel product\nℹ pass 107",
+             "check": "fail", "check_cmd": "test -f marker", "check_tail": "test: marker: No such file"}
+        cp.tick(meditation_dir=med, dispatch=lambda n: {"log": "x", "session": "x"},
+                read_result=lambda l: _finished() if l == run["log"] else None, verifier=lambda n: v)
+        g = cp.load(med)
+        wall = [x for x in g["nodes"] if x["kind"] == "human" and x.get("from_agent") == run["id"]][0]
+        assert "No such file" in wall["title"] and "Mia" not in wall["title"], wall["title"]
 
 
 def _main():

@@ -754,6 +754,34 @@ def test_sweep_settles_worktrees_reconcile_never_looked_at_again():
         assert os.path.isdir(running)
 
 
+def test_reconcile_never_removes_a_worktree_the_CAMPAIGN_has_not_read():
+    """Live 2026-09-11 19:20: the first run absorbed under the verifier
+    came back `suite: none — no worktree to verify in`. The brain's loop
+    reconciles BEFORE it ticks; reconcile found nothing on the branch and
+    removed the worktree; the campaign then had nowhere to run the suite.
+    A worktree whose node is still running/probing is the campaign's."""
+    with tempfile.TemporaryDirectory() as t:
+        top, wt = _repo_with_pushed_worktree(t)
+        logs = os.path.join(t, "logs"); os.makedirs(logs)
+        camp = os.path.join(t, "campaign.json")
+        json.dump({"nodes": [{"id": "n1", "status": "running", "worktree": wt, "log": "k.log"}]}, open(camp, "w"))
+        state = models._settle_worktree({"worktree": wt, "branch": "agent/x", "cwd": top}, logs, "k.log",
+                                        campaign_path=camp)
+        assert state.startswith("kept: the campaign has not read"), state
+        assert os.path.isdir(wt)
+        # absorbed: now it is reconcile's again
+        json.dump({"nodes": [{"id": "n1", "status": "done", "worktree": wt, "log": "k.log"}]}, open(camp, "w"))
+        state = models._settle_worktree({"worktree": wt, "branch": "agent/x", "cwd": top}, logs, "k.log",
+                                        campaign_path=camp)
+        assert state.startswith("removed"), state
+        # and the sweep holds the same line
+        top2, wt2 = _repo_with_pushed_worktree(os.path.join(t, "two"))
+        root = os.path.dirname(wt2)
+        json.dump({"nodes": [{"id": "n2", "status": "probing", "worktree": wt2, "log": ""}]}, open(camp, "w"))
+        out = models.sweep_worktrees(root=root, log_dir=logs, campaign_path=camp)
+        assert out[os.path.basename(wt2)].startswith("kept: the campaign has not read"), out
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

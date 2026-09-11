@@ -130,6 +130,11 @@ MAX_TRANSIENT_RETRIES = 6
 # itself is what reaches the owner.
 MAX_VERIFY_ATTEMPTS = 3
 VERIFY_TIMEOUT_S = 180
+# A run cut at the spend cap with no RESULT has lost nothing yet — its
+# session and worktree are still there. One small resume that commits what
+# is complete costs cents; the run it saves cost dollars (live 2026-09-11:
+# 53 turns, $2.89, nothing committed — the second time for that node).
+SALVAGE_BUDGET_USD = 0.60
 VERIFY_LEDGER = "verify.jsonl"
 _WORKING_KINDS = ("goal", "thread", "repair")
 DEFAULT_PARALLEL = 3         # the RAM law: 6+9+8 < 30 GB, from the outage
@@ -912,8 +917,9 @@ def dispatch_real(n: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         # the wall the agent hit has been cleared by the owner: the SAME
         # session continues with that fact, instead of a fresh agent
         # rediscovering everything up to the wall
+        # a salvage resume carries its own small cap; everything else the node's
         r = go.continue_agent(n["name"], n["resume_message"],
-                              budget_usd=float(a.get("budget_usd") or 0))
+                              budget_usd=float(n.get("resume_budget_usd") or a.get("budget_usd") or 0))
         if r.get("started"):
             return {"log": r.get("log", ""), "session": r.get("session", n["session"]),
                     "worktree": n.get("worktree", ""), "why": "resumed"}
@@ -1259,6 +1265,7 @@ def _dispatch_ready(g: Dict[str, Any], max_parallel: int,
         n["worktree"] = r.get("worktree", "") or n.get("worktree", "")
         if n.get("resume_message"):
             n["resumed_with"] = n.pop("resume_message")
+        n.pop("resume_budget_usd", None)     # one resume's cap, never the next one's
         n["started"] = _now_iso()
         n["started_epoch"] = now if now is not None else time.time()
         running += 1
@@ -1540,12 +1547,26 @@ def _verified_commits(n: Dict[str, Any], commits: List[str]) -> List[str]:
     return out
 
 
+_PROSE_WORDS = {"the", "and", "when", "that", "this", "should", "which", "lists", "passes",
+                "pass", "against", "existing", "are", "is", "then", "also", "after", "before",
+                "each", "every", "all", "confirm", "verify", "check", "make", "sure", "shows",
+                "returns", "with", "without", "from", "into"}
+
+
 def _runnable(cmd: str) -> bool:
-    """A check the harness can RUN: its first word is a program on PATH or a
-    path. "confirm the page looks right" is prose, and prose cannot pass."""
+    """A check the harness can RUN: a command, not a sentence about one.
+
+    "confirm the page looks right" is prose. So is "git diff main...x --stat
+    lists the touched files; npx tsc --noEmit and the existing tests pass"
+    — it starts with a program, and the shell ran the English (live
+    2026-09-11: TS6053 File 'companion.test.ts' not found). Two or more
+    words of ordinary English among the tokens means it is describing a
+    command, not being one."""
     import shutil
     tok = (cmd or "").strip().split()
     if not tok:
+        return False
+    if sum(1 for w in tok if w.lower().strip(".,;:") in _PROSE_WORDS) >= 2:
         return False
     head = tok[0]
     if head.startswith(("./", "/", "~")):
@@ -1589,7 +1610,7 @@ def verify(n: Dict[str, Any], timeout_s: float = VERIFY_TIMEOUT_S) -> Dict[str, 
     suite could see) and the step's check as a command. Absence is reported
     as absence: `none` is not green, and a prose check is `not runnable`,
     not passed."""
-    where = n.get("worktree") or ""
+    where = _ensure_worktree(n)
     out: Dict[str, Any] = {"suite": "none", "suite_cmd": "", "suite_tail": "",
                            "check": "none", "check_cmd": "", "check_tail": "", "where": where}
     if not where or not os.path.isdir(where):
@@ -1612,6 +1633,36 @@ def verify(n: Dict[str, Any], timeout_s: float = VERIFY_TIMEOUT_S) -> Dict[str, 
             out["check"] = verdict
             out["check_tail"] = tail
     return out
+
+
+def _ensure_worktree(n: Dict[str, Any]) -> str:
+    """The node's worktree, re-added from its branch if the directory is
+    gone. Live 2026-09-11: reconcile removed a finished run's worktree
+    before the campaign verified in it — `no worktree to verify in`. The
+    branch survives removal by design (continue_agent re-adds from it); so
+    does this, and the sweep takes the directory back later."""
+    where = n.get("worktree") or ""
+    if not where:
+        return ""
+    if os.path.isdir(where):
+        return where
+    try:
+        import go
+        log = n.get("log") or ""
+        h = go._head(log) if log and os.path.exists(log) else {}
+        branch = h.get("branch") or ""
+        top = go._repo_top(n.get("cwd") or "") if n.get("cwd") else None
+        if not branch or not top:
+            return ""
+        os.makedirs(os.path.dirname(where), exist_ok=True)
+        r = subprocess.run(["git", "-C", top, "worktree", "add", "-q", where, branch],
+                           capture_output=True, text=True, timeout=60)
+        if r.returncode != 0:
+            return ""
+        go._bootstrap_worktree(top, where)
+        return where if os.path.isdir(where) else ""
+    except Exception:
+        return ""
 
 
 def _verify_failed(v: Dict[str, Any]) -> bool:
@@ -1692,6 +1743,21 @@ def _absorb(n: Dict[str, Any], res: Dict[str, Any], g: Dict[str, Any],
     hist[n.get("log") or _now_iso()] = float(res.get("total_cost_usd") or 0)
     n["spent_usd"] = round(sum(hist.values()), 4)
     if res.get("is_error") or (res.get("subtype") not in (None, "success") and not so):
+        if str(res.get("subtype")) == "error_max_budget_usd" and not so and n.get("session") \
+                and not n.get("salvaged") and n.get("kind") in _WORKING_KINDS:
+            # cut mid-work: ask the same session, once, to commit what is
+            # complete and report — under a cap of cents, not the node's
+            n["salvaged"] = _now_iso()
+            n["status"] = "pending"
+            n["stuck"] = False
+            n["resume_message"] = ("You hit the spend cap. Do not start anything new: commit whatever "
+                                   "is complete in your worktree with a message that says what and why, "
+                                   "push the branch only if the suite is green, and end with the RESULT "
+                                   "object — `next` names what was left undone.")
+            n["resume_budget_usd"] = SALVAGE_BUDGET_USD
+            g["events"].append({"ts": _now_iso(), "what": "salvaging", "node": n["id"],
+                                "why": "cut at the cap after %s turns with no RESULT" % res.get("num_turns")})
+            return
         n["status"] = "failed"
         n["why_failed"] = str(res.get("subtype") or "error")
         g["events"].append({"ts": _now_iso(), "what": "failed", "node": n["id"], "why": n["why_failed"]})
@@ -1755,7 +1821,11 @@ def _absorb(n: Dict[str, Any], res: Dict[str, Any], g: Dict[str, Any],
         if attempts >= MAX_VERIFY_ATTEMPTS or over:
             why = ("out of budget: $%.2f spent of a $%.2f ceiling" % (n["spent_usd"], cap)) if over \
                 else "still red after %d attempts" % attempts
-            head = (v.get("suite_tail") or v.get("check_tail") or "").strip().splitlines()
+            # the FAILING part's first line — the suite's tail when the suite
+            # is red, the check's when the check is; a green suite's first
+            # passing line was once the headline of a wall
+            failing = v.get("suite_tail") if v.get("suite") in ("red", "timeout") else v.get("check_tail")
+            head = (failing or "").strip().splitlines()
             _wall_node(n, g, ("Still red after %d attempt%s — %s"
                               % (attempts, "" if attempts == 1 else "s", (head[0] if head else "no output")[:160])),
                        why + "; look at the failure, not another retry")

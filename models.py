@@ -469,7 +469,29 @@ def _result_line(text: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _settle_worktree(head: Dict[str, str], log_dir: str, key: str) -> str:
+CAMPAIGN_STATE = os.path.expanduser("~/.claude/meditation/campaign.json")
+
+
+def _campaign_holds_worktree(wt: str, campaign_path: Optional[str] = None) -> bool:
+    """Is a campaign node still going to READ this worktree? The campaign
+    verifies a finished run IN its worktree; until that node is absorbed
+    the directory is the campaign's, not reconcile's. Live 2026-09-11: the
+    brain reconciled before it ticked, removed the worktree, and the first
+    verdict under the verifier read `no worktree to verify in`."""
+    try:
+        g = json.load(open(campaign_path or CAMPAIGN_STATE))
+    except (OSError, ValueError):
+        return False
+    real = os.path.realpath(wt)
+    for n in g.get("nodes") or []:
+        if n.get("status") in ("running", "probing") and n.get("worktree") \
+                and os.path.realpath(n["worktree"]) == real:
+            return True
+    return False
+
+
+def _settle_worktree(head: Dict[str, str], log_dir: str, key: str,
+                     campaign_path: Optional[str] = None) -> str:
     """Remove the agent's worktree once its branch is pushed and nothing is
     continuing the session; otherwise keep it and say why.
 
@@ -484,6 +506,8 @@ def _settle_worktree(head: Dict[str, str], log_dir: str, key: str) -> str:
         return "none"
     if not os.path.isdir(wt):
         return "gone"
+    if _campaign_holds_worktree(wt, campaign_path):
+        return "kept: the campaign has not read this run yet (it verifies in the worktree)"
     import glob as _g
     import subprocess as _sp
     try:
@@ -575,7 +599,8 @@ def _remove_worktree(top: str, wt: str) -> str:
 WORKTREE_ROOT = os.path.expanduser("~/.local/share/meditate/worktrees")
 
 
-def sweep_worktrees(root: str = WORKTREE_ROOT, log_dir: Optional[str] = None) -> Dict[str, str]:
+def sweep_worktrees(root: str = WORKTREE_ROOT, log_dir: Optional[str] = None,
+                    campaign_path: Optional[str] = None) -> Dict[str, str]:
     """Every agent worktree still on disk, settled by the same rules as a
     finished run. reconcile() settles a worktree ONCE, when its run's log
     is first read; a removal that failed then (the bootstrap's own dirt)
@@ -624,7 +649,7 @@ def sweep_worktrees(root: str = WORKTREE_ROOT, log_dir: Optional[str] = None) ->
             out[name] = "skipped: running"
             continue
         out[name] = _settle_worktree({"worktree": wt, "branch": branch.stdout.strip(), "cwd": top},
-                                     log_dir, key)
+                                     log_dir, key, campaign_path=campaign_path)
         tops.add(top)
     for top in tops:
         try:
