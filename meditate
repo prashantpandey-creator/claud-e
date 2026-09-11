@@ -133,6 +133,15 @@ case "${1:-}" in
     shift
     python3 "$DIR/brain.py" --path /twin "$@"
     ;;
+  ssh-ro)
+    # A CLOSED set of read-only questions about the Mumbai prod box —
+    # reachable through Bash(meditate:*), already granted to every dispatched
+    # role, instead of a raw Bash(ssh:*) grant (refused by the harness's own
+    # classifier: "read only" over raw ssh is a prompt instruction, not a
+    # tool guarantee — ssh itself is a full remote shell). See ssh_readonly.py.
+    shift
+    python3 "$DIR/ssh_readonly.py" "$@"
+    ;;
   pulse|live|sarathi|brain|serve|watch|soul)
     shift
     python3 "$DIR/brain.py" "$@"
