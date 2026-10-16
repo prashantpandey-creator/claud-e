@@ -48,7 +48,7 @@ def find_session_cwd(short_session_id: str) -> str:
 def _parse_thread_row(line: str, session_slug: str) -> dict:
     """Parse one '| # | Thread | vṛtti (kind) | Status | Memory |' row.
     Returns None if the line isn't a data row of that shape."""
-    if "|" not in line or ("🟢" not in line and "✅" not in line):
+    if "|" not in line or not any(mark in line for mark in ("🟢", "✅", "🟡")):
         return None
     parts = [p.strip() for p in line.split("|")]
     if len(parts) < 6:
@@ -59,7 +59,9 @@ def _parse_thread_row(line: str, session_slug: str) -> dict:
     return {
         "session": session_slug,
         "thread": thread_name,
-        "status": "live" if "🟢" in status_cell else "settled",
+        # 🟡 blocked: neither launched nor settled — it keeps its session open.
+        "status": ("live" if "🟢" in status_cell
+                   else "blocked" if "🟡" in status_cell else "settled"),
         "memory": memory,
     }
 
@@ -223,8 +225,12 @@ def build_launch(cwd: str, kickoff: str, thread_name: str, model: str = ""):
     (goal cwds contain spaces: 'vedic puran').
     """
     safe_name = "".join(c if c.isalnum() or c in "-_" else "-" for c in thread_name)[:40]
-    kickoff_file = f"/tmp/claude-kickoff-{safe_name}.txt"
-    with open(kickoff_file, "w") as f:
+    # FINDING 6: a guessable /tmp path let any local process plant or swap the
+    # prompt an allow-all agent is about to run. mkstemp: unpredictable name,
+    # created exclusively (no symlink follow), mode 0600.
+    import tempfile
+    fd, kickoff_file = tempfile.mkstemp(prefix=f"claude-kickoff-{safe_name}-", suffix=".txt")
+    with os.fdopen(fd, "w") as f:
         f.write(kickoff)
     # Fleet agents run unattended — a permission prompt in an unwatched
     # Terminal is a silent stall (owner: "should run in allow-all ideally").

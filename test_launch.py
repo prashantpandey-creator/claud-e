@@ -180,25 +180,22 @@ def test_leading_slash_kickoff_is_not_read_as_a_slash_command():
         "a kickoff starting with / would fire a slash command instead"
 
 
-if __name__ == "__main__":
-    tests = [v for k, v in list(globals().items()) if k.startswith("test_")]
-    for t in tests:
-        t()
-        print(f"✅ {t.__name__}")
-    print(f"\n{len(tests)}/{len(tests)} passed")
-
-
 def test_build_launch_interactive_not_piped():
     """Regression: `cat | claude` ran non-interactive and died — the owner got
     an empty Terminal. Prompt must be an argument; cwd must be quoted."""
     from launch import build_launch
-    kf, cmd, script = build_launch("/Users/x/vedic puran", "Fix Apple's rejection\nline2", "goal-mila-live")
+    import shlex
+    # A real folder with a space: a missing one falls back to home (the
+    # cwd-injection guard), which is why "/Users/x/vedic puran" stopped matching.
+    real = tempfile.mkdtemp(prefix="vedic puran ")
+    kf, cmd, script = build_launch(real, "Fix Apple's rejection\nline2", "goal-mila-live")
     assert "| claude" not in cmd, cmd
     assert "--dangerously-skip-permissions" in cmd
     assert "--model sonnet" in cmd, "fleet default model must be pinned: " + cmd
     _, cmd2, _ = build_launch("/x", "k", "t", model="opus")
     assert "--model opus" in cmd2, "per-goal model override must win: " + cmd2
-    assert "cd '/Users/x/vedic puran'" in cmd, cmd
+    assert "cd " + shlex.quote(real) in cmd, cmd
+    shutil.rmtree(real)
     assert open(kf).read() == "Fix Apple's rejection\nline2"
     assert 'do script "' in script and "tell application" in script
 
@@ -221,3 +218,33 @@ def test_kickoff_file_unpredictable():
     assert kf != "/tmp/claude-kickoff-goal-x.txt", "predictable temp path"
     assert os.path.exists(kf) and oct(os.stat(kf).st_mode)[-3:] == "600", kf
     os.unlink(kf)
+
+
+def test_a_blocked_thread_keeps_its_session_open():
+    """A 🟡 row was dropped by the parser, so a session with eight ✅ threads
+    and one blocked thread (waiting on a provider's reply) was reported as
+    fully settled — ready to archive. Blocked is neither launched nor settled."""
+    tmp = tempfile.mkdtemp()
+    try:
+        _write_index(tmp, "eee55555-waiting", [
+            {"n": 1, "thread": "Shipped", "status": "✅ Settled", "memory": "—"},
+            {"n": 2, "thread": "Awaiting reply", "status": "🟡 Blocked — owner", "memory": "—"},
+        ])
+        threads = launch.find_threads(session_dir=tmp)
+        statuses = {t["thread"]: t["status"] for t in threads}
+        assert statuses.get("Awaiting reply") == "blocked", statuses
+        assert "eee55555-waiting" not in {
+            c["session"] for c in launch.find_archive_candidates(threads)}, (
+            "a session with a blocked thread must NOT be an archive candidate")
+        assert not [t for t in threads if t["status"] == "live"], (
+            "a blocked thread must not open a terminal")
+    finally:
+        shutil.rmtree(tmp)
+
+
+if __name__ == "__main__":
+    tests = [v for k, v in list(globals().items()) if k.startswith("test_")]
+    for t in tests:
+        t()
+        print(f"✅ {t.__name__}")
+    print(f"\n{len(tests)}/{len(tests)} passed")
