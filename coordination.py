@@ -1151,23 +1151,9 @@ def session_start(payload: Dict[str, Any],
     except Exception:
         pass
 
-    # THE BRIEF: the store's facts about this project, first thing. Each one
-    # is logged as served (via session_start) so the served rate — 2.2% of
-    # the store, ever, before this — is measured, not hoped.
-    try:
-        hits = brief_for(cwd, store_dir=store_dir, goals_dir=goals_dir)
-        if hits:
-            lines.extend(render_brief(hits))
-            for m in hits:
-                try:
-                    with open(events_path(coord_dir), "a") as f:
-                        f.write(json.dumps({"type": "fact_served", "sid": sid[:16], "path": cwd,
-                                            "mem_id": m.get("id", ""), "via": "session_start",
-                                            "ts": _iso(time.time())}) + "\n")
-                except OSError:
-                    pass
-    except Exception:
-        pass
+    # No brief here (cut 2026-11-13, owner go): it served the same 5 July facts
+    # into ~98% of sessions. brief_for/render_brief stay (still tested), so
+    # restoring it is one call; nothing else calls them now.
     return "\n".join(lines)
 
 

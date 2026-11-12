@@ -1000,15 +1000,21 @@ def test_a_brief_line_carries_status_and_AGE():
         assert "mem_a" in joined, "the id is how a session can cite it"
 
 
-def test_the_brief_is_in_session_start_and_LOGGED_as_served():
+def test_session_start_serves_NO_brief():
+    # Cut 2026-11-13 (owner go). Over 30 days the brief put the same 5 July facts
+    # into ~98% of sessions; the next most-served fact reached 169. That's a
+    # static header, not memory. brief_for/render_brief stay (tested above) so
+    # restoring it is one call; session start no longer calls them.
     with tempfile.TemporaryDirectory() as t:
         coord, store, gdir = _brief_world(t)
         out = co.session_start({"session_id": "s1", "cwd": "/repo/shop"},
                                coord_dir=coord, store_dir=store, goals_dir=gdir)
-        assert "razorpay webhook secret" in out, out
-        ev = [json.loads(l) for l in open(co.events_path(coord))]
+        assert "razorpay webhook secret" not in out, out
+        assert "BRIEF —" not in out, out
+        ep = co.events_path(coord)
+        ev = [json.loads(l) for l in open(ep)] if os.path.exists(ep) else []
         served = [e for e in ev if e["type"] == "fact_served" and e.get("via") == "session_start"]
-        assert served and any(e["mem_id"] == "mem_a" for e in served), ev
+        assert not served, served
 
 
 def test_an_EMPTY_store_briefs_nothing_and_says_nothing():
