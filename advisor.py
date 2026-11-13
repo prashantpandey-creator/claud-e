@@ -573,6 +573,13 @@ def advise(question: str, timeout_s: int = TIMEOUT_S,
     return res
 
 
+def _claude_exe() -> str:
+    """The CLI for the reasoning lane — /usr/bin/false inside the test suite,
+    so a test can never start a real `claude` (go.under_test)."""
+    import go
+    return "/usr/bin/false" if go.under_test() else "claude"
+
+
 def _advise(question: str, timeout_s: int = TIMEOUT_S,
             model: str = MODEL, on_sentence=None,
             screen: str = "") -> Dict[str, Any]:
@@ -616,7 +623,7 @@ def _advise(question: str, timeout_s: int = TIMEOUT_S,
                                      _screen_block(screen) + _talk_block(_talk_read()), q))
     _say_doing("thinking it through")
     try:
-        r = subprocess.run(["claude", "-p", "--model", model],
+        r = subprocess.run([_claude_exe(), "-p", "--model", model],
                            input=prompt, capture_output=True, text=True,
                            timeout=timeout_s)
         out = (r.stdout or "").strip()

@@ -194,19 +194,18 @@ def test_a_FINDING_is_not_counted_as_a_broken_step():
     """doctor exits 1 when the install is unhealthy — right for a person,
     wrong for a chain asking "did the step run". It logged `FAILED doctor.py
     exit=1` every hour for two open issues, and an hourly false FAILED is
-    what buries a real one."""
-    import subprocess, tempfile, textwrap
-    d = tempfile.mkdtemp()
-    fake = os.path.join(d, "doctor.py")
-    open(fake, "w").write("import sys; print('two issues'); sys.exit(1)")
-    log = os.path.join(d, "rounds.log")
-    r = subprocess.run(["bash", os.path.join(SKILL_DIR, "heartbeat.sh")],
-                       env=dict(os.environ, MEDITATE_HEARTBEAT_LOG=log,
-                                MEDITATE_TESTING="1"),
-                       capture_output=True, text=True, timeout=300)
-    body = open(log).read() if os.path.exists(log) else ""
+    what buries a real one.
+
+    On the scratch copy, never the real chain: this test used to run the
+    REAL heartbeat.sh — repair, nidra sleep and a campaign tick on the
+    owner's own data, a launchctl bootstrap — and outlived its own timeout
+    (2026-11-13). Its fake doctor.py was written and never run."""
+    r, body, _ = _fake_run(["doctor.py"], extra_files={
+        "doctor.py": "import sys; print('two issues'); sys.exit(1)"})
     assert "FAILED  doctor.py" not in body, \
         "a finding is being counted as a broken step:\n" + body[-400:]
+    assert "doctor.py  found something (exit=1)" in body, \
+        "the fake doctor never ran — the test proves nothing:\n" + body[-400:]
 
 
 def test_a_REAL_breakage_still_counts():

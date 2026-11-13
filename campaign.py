@@ -299,9 +299,12 @@ def ideate_with_claude(goal: str, done: List[str], opens: List[str], cwd: str = 
 
 
 def _claude() -> str:
+    """The CLI the planners call (ideate / predict / elaborate). Inside the
+    test suite it is /usr/bin/false: the call fails like a dead CLI and
+    nothing real starts (go.under_test)."""
     try:
         import go as _go
-        return _go.claude_bin()
+        return "/usr/bin/false" if _go.under_test() else _go.claude_bin()
     except Exception:
         return "claude"
 
@@ -374,10 +377,12 @@ def _head_sha(path: str) -> str:
         return ""
 
 
-def _goal_for_project(project: str, path: str, goals_dir: Optional[str]) -> Optional[Dict[str, Any]]:
+def _goal_for_project(project: str, path: str, goals_dir: Optional[str],
+                      meditation_dir: str = MEDITATION_DIR) -> Optional[Dict[str, Any]]:
     import goals as gl
     try:
-        rows = gl.scan(goals_dir) if goals_dir else gl.scan()
+        rows = gl.scan(goals_dir or gl.GOALS_DIR,
+                       history_path=os.path.join(meditation_dir, "goals-history.jsonl"))
     except Exception:
         return None
     best = None
@@ -430,7 +435,7 @@ def predict(repos: Optional[Dict[str, str]] = None, goals_dir: Optional[str] = N
         if not fresh and cur.get("sha") == sha and cur.get("milestones"):
             out["cached"].append(project)
             continue
-        goal = _goal_for_project(project, path, goals_dir)
+        goal = _goal_for_project(project, path, goals_dir, meditation_dir)
         try:
             ms = predictor(project, path, sha, goal)
         except Exception as e:
@@ -472,7 +477,7 @@ def accept_predicted(project: str, title: str, meditation_dir: str = MEDITATION_
     if not m:
         return {"ok": False, "why": "no such predicted milestone"}
     gdir = goals_dir or gl.GOALS_DIR
-    goal = _goal_for_project(project, ent.get("path", ""), goals_dir)
+    goal = _goal_for_project(project, ent.get("path", ""), goals_dir, meditation_dir)
     line = "- [ ] %s <!-- predicted %s: %s; check: %s -->\n" % (
         m["title"], time.strftime("%Y-%m-%d"), m.get("why", "")[:120].replace("-->", ""),
         m.get("check", "")[:120].replace("-->", ""))
@@ -600,8 +605,10 @@ def build(goals_dir: Optional[str] = None, meditation_dir: str = MEDITATION_DIR,
     typed. Ideas are proposed for EVERY goal — a goal at 100% is exactly
     where the next milestones are missing — and run only once accepted."""
     import goals as gl
-    rows = goals_rows if goals_rows is not None else (
-        gl.scan(goals_dir) if goals_dir else gl.scan())
+    # scan() appends progress to a history file; it lives beside THIS dir, so
+    # a build on a scratch dir never writes the real one (2026-11-13)
+    rows = goals_rows if goals_rows is not None else gl.scan(
+        goals_dir or gl.GOALS_DIR, history_path=os.path.join(meditation_dir, "goals-history.jsonl"))
     if elaborator is None and elaborate:
         elaborator = elaborate_with_claude
     # The real ideator rides ONLY with the real elaborator. Defaulting it on
@@ -1460,7 +1467,8 @@ def replan(goals_dir: Optional[str] = None, meditation_dir: str = MEDITATION_DIR
         return {"ok": True, "carried": 0, "new": len(g["nodes"]), "id": g["id"]}
     real = elaborator if elaborator is not None else elaborate_with_claude
     import goals as gl
-    rows = gl.scan(goals_dir) if goals_dir else gl.scan()
+    rows = gl.scan(goals_dir or gl.GOALS_DIR,
+                   history_path=os.path.join(meditation_dir, "goals-history.jsonl"))
     known = {n["id"] for n in old["nodes"]}
 
     def cached(goal: str, milestone: str, **kw):
@@ -1957,6 +1965,13 @@ def tick(meditation_dir: str = MEDITATION_DIR, dispatch: Optional[Callable] = No
     # Free slots go to the other sources (threads, repair, unheld goals).
     # Outside the lock: go.run reads campaign.json and must not wait on us.
     out["fell_through"] = []
+    # The real fallthrough is go.run, which acts on ITS dir only. A tick on
+    # any other dir (every test) must not fill the real fleet's slots: one
+    # test run did, 2026-11-13, and launched 22 real agents.
+    if fallthrough is None:
+        import go as _go
+        if os.path.realpath(meditation_dir) != os.path.realpath(_go.MEDITATION_DIR):
+            return out
     free = int(out.get("free") or 0)
     if out.get("armed") and free > 0 and not out.get("held") and not out.get("past_deadline") \
             and not out.get("paused"):

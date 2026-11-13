@@ -424,6 +424,19 @@ def _wrap_awake(argv: List[str]) -> List[str]:
     return argv
 
 
+def under_test() -> bool:
+    """True inside the test suite, however it was started.
+
+    doctor sets MEDITATE_TESTING; a test file run by hand is a process
+    started from test_*.py and sets nothing. On 2026-11-13 one hand run of
+    test_campaign.py launched 22 real `claude -p` agents against the real
+    repair queue. Every REAL start of the CLI asks this first; a fake the
+    caller passes in is never refused."""
+    return bool(os.environ.get("MEDITATE_TESTING")) or \
+        os.path.basename(sys.argv[0] if sys.argv else "").startswith("test_")
+
+
+_REFUSED_UNDER_TEST = "under test: a real claude never starts here"
 
 
 def _headless(cwd: str, prompt: str, name: str, model: str = "",
@@ -445,6 +458,9 @@ def _headless(cwd: str, prompt: str, name: str, model: str = "",
       --json-schema       the RESULT the ledger reads back
     The log keeps <stamp>-<kind>-<name>.log: kind attribution splits on '-'.
     """
+    if popen is None and under_test():
+        _headless.last = {"why": _REFUSED_UNDER_TEST}
+        return False
     popen = popen or subprocess.Popen
     _headless.last = {}
     try:
@@ -683,6 +699,8 @@ def continue_agent(name: str, message: str, popen=None,
     Runs in the agent's worktree if it still exists (it is kept until the
     branch is pushed and no continue is pending), else in its cwd.
     """
+    if popen is None and under_test():
+        return {"started": False, "why": _REFUSED_UNDER_TEST}
     popen = popen or subprocess.Popen
     old = _find_log(name)
     if not old:

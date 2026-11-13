@@ -99,16 +99,23 @@ def test_tuning_the_cadence_does_not_DROP_the_sleep_floor():
                        "StartInterval": 3600,
                        "StartCalendarInterval": [{"Hour": 7, "Minute": 7}]}, f)
         path = f.name
+    # launchctl is stubbed: the real one loaded this temp plist as job "x"
+    # into the owner's launchd on every run, and it stayed (2026-11-13).
+    import types
+    calls = []
+    fake = types.SimpleNamespace(run=lambda argv, **kw: calls.append(argv) or
+                                 types.SimpleNamespace(returncode=0))
     try:
-        old = cadence.PLIST
-        cadence.PLIST = path
+        old, old_sp = cadence.PLIST, cadence.subprocess
+        cadence.PLIST, cadence.subprocess = path, fake
         try:
             cadence.apply(7200)
         finally:
-            cadence.PLIST = old
+            cadence.PLIST, cadence.subprocess = old, old_sp
         d = plistlib.load(open(path, "rb"))
         assert d.get("StartCalendarInterval"), "tuning the cadence wiped the sleep floor"
         assert d["StartInterval"] == 7200
+        assert calls == [["launchctl", "unload", path], ["launchctl", "load", "-w", path]], calls
     finally:
         os.unlink(path)
 
