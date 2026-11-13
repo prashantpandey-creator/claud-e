@@ -1863,6 +1863,16 @@ def test_a_wall_headlines_the_FAILING_part_not_the_green_suite():
         assert "No such file" in wall["title"] and "Mia" not in wall["title"], wall["title"]
 
 
+def test_a_probe_is_told_about_the_readonly_ssh_door_not_raw_ssh():
+    """Raw ssh is disallowed for assess (agents.json). Probes need a real
+    door to the box, not a dead end — meditate ssh-ro, granted through
+    Bash(meditate:*), already open to every role."""
+    n = {"title": "Verify NEXT_PUBLIC_META_PIXEL_ID in /root/stack.env"}
+    p = cp._probe_prompt(n)
+    assert "meditate ssh-ro" in p
+    assert "raw ssh is not available" in p.lower()
+
+
 def _main():
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]
